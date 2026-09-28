@@ -14,7 +14,7 @@
   "evaluation": {
     "max_file_bytes": 268435456,
     "max_model_calls": 512,
-    "model_selection": "auto",
+    "model_selection": "all",
     "strict_model": false,
     "allow_invalid_trace": false,
     "require_chinese_reason": true
@@ -34,7 +34,7 @@
     "full_curation_new_entry_threshold": 20,
     "min_memory_duplicate_confidence": 0.9,
     "min_memory_relation_confidence": 0.75,
-    "enable_meta_reflection": false,
+    "enable_meta_reflection": true,
     "enable_memory_semantic_matching": true,
     "require_chinese_reason": true
   },

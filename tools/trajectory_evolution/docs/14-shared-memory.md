@@ -54,7 +54,7 @@ actor_id 标识执行者，共享权限由应用、用户和 scope 决定。内�
 周期受 min_interval_ms 和最早支持到期时间约束。无待办、无到期事项时不扫描全库。
 模型不可用时继续执行支持撤回、过期与精确关系检查；语义提炼等待模型恢复。
 
-公共管理和私库学习共用单一后台执行者，但使用不同模型调用预算。
+公共管理和私库学习共用后台调度器，但使用不同模型调用预算。关系请求可有界并发，状态提交保持有序。
 每条新日志不会立即触发一次全库公共审查；长模型调用也可能延迟后续用户的处理。
 结合待办增长速度、单周期耗时和容量限制调整管理频率。
 
@@ -98,19 +98,23 @@ public_evidence 逐条读取候选的 support_evidence，检查对应的受管 r
 
 来源标记 private_only / independent_evidence_missing，不调用公共提炼模型。
 合格私人经验仍可按自身条件使用。
-诊断时查看 learning/shared-memory.json：last_status=processed、pending_users 为空且 sources 为上述状态，表示管理周期已执行但缺少独立证据，不是公共模型请求失败。公共投影可能只包含 application_id，未写出的 experiences 表示空库。
+诊断时查看 learning/shared-memory.json：last_status=completed（旧版为 processed）、pending_users 为空且 sources 为上述状态，表示管理周期已执行但缺少独立证据，不是公共模型请求失败。completed_with_unresolved 表示仍有未决关系。公共投影可能只包含 application_id，未写出的 experiences 表示空库。
 重要区别：跨库冲突审查使用合格私人经验，不额外要求它已经达到 min_source_runs 的公共推广门槛；
 用户的合理差异不必先有多次成功 run 才能对公共建议提出冲突。
 
 ### 离线训练来源的公共准入
 
 冷启动训练也能提供公共来源，但与真实用户支持分别计数。默认开启 `allow_training_sources`，
-同时必须配置 `policy_evaluation_file`，使生成策略具有后续真实 Agent 评测入口。
+经验管理本身不要求配置 `policy_evaluation_file`，也不要求先调用任务裁判。
+`learn --training-evaluation REPORT --dataset DATASET` 校验成功后，自动在
+`learning/training-datasets/` 登记冻结数据集位置；无需用户额外配置。
+每次检查支持时仍重新核对数据集清单和版本，数据被改动或来源不可读时撤回该来源支持。
+已有自动训练记录继续兼容从 `policy_evaluation_file` 定位数据集。
 程序只接纳已有训练导入流程校验过的无策略基线轨迹，并再次核对：
 
 - 当前冻结数据集中的任务为 `train`、`reviewed`，dataset_version 和 task_version 一致。
 - 受管记录为已导入的 L0 `baseline_training`，采集完整、分析成功、来源指纹匹配。
-- `run.start` 的 evaluation_trial_id 与训练来源绑定；轨迹有训练评测的 passed 或 failed 结论。
+- `run.start` 的 evaluation_trial_id 与训练来源绑定；轨迹具有 passed/failed 结论，或经过正式导入校验的 `uncertain` + `task_assessment_status=not_requested`。后者表示没有请求任务评分，不表示业务通过。
 - 没有经验注入回执。失败案例可以提供经验，采集失败或分析失败不能提供支持。
 
 随后仍经过模型提炼、另一请求复核、私有—公共关系核验。训练支持按
@@ -132,11 +136,20 @@ public_evidence 逐条读取候选的 support_evidence，检查对应的受管 r
 | 阶段 | 模型看到什么 | 返回内容 | 程序硬检查 |
 | --- | --- | --- | --- |
 | distill | 原经验 scope、条件、建议 | shareable 和泛化后的三字段 | 保持原 scope；检查字段、长度、秘密与具体标识 |
-| review | 原建议、泛化稿、同 scope 的公共工作集 | decision、match_id、四个审查布尔值、confidence | 只有合格 new/duplicate 才接受 |
+| review | 原建议、泛化稿、同 scope 的公共工作集及核验来源的任务/执行片段 | decision、match_id、四个审查布尔值、confidence | 只有合格 new/duplicate 才接受 |
 | cross relation | 当前用户私有经验和某条公共经验 | relation、confidence | 关系枚举、双方版本、置信度和格式校验 |
 
 三个阶段共用 runtime_config.model，不默认调用另一个供应商。
 提炼与复核分为两次请求，可由同一模型完成。
+
+标准轨迹复核最多补充两份来源上下文：当前输入、当前轮标准、约束，以及每份最多四个被引用的
+事件片段。单份事件正文预算 4096 字节，截短内容明确标为预览；保留原 run/event 身份。
+模型的完成声明标为 `agent_report`，工具执行记录标为 `execution_observation`；执行终态不能
+代替业务输出状态。没有看到某项事实不等于未执行，证据不足时保留私有或待审。
+
+私库语义管理会比较同一授权范围内的跨 L1/L2/L3 建议，识别“继续执行”与“应当停止”这类冲突；
+跨类型不能作为重复项合并。条件互斥不等于冲突，模型不确定时保留独立条目。经验之间的冲突
+使用关系记录，不能伪造成某次真实执行失败的反证。
 
 复核必须同时满足 privacy_safe、generalizable、supported、non_overriding=true，
 且 confidence 至少 min_confidence（默认 0.9，最大 1）。缺字段不按“默认通过”处理。
@@ -349,6 +362,7 @@ retire 会移除条目与其关系，将相关来源标记 retired 并清空 ent
 | last_status、last_error、failure_attempts | 最近周期结果、稳定错误码与管理故障次数 |
 | model_calls | 公共逻辑模型调用累计数 |
 | user_errors | 被隔离用户的管理错误；不公开私人异常正文 |
+| evaluation_feedback | GEPA 独立公共经验效果的按用户投影：内容版本、正负独立任务数、门槛与状态；不含私有正文和组合内容 |
 
 sources 常见字段为 user_key、fingerprint、state、attempts、evidence_fingerprint、
 last_evidence_ms、entry_id、reason、distill、review，以及 online_verified、training_groups。
@@ -389,12 +403,33 @@ private_revision 是私库提交修订；public_revision 是公共可用投影�
 每次模型调用前保存请求指纹与次数。响应到达但结果尚未落盘时发生崩溃，重试可能再次调用供应商并产生费用。
 max_model_calls_per_cycle 按逻辑请求计数；底层 model.max_retries 可以产生多次传输尝试。
 提炼+复核通常至少消耗两次逻辑请求，剩余预算不足两次时不启动这个来源的提炼；
-跨库非精确关系另消耗一次，精确重复不消耗模型预算。
+已通过本地隐私和格式校验的提炼草稿可用于复核重试，不重复提炼；明确拒绝后删除草稿。
+跨库关系默认每组最多 8 对、最多 4 个请求并发；每组正文约束为 32 KiB，每项独立校验，
+一项缺失/格式错误不丢弃其他有效项。旧部署没有批量提示词时继续使用单项协议。精确重复不调用模型。
+
+跨库关系同时保存纯内容指纹和运行时精确版本。只增加证据或别名时重绑版本，不重新判断；
+条件、正文或作用域变化则只失效相关项。提交前重取私库快照，变化项重新排队。
+有效 `uncertain` 或低置信结论保存为 unresolved，不当成调用错误反复请求，也不授权公共经验注入。
+格式/传输错误按次数重试；批量协议失败的项改用单项修复，达到上限后保留未决。
+同一管理周期只加载一次冻结训练集索引和同一轨迹，下一周期重新核验证据，不把过期证明永久缓存。
 
 语义明确 rejected 或已耗尽次数的同内容记录不会因普通重启就获得无限重试。
 新正文或审查签名变化可重置审核；新证据能重启 retired/private_only 来源，
 已拒绝来源按对应证据与配置变化重新判定。
-重试预算耗尽后等待新工作或重启触发检查；恢复时依据已保存的请求和阶段记录处理待办。
+重试预算耗尽后，同内容同审查器的终态不因新工作或重启再次请求；恢复时只继续未完成且未耗尽的待办。
+
+### GEPA 反馈如何参与公共管理
+
+权威私库保存配对引用，公共台账只保留按用户、公共条目和内容修订归并的计数投影，不另建公共经验库。
+
+- 私有来源被归档、撤回或出现有效冲突时，只撤销该来源的公共支持；其他用户和条目的支持不变。后续常规管理也遵守反馈，不重新算回已经撤销的支持。
+- 公共原文独立启停的有效负向题数达到门槛时，条目进入 `disputed`，暂不进入可注入视图；原条目和证据保留。
+- 正向效果不新增用户数或训练组数，不绕过原隐私、泛化和跨库关系审核。单次失败、裁判错误、组合失败不直接全局降级成员。
+- 公共台账按内容版本保留反证；有界原证据裁剪不等于反证消失。正文修订与过期/淘汰仍由同一管理器负责。
+
+离线 GEPA 只在提交边界短暂申请原库的 `service.lock` 并重读台账。原服务占用该库时，反馈保持 pending，按 `learning.retry_backoff_ms` 等待本用户的提交机会，不覆盖原服务快照，也不暂停其他用户。在线同目录模式沿用当前管理器持有的锁。
+
+顺序为：提交私有 PB/JSON → 同步公共台账和视图 → 标记反馈 committed。中途失败可以重放，已写入的支持票不再次累加。公共投影不是第二份可独立编辑的记忆库。
 
 ## 15. 账本、投影与运行时发布
 

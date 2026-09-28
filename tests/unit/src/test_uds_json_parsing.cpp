@@ -7,9 +7,11 @@
 #include <gtest/gtest.h>
 
 #include <sys/socket.h>
+#include <poll.h>
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstring>
 #include <thread>
 
@@ -56,18 +58,28 @@ protected:
     return connect(client_fd_, (struct sockaddr*)&addr, sizeof(addr)) == 0;
   }
 
-  // Send JSON-RPC request and get response
+  // Send a JSON-RPC request and read one complete newline-delimited frame.
   std::string send_request(const std::string& request) {
     std::string msg = request + "\n";
     if (send(client_fd_, msg.c_str(), msg.size(), 0) < 0) {
       return "";
     }
 
+    std::string response;
     char buf[4096];
-    ssize_t n = recv(client_fd_, buf, sizeof(buf) - 1, 0);
-    if (n <= 0) return "";
-    buf[n] = '\0';
-    return std::string(buf);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (response.find("\n") == std::string::npos) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) break;
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - now).count();
+      pollfd descriptor{client_fd_, POLLIN, 0};
+      if (poll(&descriptor, 1, static_cast<int>(remaining)) <= 0) break;
+      ssize_t n = recv(client_fd_, buf, sizeof(buf), 0);
+      if (n <= 0) break;
+      response.append(buf, static_cast<size_t>(n));
+    }
+    return response;
   }
 };
 
@@ -353,4 +365,17 @@ TEST_F(UDSJsonParsingTest, PutWithLargeMessagesList) {
   std::string response = send_request(request);
   EXPECT_NE(response.find("\"success\":true"), std::string::npos)
       << "Put with large messages failed: " << response;
+}
+// A response larger than the socket send buffer must still include the final newline.
+TEST_F(UDSJsonParsingTest, GetLargeValueReturnsCompleteFrame) {
+  ASSERT_TRUE(connect_to_server()) << "Failed to connect to UDS server";
+
+  const std::string payload(512 * 1024, static_cast<char>(120));
+  ASSERT_TRUE(databus_.put("/session/test-large/sys/payload", DataVariant(payload)));
+  const std::string request = R"({"jsonrpc":"2.0","method":"get","params":{"session_id":"test-large","namespace":"sys","key":"payload"},"id":99})";
+
+  const std::string response = send_request(request);
+  ASSERT_FALSE(response.empty());
+  EXPECT_EQ(response.back(), static_cast<char>(10)) << "JSON-RPC frame was truncated";
+  EXPECT_NE(response.find(payload), std::string::npos) << "Large value was truncated";
 }

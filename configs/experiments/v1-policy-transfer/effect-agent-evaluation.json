@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "dataset": "../../../trace_output/v1-l4-coldstart/dataset-publishability",
+  "evaluation_config": "gepa-evaluation.json",
+  "agent": {"name": "agentflow-v1-outfit", "revision": "real-v1-publishability-r3"},
+  "min_interval_ms": 1000,
+  "max_jobs": 8,
+  "max_jobs_per_hour": 4,
+  "gate": {
+    "min_trials": 15,
+    "min_coverage": 1,
+    "min_pass_rate": 0.8,
+    "max_pass_rate_drop": 0,
+    "min_invalid_loop_reduction": 0.15,
+    "max_latency_ratio": 1,
+    "require_level_coverage": false
+  },
+  "training": {"enabled": false}
+}

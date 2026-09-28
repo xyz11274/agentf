@@ -71,10 +71,11 @@ def calendar(record):
 
 
 def create(state, args, store, scope):
+    from .evaluation_world import clock
     if not args.get('medicine') or not (args.get('times') or args.get('meal_times')):
         return result('需要药名和提醒时刻；饭后提醒需要实际饭点。', status='needs_input', missing_fields=['medicine', 'times_or_meal_times'])
     zone = args.get('timezone') or os.environ.get('BUSINESS_TIMEZONE', 'Asia/Shanghai')
-    now = datetime.now(ZoneInfo(zone))
+    now = clock(state, zone)
     try:
         schedule = schedules.normalize(args, now)
     except ValueError as exc:
@@ -107,6 +108,7 @@ def create(state, args, store, scope):
 
 
 def manage(state, args, store, scope):
+    from .evaluation_world import clock
     action=args['action']
     rows=list(state['reminders'].values())
     if action=='reminder_query':
@@ -119,7 +121,7 @@ def manage(state, args, store, scope):
             rows=[r for r in rows if r.get('active')]
         if args.get('date'):
             from .time_constraints import dates
-            today=datetime.now(ZoneInfo(os.environ.get('BUSINESS_TIMEZONE','Asia/Shanghai'))).date()
+            today=clock(state, os.environ.get('BUSINESS_TIMEZONE','Asia/Shanghai')).date()
             span=dates(args['date'],today)
             if not span or (span[1]-span[0]).days>366:
                 return result('请明确一年内的查询日期范围。',status='needs_input',missing_fields=['date'])
@@ -136,7 +138,7 @@ def manage(state, args, store, scope):
         if 'times' in args and 'meal_offset_minutes' not in args:
             merged.pop('meal_times',None);merged.pop('meal_offset_minutes',None)
         return create(state,{**merged,**args},store,scope)
-    now=datetime.now(ZoneInfo(item['timezone'])).isoformat()
+    now=clock(state, item['timezone']).isoformat()
     item['active']=action=='reminder_resume'
     item['status']='active' if item['active'] else 'paused' if action=='reminder_pause' else 'cancelled'
     item['version']=item.get('version',1)+1;item['updated_at']=now;item['checked_through']=now
@@ -168,10 +170,14 @@ def tick(store, now=None):
                 if not r.get('active') or r.get('delivery') != 'server_inbox':
                     continue
                 changed = True
-                local_now = now.astimezone(ZoneInfo(r['timezone']))
+                # 快照任务只随虚拟时钟推进，后台运行再久也不会产生额外通知。
+                from .evaluation_world import clock
+                local_now = clock(state, r['timezone']) if state.get('evaluation_world') else now.astimezone(ZoneInfo(r['timezone']))
                 created = datetime.fromisoformat(r['created_at'])
                 # Cursor advances with the same transaction as notification insertion.
                 previous = datetime.fromisoformat(r.get('checked_through', r['created_at']))
+                if local_now <= previous:
+                    continue
                 day = max(date.fromisoformat(r['start_date']), previous.date())
                 end = min(date.fromisoformat(r['end_date']), local_now.date()) if r['end_date'] else local_now.date()
                 while day <= end:
@@ -183,7 +189,7 @@ def tick(store, now=None):
                         if max(created, previous) < due <= local_now:
                             item = {'id': r['id']+'@'+due.isoformat(), 'reminder_id': r['id'], 'medicine': r['medicine'],
                                     'dosage': r['dosage'], 'scheduled_for': due.isoformat(),
-                                    'delivered_at': now.isoformat(), 'channel': 'server_inbox', 'late': (local_now-due).total_seconds() > 60}
+                                    'delivered_at': (local_now if state.get('evaluation_world') else now).isoformat(), 'channel': 'server_inbox', 'late': (local_now-due).total_seconds() > 60}
                             cursor = db.execute('INSERT OR IGNORE INTO notifications(scope,reminder_id,scheduled_for,payload) VALUES(?,?,?,?)',
                                                 (scope, r['id'], due.isoformat(), json.dumps(item, ensure_ascii=False)))
                             inserted += cursor.rowcount

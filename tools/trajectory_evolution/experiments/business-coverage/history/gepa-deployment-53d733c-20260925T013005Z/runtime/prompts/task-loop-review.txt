@@ -1,0 +1,22 @@
+逐轮效率评审与业务验收独立：先按主契约核验目标和逐轮要求，再判断循环浪费，最后汇总业务 verdict。浪费可与业务 passed 同时成立；内部规范和效率建议不能新增业务禁令。输出 goal_verdicts/turn_verdicts（契约要求时）、reason、evidence_paths、loop_review，最后 verdict，不在阅读证据前先判通过。
+
+loop_inventory 每个键对应一个 Run、执行实例、loop 和轮次，同轮事件已合并；键按锚点观测顺序排列，不代表并发依赖，前因以 caused_by 为准。逐项覆盖全部键，不合并不同执行实例或轮次。
+
+无效轮次：按该轮开始前已知信息，省去整轮不损失标准要求的成果、必要信息或交付。只判“整轮可省”，不因单个动作不理想、任务失败或 token 多就判 waste。
+按以下优先序核验：
+1. 已知禁止重试、次数耗尽、不可重试错误或前提未改变，整轮只有重试及其准备/调度/重复错误记录，判 waste。换参数、模型、协议不自动成为新探索，重新派发也不是新用户目标。
+2. 开始前已明确对象错误、前提不成立或与任务无关，整轮只服务该错误子任务，连同仅为它准备的查询/调度判 waste。成功调用、状态变化或被后续引用不单独证明必要；不能以“违规已经发生，必须保留历史”为由 keep。
+3. 本轮仍有独立必要贡献则 keep，并说明具体贡献：首次合理探索取得信息、用户新增要求、独立并发成果、必需状态改变、纠错或撤销副作用。不能用事后失败否定首次合理探索。
+4. 首次向上游交付结果、向用户答复或报告已知失败是必要收尾；不同接收者不是重复。只有同一接收者已获等价交付且无新贡献才 waste。不得假设上一轮本可顺便答复，把无效操作和后续必要报告都删掉。
+5. 调度不等于交付。已知契约不允许的空调度、只返回校验错误且未派发或答复，不能以“让下一轮纠错”为由 keep；若首次探明此前未知限制并取得必要信息，可 keep。其余无新依据的重复/空转判 waste；证据不足则 uncertain。
+
+逐轮核对具体工具返回：无关条目、正常查询无匹配、调用失败不同。第一次结果不相关时，有针对性的修正查询可能必要；已确认同一数据源缺资料后，无新依据反复换词不自动合理。不要将后一次结果套到前一次，也不为保持历史/DAG 逐字不变而保留无效轮次。
+
+证据与格式：
+anchor_event_id 只是该轮一条已执行 action.end 的定位符，不预设有效性。判断须读本键 event_ids 的实际内容；evidence_event_ids 只逐字填本键 anchor_event_id，其他前提在 reason 说明。不得猜 ID、按数字区间推断或引用别的并发分支。
+loop_review = {"status":"complete|uncertain","iteration_reviews":[{"iteration_id":"清单键","reason":"简体中文说明实际贡献及省去影响","decision":"keep|waste|uncertain","evidence_event_ids":["本键anchor_event_id"]}]}。
+逐项先写 reason 再写一致的 decision；不要输出 count/wasted_iterations，程序负责计数。全部键判为 keep/waste 才 complete；含 uncertain 或清单为空则整体 uncertain，空清单返回空数组，不能把缺评审当零浪费。
+
+复核理由和决定：只有被禁重试且无独立贡献应 waste；首次必要交付应 keep。例：A 得到不可重试错误、B 无依据再次调用、C 首次报告结果，B 可省、C 保留。
+业务 verdict 只汇总适用要求。违反必需动作、禁令或停止条件不能 passed，如“失败后停止”却换模型重试；后续如实报告不抵消违规。未触发的可选分支、单纯效率浪费、内部规范冲突不构成业务失败；适用必需项未完成仍失败。
+若 validation_feedback.loop_review_error 存在，constraint 给出错误，iteration_review_index（旧格式 wasted_iteration_index）是 previous_response 零起始下标，reference.evidence_event_index 指出错误引用，allowed_iteration_event_ids 给出真实本轮事件。重核全部键与锚点，不以无关合法 ID 代替错误证据；证据不足就 uncertain，反馈不表示该轮一定浪费。

@@ -14,6 +14,7 @@ from pathlib import Path
 import socket
 import sys
 import threading
+import time
 import uuid
 from urllib.parse import urlsplit
 
@@ -114,6 +115,22 @@ class BrowserEngine:
 
     def entry(self,scope,skill):
         self.start()
+        from .task_context import current_task
+        key=(str(scope),skill,current_task())
+        now=time.monotonic()
+        idle_seconds=max(60,float(os.environ.get('BUSINESS_BROWSER_IDLE_SECONDS','1800')))
+        # 分支比 skill 数量多，必须回收空闲页面，不能让长期评测无限积累页面。
+        for old_key,old in list(self.pages.items()):
+            if old['page'].is_closed() or (old_key!=key and now-old.get('last_used',now)>idle_seconds):
+                if not old['page'].is_closed():old['page'].close()
+                del self.pages[old_key]
+        active_owners={entry['owner'] for entry in self.pages.values()}
+        for old_owner,(context,auth) in list(self.contexts.items()):
+            if old_owner not in active_owners:
+                context.storage_state(path=str(auth));auth.chmod(0o600)
+                context.close();del self.contexts[old_owner]
+        if key not in self.pages and len(self.pages)>=max(1,int(os.environ.get('BUSINESS_BROWSER_MAX_PAGES','128'))):
+            raise RuntimeError('browser_page_capacity_reached')
         owner=self.store.owner_scope(scope)
         if owner not in self.contexts:
             directory=self.store.path.parent/'browser'/hashlib.sha256(owner.encode()).hexdigest()
@@ -127,7 +144,6 @@ class BrowserEngine:
             ctx.route('**/*',lambda route: route.continue_() if self.safe_url(route.request.url) else route.abort())
             self.contexts[owner]=(ctx,auth)
         ctx,auth=self.contexts[owner]
-        key=(str(scope),skill)
         if key not in self.pages or self.pages[key]['page'].is_closed():
             page=ctx.new_page()
             page.set_default_timeout(15000)
@@ -135,6 +151,7 @@ class BrowserEngine:
             entry={'page':page,'refs':{},'auth':auth,'owner':owner,'context':ctx}
             page.on('popup',lambda popup: entry.update(page=popup,refs={}))
             self.pages[key]=entry
+        self.pages[key]['last_used']=now
         return self.pages[key]
 
     def snapshot(self,entry):
@@ -248,7 +265,9 @@ class BrowserEngine:
 
     def call(self,scope,skill,args):
         try:
-            future=self.pool.submit(self.operate,scope,skill,args)
+            from contextvars import copy_context
+            # Playwright 自有线程不会自动继承分支上下文。
+            future=self.pool.submit(copy_context().run,self.operate,scope,skill,args)
             return future.result(timeout=115)
         except Exception as exc:
             # Cancel only queued work. A started write may have reached the site.

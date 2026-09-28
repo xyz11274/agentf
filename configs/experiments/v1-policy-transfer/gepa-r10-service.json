@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "agent_id": "agentflow-v1-outfit",
+  "data_dir": "/root/lai-code/Agent/AgentFlow/trace_output/v1-l4-coldstart/l3-current/evolution",
+  "port": 0,
+  "http_timeout_ms": 5000,
+  "workers": 4,
+  "max_request_bytes": 1048576,
+  "max_run_bytes": 16777216,
+  "max_events": 10000,
+  "max_active_runs": 128,
+  "max_stored_runs": 10000,
+  "learning": {
+    "min_new_runs": 20,
+    "max_wait_ms": 600000,
+    "min_interval_ms": 60000,
+    "max_batch_runs": 32,
+    "max_batch_bytes": 33554432,
+    "retry_backoff_ms": 60000
+  },
+  "max_level": "L3",
+  "principals": [
+    {"user_id": "v1-cold-bravo", "token_env": "POLICY_TRANSFER_TOKEN"}
+  ],
+  "actors": ["assistant"],
+  "runtime_config": "../../../tools/trajectory_evolution/config/standard-runtime.json",
+  "experience_template_file": "../../../tools/trajectory_evolution/config/prompts/runtime-experience.txt",
+  "auto_evaluate": false,
+  "auto_approve_experiences": false,
+  "shadow_options": {
+    "max_policy_entries": 128,
+    "max_advice_items": 3,
+    "max_advice_bytes": 4096,
+    "max_query_bytes": 32768,
+    "max_memory_bytes": 16777216,
+    "max_snapshot_bytes": 262144,
+    "max_match_terms": 128,
+    "min_matched_terms": 2,
+    "stop_terms": ["任务", "用户", "工具", "执行"]
+  },
+  "runtime_options": {
+    "max_context_bytes": 4096,
+    "approved_experiences": [],
+    "request_context_pointer": "/messages",
+    "request_context_mode": "system_message",
+    "action_rules": [],
+    "loop_rules": [{
+      "rule_id": "bounded-agent-loop",
+      "actor_id": "assistant",
+      "max_iterations": 12,
+      "max_no_progress": 1,
+      "no_progress_decision": "replan",
+      "max_replans": 1,
+      "replan_context": "当前执行没有产生新进展。停止重复相同调用，优先检查前置条件、改变方案或说明阻塞原因。",
+      "reason": "连续无进展或达到本分支的授权轮次上限",
+      "replan_on_failure": false
+    }],
+    "aggressive_controls": true
+  },
+  "sharing": {"enabled": false},
+  "http_persistence": {"mode": "buffered"},
+  "instrumentation": {
+    "level": "L3",
+    "capabilities": ["model", "actions", "schedule", "loop"],
+    "binding": {"pointer": "/messages", "mode": "system_message"}
+  },
+  "evaluation_levels": [],
+  "policy_evaluation_file": "gepa-agent-evaluation.json",
+  "control_learning": {
+    "enabled": true,
+    "prompt_file": "../../../tools/trajectory_evolution/config/prompts/control-candidates.txt",
+    "max_rules": 16,
+    "min_iterations": 1,
+    "min_no_progress": 1
+  }
+}

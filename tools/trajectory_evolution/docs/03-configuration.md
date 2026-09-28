@@ -146,7 +146,9 @@ service 增加 `policy_evaluation_file`，指向 [agent-evaluation.json](../conf
 
 ### 模型连接
 
-模板不配置评测模型，只运行规则。需要模型时，修改部署副本 `standard-runtime.json` 中的对应字段，保留其余设置：
+模板默认开启轨迹模型分析（`model_selection=all`）和元反思（`enable_meta_reflection=true`），
+但不内置供应商地址或密钥。部署时填写 `standard-runtime.json` 的连接字段；未配置模型时，
+默认非严格模式保留规则分析，模型阶段如实记录跳过，不会产生模型成功记录：
 
 ```json
 {
@@ -167,6 +169,13 @@ service 增加 `policy_evaluation_file`，指向 [agent-evaluation.json](../conf
 被观测 Agent 可以使用任意供应商及请求格式。
 `model_selection=all` 纳入全部 Episode；`suspicious` 主要评估可疑 Episode；`none` 关闭此阶段模型评测。
 仅设置 `none` 不会关闭另行启用的元反思或语义记忆整理。
+
+这两个开关控制经验学习，不控制 GEPA 的任务裁判。自动冷启动执行训练题时跳过任务裁判，
+随后仍按这里的设置分析轨迹并进行元反思；基线、候选和留出评分使用 `evaluation.json.judge`。
+关闭轨迹模型分析或元反思不会关闭入库：保留规则可提炼的候选，按原来的证据、去重和冲突约束管理。
+若要完全不调用学习模型，同时设置 `model_selection=none`、`enable_meta_reflection=false`、
+`enable_memory_semantic_matching=false`，并在服务配置中关闭 `sharing.enabled`。
+保留旧 endpoint、但不加载密钥，不再阻断这个规则入库模式。
 
 `timeout_ms=1800000` 表示一次模型调用的 HTTP 阶段共用最多 30 分钟，包含连接、响应等待、传输重试及退避。
 每次尝试按“剩余时间 / 剩余可尝试次数”分配响应等待，避免第一次卡住就耗尽重试机会。
@@ -228,14 +237,22 @@ JSON 模式只约束输出格式，不替代既有的结构、证据、隐私和
 | --- | --- | --- |
 | learning.min_new_runs / max_batch_runs | 20 / 32 | 同用户新样本启动阈值 / 单批上限 |
 | learning.max_wait_ms / min_interval_ms | 600000 / 60000 | 小批等待期限 / 批次间隔 |
-| learning.max_batch_bytes / retry_backoff_ms | 33554432 / 60000 | 批次容量 / 存储故障退避 |
+| learning.max_batch_bytes / retry_backoff_ms | 33554432 / 60000 | 批次容量 / 存储故障退避及分析重试起始间隔 |
+| learning.max_analysis_retries | 0 | 每轮分析的额外自动重试次数，范围 0–10；0 保持旧配置不增加自动重试费用 |
+| learning.analysis_parallelism | 1 | 同批独立轨迹分析并发数，整数 1–32；服务重启后生效，不并发写记忆库 |
 | min_supporting_dialogues / min_supporting_episodes | 2 / 2 | 达到 PROPOSED 的支持门槛 |
-| enable_meta_reflection | false | 是否跨轨迹模型合并 |
+| enable_meta_reflection | true | 是否跨轨迹模型合并 |
 | enable_memory_semantic_matching | true | 是否启用模型关系判断；需要可用模型 |
 | max_memory_match_candidates | 8 | 记忆语义比较短名单大小 |
 | min_memory_duplicate_confidence | 0.90 | 自动融合重复记忆门槛 |
 | min_memory_relation_confidence | 0.75 | 相关/冲突关系门槛 |
 | full_curation_new_entry_threshold | 20 | 累计新增记忆触发全库整理 |
+| evolution.memory_review_parallelism | 4 | 后台私有关系判断并发数，1–32；不并发提交记忆 |
+| evolution.memory_review_max_attempts | 2 | 同一输入协议/传输失败最多尝试次数，1–4 |
+| evolution.memory_review_retry_backoff_ms | 15000 | 私有整理逐项重试间隔，1–3600000 毫秒 |
+| sharing.model_parallelism | 4 | 公私关系请求并发数，1–32 |
+| sharing.relation_batch_size | 8 | 单请求最多关系对数，1–16；需批量提示词 |
+| sharing.relation_batch_prompt_file | prompts/cross-memory-batch.txt | 批量协议补充模板，相对 runtime 配置目录；缺失时兼容单项协议 |
 | max_memory_entries / max_memory_bytes | 512 / 256 MiB | Pipeline SDK 上限；统一后台还受 run/快照读取上限约束 |
 | shadow_options.max_memory_bytes | 16 MiB | 在线快照读取记忆的大小上限 |
 | max_policy_entries / max_advice_items | 128 / 3 | 快照条数与单次建议条数 |
@@ -246,6 +263,17 @@ JSON 模式只约束输出格式，不替代既有的结构、证据、隐私和
 | model.timeout_ms / connect_timeout_ms | 30000 / 5000 | 后台模型调用与连接等待限制 |
 | model.stream / idle_timeout_ms | false / 0 | 可选流式传输 / 连续无正文数据的超时；默认关闭 |
 | model.sessionlog_max_output_tokens | 4096 | 当前内容感知后台采用的输出预算 |
+
+需要加快后台轨迹分析时，可设置 `learning.analysis_parallelism=8` 或 `16`，并根据供应商限流与实际超时率调整。
+它与 Agent 执行并发独立，只并发处理同批不同轨迹；已有成功报告直接复用，单轮失败不取消其他分析。
+批次、调用次数与输出大小预算继续生效，合成输入保持冻结批次顺序，元反思和公私记忆管理仍顺序执行。
+HTTP、原生接口及离线 `learn` 共享此配置；已启动的进程需要在安全收尾后重启，配置不会中断正在进行的请求。
+
+后台学习需要自动恢复临时分析失败时，设置 `learning.max_analysis_retries=2`。
+只对明确的连接失败、请求超时、HTTP 408/429/500/502/503/504，以及单轮结论协议错误 `dialogue_model_invalid_task_outcome` 有界重试；鉴权、隐私、其他证据/JSON 协议错误及进程崩溃后结果不明的请求不自动重发。重试不修补或放行无效证据，仍须完整通过原校验。
+间隔以 `retry_backoff_ms` 起步逐次翻倍，单次上限一天；次数及下次时间保存在运行的 `learning.analysis_retry_count`、`retry_after_ms` 中，重启不会重新获得预算，原错误保留为 `last_analysis_error` 和旧作业错误记录。
+仅失败轮进入新作业，已完成的分析、候选和入库不重复执行；HTTP、原生入口和离线 `learn` 使用同一调度逻辑，退避期间不阻塞其他就绪样本。
+耗尽重试后仍明确记录失败，离线命令返回非零退出码；单次模型调用内部的 `model.max_retries` 仍共享原 `timeout_ms`，与后台的跨请求恢复次数分开计算。
 
 配置中的通用 `model.max_output_tokens` 默认 800；服务的内容感知路径在没有入口显式覆盖时选用 sessionlog_max_output_tokens。
 按各入口的配置表分别设置预算。
@@ -261,7 +289,7 @@ JSON 模式只约束输出格式，不替代既有的结构、证据、隐私和
 | `sharing.enabled` | `true`，省略 sharing 或传空对象同样启用 | 启用公共提炼、支持计票、跨库关系、公共淘汰与公共快照输入 |
 | `auto_evaluate` | 模板 `true` | 完整新轨迹自动进入后台学习 |
 | `auto_approve_experiences` | `false` | 不自动授予经验运行时注入权限 |
-| `evolution.enable_meta_reflection` | `false` | 是否启用批次元反思模型 |
+| `evolution.enable_meta_reflection` | `true` | 是否启用批次元反思模型 |
 | `evolution.enable_memory_semantic_matching` | `true` | 有模型和预算时执行私库语义关系判断 |
 | 评测模型 | 模板为空 | 需部署方提供端点、模型和秘密环境变量 |
 

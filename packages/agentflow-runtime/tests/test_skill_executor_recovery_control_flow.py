@@ -76,6 +76,55 @@ def _llm_response(*, content: str = "", tool_calls=None, finish: str = "stop") -
     }
 
 
+def test_skill_loop_declares_finalization_and_keeps_normal_result_path(skill_env):
+    """只声明已有的收尾能力；普通回复仍经 DataBus 和技能结束事件交付。"""
+    from agentflow_runtime import skill_executor as se
+
+    bus, registry, config = _FakeDataBus(), MagicMock(), MagicMock()
+    registry.get_tools.return_value = []
+    config.skill_max_iterations.return_value = 3
+    config.node_execution_timeout.return_value = 3600
+    config.skill_max_completion_tokens.return_value = 4000
+    config.skill_llm_recovery_attempts.return_value = 1
+    config.skill_llm_top_k.return_value = 0
+    config.skill_llm_stop.return_value = None
+    config.skill_llm_temperature.return_value = 0.7
+    config.skill_llm_top_p.return_value = 1.0
+    config.skill_llm_frequency_penalty.return_value = 0
+    config.skill_llm_presence_penalty.return_value = 0
+    points = MagicMock()
+    points.allow_loop.return_value = True
+    llm = MagicMock(return_value=_llm_response(content="已汇总工具实际结果。"))
+    emit = MagicMock()
+    for name, replacement in {
+        "DataBusClient": lambda: bus,
+        "AgentConfig": config,
+        "_LocalToolRegistry": lambda *a, **k: registry,
+        "call_llm": llm,
+        "hook_trigger": lambda name, payload, **kwargs: payload,
+        "emit_event": emit,
+        "load_skills_from_list": lambda *a, **k: {},
+        "_ensure_artifacts_in_package": lambda artifacts: artifacts,
+        "resolve_llm_config": lambda *a, **k: {
+            "model": "test", "api_key": "test-key", "base_url": "http://unused.invalid"},
+        "_evolution": points,
+    }.items():
+        skill_env.setattr(se, name, replacement)
+    with patch("sys.stdout", io.StringIO()):
+        se.execute()
+
+    points.allow_loop.assert_called_once()
+    fields = points.allow_loop.call_args.args[0]
+    assert fields.get("extensions", {}).get("finalize_on_stop") is True
+    assert fields["ref"]["parent"] == "dispatch:recovery:1"
+    assert llm.call_count == 1
+    result = json.loads(dict(bus.put_calls)["skill_result:skill-runner"])
+    assert result["status"] == "completed"
+    assert result["skill_result"] == "已汇总工具实际结果。"
+    assert any(call.args[0] == se.hook_events.SKILL_EXECUTOR_COMPLETED
+               for call in emit.call_args_list)
+
+
 @pytest.mark.parametrize("recovers", [True, False])
 def test_incomplete_final_answer_uses_bounded_recovery(skill_env, recovers):
     from agentflow_runtime import skill_executor as se

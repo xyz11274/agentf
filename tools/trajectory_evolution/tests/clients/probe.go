@@ -1,3 +1,7 @@
+// probe 回归验证：检查包内协议、边界条件与失败处理。
+// 本地桩用于重现确定性场景，不代表真实 Agent 或远程模型的业务能力。
+// 测试应同时验证正常路径与拒绝路径，避免错误数据被当成成功结果。
+
 package main
 
 import (
@@ -8,6 +12,8 @@ import (
 	"os"
 )
 
+// 回归用例：main。
+// 重点核验字段或诊断：client_initialization_failed、probe_input_invalid、probe_read_failed；异常路径不能被当成成功。
 func main() {
 	client, err := evolution.New(os.Getenv("EVOLUTION_URL"), os.Getenv("EVOLUTION_TEST_TOKEN"), evolution.Options{})
 	if err != nil {

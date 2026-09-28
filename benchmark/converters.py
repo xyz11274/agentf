@@ -27,7 +27,7 @@ from evalset_schema import SCHEMA_VERSION, empty_evalset, normalize_evalset
 
 _M = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
-# product 智能等级 → difficulty
+# 原表用例的智能等级 → difficulty；与进化能力 L0–L4 无关。
 _LEVEL_TO_DIFFICULTY = {"L1": "easy", "L2": "medium", "L3": "hard"}
 
 
@@ -74,7 +74,7 @@ def read_xlsx_rows(path: Path) -> list:
 
 # ── 编号语料拆分 ──────────────────────────────────────────────────
 
-_STEP_MARK = re.compile(r"(?:^|(?<=[\n`。！？；`]))\s*(\d{1,2})\s*[.、．]\s*")
+_STEP_MARK = re.compile(r"(?<!\d)(\d{1,2})\s*[.、．](?!\d)\s*")
 
 
 def split_steps(text: str) -> list:
@@ -85,19 +85,25 @@ def split_steps(text: str) -> list:
     text = (text or "").strip()
     if not text:
         return []
-    marks = list(_STEP_MARK.finditer(text))
-    if not marks:
+    candidates = list(_STEP_MARK.finditer(text))
+    # 接受无换行的连续编号，但排除小数、流量规格等普通数字。
+    if not candidates or candidates[0].group(1) != "1" or text[:candidates[0].start()].strip(" `\n\r\t"):
         return [text]
+    marks = [candidates[0]]
+    for candidate in candidates[1:]:
+        if int(candidate.group(1)) == len(marks) + 1:
+            marks.append(candidate)
     steps = []
     for i, m in enumerate(marks):
         end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
         step = text[m.end():end].strip().strip("`").strip()
-        if step:
-            steps.append(step)
+        # 空预期也占据一轮，不能删除后让后续答案错位。
+        steps.append(step)
     return steps
 
 
-_INTENT_LINE = re.compile(r"(\d{1,2})\s*[.、．]\s*([^\n`]*)")
+# 编号后的空白只允许空格/制表符，不能吞掉换行并把下一轮编号当成标签。
+_INTENT_LINE = re.compile(r"(\d{1,2})\s*[.、．][ \t]*([^\n`]*)")
 
 
 def parse_intents(text: str) -> dict:
@@ -178,6 +184,7 @@ def convert_product(path: Path, domain_map: dict, warnings: list) -> dict:
     c_steps = col("测试步骤（语料）")
     c_expect = col("预期结果")
     c_intent = col("预期意图")
+    c_operation = col("预期操作类型")
     c_voice = col("声纹ID")
     c_device = col("设备类型")
     if c_id is None or c_steps is None:
@@ -198,6 +205,7 @@ def convert_product(path: Path, domain_map: dict, warnings: list) -> dict:
             continue
         expects = split_steps(cell(c_expect))
         intents = parse_intents(cell(c_intent))
+        operations = parse_intents(cell(c_operation))
 
         scenarios = [cell(i) for i in c_scenes if i is not None and cell(i)]
         level = cell(c_level)
@@ -224,6 +232,8 @@ def convert_product(path: Path, domain_map: dict, warnings: list) -> dict:
                 "user": step,
                 "expected_skills": sorted(set(expected_skills)) if expected_skills is not None else None,
                 "expected_behavior": expects[idx - 1] if idx - 1 < len(expects) else "",
+                "expected_intents": domains or None,
+                "expected_operation_types": operations.get(idx),
             })
 
         goal = title
@@ -236,9 +246,11 @@ def convert_product(path: Path, domain_map: dict, warnings: list) -> dict:
             "goal": goal,
             "constraints": [],
             "turns": turns,
-            "level": level,
+            "case_level": level,
             "provenance": {
                 "kind": "product",
+                "original_case_id": case_id,
+                "precondition": precondition,
                 "source": str(path),
                 "title": title,
                 "scenarios": scenarios,
@@ -276,9 +288,12 @@ def convert_daily_qa(path: Path) -> dict:
             "turns": case.get("turns") or [],
             "provenance": {"kind": "manual", "source": str(path)},
         }
-        for key in ("budget", "checks", "final_rubric", "split", "level"):
+        for key in ("budget", "checks", "final_rubric", "split"):
             if case.get(key):
                 out_case[key] = case[key]
+        # 兼容旧用例字段；对外统一输出 case_level，不与运行时 level 混用。
+        if "case_level" in case or "level" in case:
+            out_case["case_level"] = case.get("case_level", case.get("level"))
         evalset["cases"].append(out_case)
     return evalset
 

@@ -35,7 +35,8 @@ def concurrent(state,start,end):
                 row['seconds']+=duration;row['end']=right
 
 def analyze(state,args,selected):
-    today=datetime.now(ZONE).date()
+    from .evaluation_world import clock
+    today=clock(state).date()
     period=args.get('date','')
     if args.get('start_date'):
         start=datetime.fromisoformat(args['start_date']).date()
@@ -75,13 +76,32 @@ def analyze(state,args,selected):
         if not any(d in selected for d in row['devices']) or not include(row['hour'][:10],row['hour'][11:16]):continue
         if compare and compare not in row['devices']:continue
         key=tuple(row['devices']);pairs[key]=pairs.get(key,0)+row['seconds']
+    # 返回完整统计，不逐条回传数千条小时遥测。底层明细仍保留在状态库；
+    # 同设备的同一钟点跨日期求和，数组下标对应本地时间 0～23 点。
+    # 日期和时段过滤在聚合前完成，查询某一天时也不会混入其他日期。
+    usage = {}
+    for record in records:
+        bucket = usage.setdefault(record['device_id'], {
+            'device_id': record['device_id'], 'powered_hours': [0.] * 24,
+            'observed_dates': [set() for _ in range(24)],
+        })
+        hour = int(record['hour'][11:13])
+        bucket['powered_hours'][hour] += record['powered_seconds'] / 3600
+        bucket['observed_dates'][hour].add(record['hour'][:10])
+    for bucket in usage.values():
+        bucket['powered_hours'] = [round(value, 4) for value in bucket['powered_hours']]
+        bucket['observed_days'] = [len(days) for days in bucket.pop('observed_dates')]
+    # 操作样例只帮助解释习惯，不重复传输每次动作的整个设备前后状态。
+    recent = [{key: item[key] for key in ('timestamp', 'device_id', 'text', 'command')
+               if key in item} for item in history[-3:]]
     return {'analysis':args.get('analysis','habits'),'start_date':start.isoformat() if start else None,
             'end_date':end.isoformat() if end else None,'timezone':'Asia/Shanghai','modeList':modes,
-            'history':history[-100:],'sample_count':len(history),'enough_history':bool(modes),
-            'energy':list(totals.values()),'hourly_usage':records,
+            'history':recent,'sample_count':len(history),'enough_history':bool(modes),
+            'energy':list(totals.values()),'hourly_usage':list(usage.values()),
+            'hourly_usage_resolution':'hour_of_day_0_to_23_summed_over_selected_dates',
+            'telemetry_records':len(records),
             'cooccurrence':[{'devices':list(k),'simultaneous_hours':round(v/3600,4)} for k,v in pairs.items()],
             'telemetry_hours':len({r['hour'] for r in records}),
             'energy_basis':'test_device_nominal_watts_times_observed_runtime; not physical meter readings',
             'inference':'observed switch time median; not presence detection',
             'coverage_note':'只统计后端实际运行期间积累的记录；空历史不代表零用电或无习惯'}
-

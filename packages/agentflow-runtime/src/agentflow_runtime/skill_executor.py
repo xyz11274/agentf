@@ -835,6 +835,8 @@ def execute():
                 "ref": {"run": dialogue_id, "key": f"{exec_skill_key}:loop:{round_i + 1}",
                         "parent": exec_skill_key},
                 "state": {"last_result": messages[-1] if messages else {}, "artifacts": generated_artifacts},
+                # 技能可用原有无工具答复出口交付结果；停止后的一次收尾由组件控制。
+                "extensions": {"finalize_on_stop": True},
             }, user_id=_user_id()):
                 output = {
                     "skill_result": _summarize_tool_history(messages), "status": "loop_control_stop",

@@ -1,4 +1,9 @@
-// Package evolution provides framework-neutral HTTP and in-process transports for L0-L3 boundaries.
+// go 客户端：通过统一协议收集执行事件并接收策略建议。
+// 传输与业务执行分离；接收回执不代表 Agent 已完成整个任务。
+// 打点的输入是建议修改前的请求，执行后必须回传实际输入、输出与状态。
+// 取消、超时和采集缺口需要显式处理，不能把缺失证据当成正常完成。
+
+// 本包为 L0–L3 打点提供框架无关的 HTTP 和进程内传输。
 package evolution
 
 import (
@@ -23,6 +28,7 @@ type Error struct {
 	Status int
 }
 
+// 创建或读取受限错误信息，保留固定错误码而不泄露业务正文。
 func (e *Error) Error() string { return e.Code }
 
 type Options struct {
@@ -43,7 +49,7 @@ type pointGaps struct {
 	full bool
 }
 
-// CallResult exposes both point receipts while preserving the business value.
+// CallResult 保留原始业务值，同时暴露前后两个打点回执。
 type CallResult struct {
 	Output   any
 	Before   map[string]any
@@ -51,13 +57,14 @@ type CallResult struct {
 	Executed bool
 }
 
-// LoopDecision contains the guard and, for context-based points, its commit.
+// LoopDecision 包含循环守卫，以及上下文协议所需的提交回执。
 type LoopDecision struct {
 	Allow  bool
 	Before map[string]any
 	After  map[string]any
 }
 
+// 返回已保存的协议回执，不重新执行业务操作。
 func (d LoopDecision) Receipt() map[string]any {
 	if d.After != nil {
 		return d.After
@@ -67,6 +74,7 @@ func (d LoopDecision) Receipt() map[string]any {
 
 var safeCode = regexp.MustCompile(`^[a-z_]{1,96}$`)
 
+// 验证参数并创建可复用客户端，在业务请求开始前初始化。
 func New(endpoint, token string, options Options) (*Client, error) {
 	if trialURL, trialToken := os.Getenv("TRAJECTORY_EVOLUTION_TRIAL_URL"), os.Getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN"); trialURL != "" && trialToken != "" {
 		endpoint, token = trialURL, trialToken
@@ -96,10 +104,11 @@ func New(endpoint, token string, options Options) (*Client, error) {
 		http: &http.Client{Timeout: options.Timeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
+// 安全关闭资源，等待在途调用结束并避免重复释放。
 func (c *Client) Close() { c.http.CloseIdleConnections() }
 
-// Evaluate binds an existing receiver; normal application startup is a no-op.
-// The receiver only acknowledges delivery. Run-end points supply the real result.
+// Evaluate 绑定现有接收入口；普通应用启动时不接管执行。
+// 接收函数仅确认交付，真实结果由运行结束打点提供。
 func Evaluate(ctx context.Context, receive func(context.Context, any) error) (bool, error) {
 	if os.Getenv("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY") != "1" {
 		return false, nil
@@ -145,7 +154,8 @@ func Evaluate(ctx context.Context, receive func(context.Context, any) error) (bo
 	}
 }
 
-// Point uses one total deadline and never turns an observer outage into an Agent error.
+// Point 使用同一总截止时间；观测端不可用不能变成 Agent 业务异常。
+// 提交单个打点，保持策略准备在业务执行前、结果采集在执行后。
 func (c *Client) Point(ctx context.Context, fields map[string]any, budget time.Duration) (result map[string]any) {
 	ref, _ := fields["ref"].(map[string]any)
 	run, _ := ref["run"].(string)
@@ -211,8 +221,9 @@ func (c *Client) Point(ctx context.Context, fields map[string]any, budget time.D
 		"capture_complete": false, "policy_applied": false, "closed": false, "ended": false, "reason": "observer_unavailable"}
 }
 
-// Call wraps one existing JSON-in/JSON-out operation. execute is invoked at
-// most once, skipped after rejection, and its original error is returned.
+// Call 包装一个现有 JSON 输入输出操作，execute 最多执行一次。
+// 策略拒绝时跳过执行；业务异常保持原样返回。
+// 最多执行一次宿主业务操作，策略拒绝时不调用业务回调。
 func (c *Client) Call(ctx context.Context, fields map[string]any, execute func(any) (any, error), budget time.Duration) (CallResult, error) {
 	beforeFields := cloneFields(fields)
 	beforeFields["phase"] = "before"
@@ -255,8 +266,9 @@ func (c *Client) Call(ctx context.Context, fields map[string]any, execute func(a
 	return CallResult{Output: output, Before: before, After: after, Executed: true}, nil
 }
 
-// CheckLoop preserves both point protocols: a referenced boundary is a single
-// guard, while a context-based boundary is committed with a matching after.
+// CheckLoop 保留两种打点协议：引用式边界只执行一次守卫。
+// 上下文式边界则以配对的 after 提交实际决定。
+// 返回循环守卫与提交回执，保留两种打点协议。
 func (c *Client) CheckLoop(ctx context.Context, fields map[string]any, budget time.Duration) LoopDecision {
 	request := cloneFields(fields)
 	request["kind"] = "loop"
@@ -279,22 +291,27 @@ func (c *Client) CheckLoop(ctx context.Context, fields map[string]any, budget ti
 	return result
 }
 
+// 取得并提交循环决定，返回是否允许继续。
 func (c *Client) AllowLoop(ctx context.Context, fields map[string]any, budget time.Duration) bool {
 	return c.CheckLoop(ctx, fields, budget).Allow
 }
 
+// 显式记录采集缺口，不将缺失轨迹作为完整样本。
 func (c *Client) CaptureGap(ctx context.Context, fields map[string]any) (map[string]any, error) {
 	return c.Invoke(ctx, "capture.gap", fields, "")
 }
 
+// 获取下一轮隔离评测输入，前一轮未收尾时不提前投递。
 func (c *Client) EvaluationNext(ctx context.Context, consumer string, index int) (map[string]any, error) {
 	return c.Invoke(ctx, "evaluation.next", map[string]any{"consumer": consumer, "index": index}, "")
 }
 
+// 报告评测入口失败，只传固定诊断，不传原始异常正文。
 func (c *Client) EvaluationFail(ctx context.Context, consumer string) (map[string]any, error) {
 	return c.Invoke(ctx, "evaluation.fail", map[string]any{"consumer": consumer}, "")
 }
 
+// 复制打点字段，避免补充协议数据时修改调用方对象。
 func cloneFields(fields map[string]any) map[string]any {
 	copy := make(map[string]any, len(fields)+1)
 	for key, value := range fields {
@@ -303,7 +320,8 @@ func cloneFields(fields map[string]any) map[string]any {
 	return copy
 }
 
-// Invoke can run concurrently. Reuse requestID after ambiguous transport failures.
+// Invoke 支持并发；传输结果不确定时复用 requestID，防止重复执行。
+// 执行当前客户端协议请求，校验响应并保留请求身份。
 func (c *Client) Invoke(ctx context.Context, operation string, fields map[string]any, requestID string) (map[string]any, error) {
 	if requestID == "" {
 		var id [16]byte
@@ -335,6 +353,7 @@ func (c *Client) Invoke(ctx context.Context, operation string, fields map[string
 	}
 }
 
+// 执行一次传输尝试，后续重试只能由外层总预算和幂等规则决定。
 func (c *Client) once(ctx context.Context, body []byte) (map[string]any, *Error) {
 	request, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -374,6 +393,9 @@ func (c *Client) once(ctx context.Context, body []byte) (map[string]any, *Error)
 	return payload.Result, nil
 }
 
-// Avoid leaking credentials when callers print a client for diagnostics.
-func (c *Client) String() string   { return "EvolutionClient" }
+// 客户端被打印用于诊断时，不能输出凭据。
+// 返回安全对象描述，而非完整敏感配置。
+func (c *Client) String() string { return "EvolutionClient" }
+
+// 生成供调试打印的安全对象表示，不暴露凭据。
 func (c *Client) GoString() string { return fmt.Sprint(c) }

@@ -23,10 +23,10 @@
 
 原始证据：
 
-- [搜索树](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/tree.json)
-- [节点 12 策略](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/versions/12.json)
-- [节点 12 完整验证报告](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/evaluations/5e971beaa9c7d9f074af14e1357bb0658e6afec307bfbb280784d75c7bac1aa5/attempt-1/report.json)
-- [节点 10 反思输入](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/reflections/10.request.json)
+- 搜索树（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/tree.json`）
+- 节点 12 策略（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/versions/12.json`）
+- 节点 12 完整验证报告（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/evaluations/5e971beaa9c7d9f074af14e1357bb0658e6afec307bfbb280784d75c7bac1aa5/attempt-1/report.json`）
+- 节点 10 反思输入（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/14b28ed367e60e51648a34e04a407754625d03cf7f37491e1a20a3ffaefd7298/search/reflections/10.request.json`）
 
 ### 2.1 总体表现
 
@@ -223,10 +223,10 @@ L0 的 15 题中有 11 题无效 loop 为 0，剩余 12 次集中在 4 题。节
 
 验证日志：
 
-- [最终构建](../../../build/trajectory-evolution/feedback-final-build.log)
-- [10 组相关回归](../../../build/trajectory-evolution/feedback-final-regression.log)
-- GEPA 完整回归：[分片 0，36 项](../../../build/trajectory-evolution/feedback-final-gepa-0.log)、[分片 1，35 项](../../../build/trajectory-evolution/feedback-final-gepa-1.log)、[分片 2，35 项](../../../build/trajectory-evolution/feedback-final-gepa-2.log)
-- [v1 接入回归](../../../build/trajectory-evolution/feedback-fix-v1.log)
+- 最终构建（工作区路径：`build/trajectory-evolution/feedback-final-build.log`）
+- 10 组相关回归（工作区路径：`build/trajectory-evolution/feedback-final-regression.log`）
+- GEPA 完整回归：分片 0，36 项（工作区路径：`build/trajectory-evolution/feedback-final-gepa-0.log`）、分片 1，35 项（工作区路径：`build/trajectory-evolution/feedback-final-gepa-1.log`）、分片 2，35 项（工作区路径：`build/trajectory-evolution/feedback-final-gepa-2.log`）
+- v1 接入回归（工作区路径：`build/trajectory-evolution/feedback-fix-v1.log`）
 
 ## 8. 后续执行顺序与完成标准
 
@@ -281,9 +281,9 @@ v1 原 `handle_run_skills_call` 只有收到 `evolution_parent_ref` 才发起按
 - 完整 106 项 GEPA 搜索回归全部通过（36/35/35），覆盖搜索、发布、反事实归因与恢复；`git diff --check` 通过。
 - 用户授权服务切换后已启动新真实 v1 实验，作业 `903da290bc8b7a0530751aed5a3fedccb9c5733f44caa69e7f3e34f389844e60`，以旧节点 12 的策略为新种子重新执行。旧 job 保持 cancelled，数据集、memory、L0 缓存和旧证据均保留；不沿用旧候选成绩。后台服务 PID 3344087，退出终端不结束服务。
 
-日志：[构建](../../../build/trajectory-evolution/feedback-dispatch-build.log)、[11 组回归](../../../build/trajectory-evolution/feedback-dispatch-regression.log)、[v1 接入](../../../build/trajectory-evolution/feedback-dispatch-v1.log)。
+日志：构建（工作区路径：`build/trajectory-evolution/feedback-dispatch-build.log`）、11 组回归（工作区路径：`build/trajectory-evolution/feedback-dispatch-regression.log`）、v1 接入（工作区路径：`build/trajectory-evolution/feedback-dispatch-v1.log`）。
 
-完整搜索回归：[36 项](../../../build/trajectory-evolution/feedback-dispatch-gepa-0.log)、[35 项](../../../build/trajectory-evolution/feedback-dispatch-gepa-1.log)、[35 项](../../../build/trajectory-evolution/feedback-dispatch-gepa-2.log)。新实验结果未完成时，本报告第 2 节仍表示旧实验成绩，不把源码修复直接折算为性能提升。
+完整搜索回归：36 项（工作区路径：`build/trajectory-evolution/feedback-dispatch-gepa-0.log`）、35 项（工作区路径：`build/trajectory-evolution/feedback-dispatch-gepa-1.log`）、35 项（工作区路径：`build/trajectory-evolution/feedback-dispatch-gepa-2.log`）。新实验结果未完成时，本报告第 2 节仍表示旧实验成绩，不把源码修复直接折算为性能提升。
 
 ## 10. 到底为什么目标简单，效果仍不好
 
@@ -313,7 +313,7 @@ v1 原 `handle_run_skills_call` 只有收到 `evolution_parent_ref` 才发起按
 
 此处是旧策略在新链路上的起点评测，尚不是修复后 GEPA 新生成的策略成绩。搜索已进入第一轮训练反馈，后续只从训练轨迹生成改进；验证和留出内容不进入反思。未发布该种子。
 
-新证据：[搜索树](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/903da290bc8b7a0530751aed5a3fedccb9c5733f44caa69e7f3e34f389844e60/search/tree.json)、[种子验证报告](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/903da290bc8b7a0530751aed5a3fedccb9c5733f44caa69e7f3e34f389844e60/search/evaluations/dc3b7aea62b0a7efe2741001106b86739d17ea9cf0e443e3b849a8b9f77d70f7/attempt-1/report.json)。
+新证据：搜索树（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/903da290bc8b7a0530751aed5a3fedccb9c5733f44caa69e7f3e34f389844e60/search/tree.json`）、种子验证报告（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/903da290bc8b7a0530751aed5a3fedccb9c5733f44caa69e7f3e34f389844e60/search/evaluations/dc3b7aea62b0a7efe2741001106b86739d17ea9cf0e443e3b849a8b9f77d70f7/attempt-1/report.json`）。
 
 ## 12. 后续训练确认：生成规格和候选构造仍有缺口
 
@@ -352,8 +352,8 @@ v1 原 `handle_run_skills_call` 只有收到 `evolution_parent_ref` 才发起按
 
 正式作业：`ef21fe0015ecb5cc1152142570b40ae037e088e97dfc948b08e4d9148dfbfa20`。
 
-- [实时搜索树](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/ef21fe0015ecb5cc1152142570b40ae037e088e97dfc948b08e4d9148dfbfa20/search/tree.json)。
-- [后台服务日志](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full-service.log)。
+- 实时搜索树（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/ef21fe0015ecb5cc1152142570b40ae037e088e97dfc948b08e4d9148dfbfa20/search/tree.json`）。
+- 后台服务日志（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full-service.log`）。
 - 4 题并发，同一 30/15/15 划分、同一种子、兼容 L0 缓存；未手工添加针对验证题的规则。
 - 启动前最后复核补齐了 `repair_component_selection` 的增量格式。此前短暂启动的 `9ce57400…dfb690` 在没有反思请求时取消，不作为有效优化结果。
 - 本节记录启动状态，不是最终效果结论。须检查实际生成的增量、未修改分支规则是否保留、差分干预与完整验证/留出成绩后再判断是否可发布。
@@ -374,8 +374,8 @@ v1 原 `handle_run_skills_call` 只有收到 `evolution_parent_ref` 才发起按
 
 验证完成：新增 9 项、相关旧纠正 6 项和关联 CTest 7 组通过；119 项完整 GEPA 回归中的 3 个测试计数断言修正后复测通过，其余 116 项直接通过。没有通过修改评分来消除失败。新真实作业为 `cfe00062ec49258e9834d8fd343dbd443a50f963b6ec60962214acc247f8e9b9`，后台 PID 3533062，沿用原数据、memory、种子和兼容基线缓存，4 题并发。
 
-- [修正版实时搜索树](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/cfe00062ec49258e9834d8fd343dbd443a50f963b6ec60962214acc247f8e9b9/search/tree.json)。
-- [新增回归日志](../../../build/trajectory-evolution/control-repair-new-tests.log)。
+- 修正版实时搜索树（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/cfe00062ec49258e9834d8fd343dbd443a50f963b6ec60962214acc247f8e9b9/search/tree.json`）。
+- 新增回归日志（工作区路径：`build/trajectory-evolution/control-repair-new-tests.log`）。
 - 本次修复证明了纠正链路可达和有界，不证明最终策略已经达到业务目标。旧第 12 节链接保留为历史证据，不再是当前运行作业。
 
 新作业种子验证已完成：13/15 通过、平均无效 loop 1.933、平均执行 55.574 秒；模型/动作/编排/循环实际应用 21/1/1/2，全部能力有执行回执。L0 缓存再次确认命中（14/15、0.800、55.801 秒）。因此链路生效不等于收益达标，种子不可发布，继续训练反思搜索。
@@ -401,7 +401,7 @@ v1 原 `handle_run_skills_call` 只有收到 `evolution_parent_ref` 才发起按
 
 验证追加：125 项 GEPA 回归、关联 9 组 CTest 通过；普通策略缓存指纹同步 v6，其对应旧测试预期已同步并全组复测。COMBEE 子请求现保留裁剪组件的当前正文，不用历史正文复活停用经验。实际 v1 函数接入回归验证 4 条完整轨迹与 24/1/1/4 的模型/动作/编排/loop 应用；使用的是模拟模型和工具，不能当成远程业务收益。
 
-修正版真实作业已启动：[搜索树](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/7e5e636961ad1996ad6cd7f4ed4bf6e39dcbf7dafbe052a6fc893f06aa8cd5cb/search/tree.json)。后台 PID 3637980，4 题并发，同一数据、memory 和种子，保留兼容 L0 缓存；启动时处于种子验证，尚未生成可发布的新策略。
+修正版真实作业已启动：搜索树（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/7e5e636961ad1996ad6cd7f4ed4bf6e39dcbf7dafbe052a6fc893f06aa8cd5cb/search/tree.json`）。后台 PID 3637980，4 题并发，同一数据、memory 和种子，保留兼容 L0 缓存；启动时处于种子验证，尚未生成可发布的新策略。
 
 种子完整验证为 13/15、无效 loop 均值 1.867、平均执行 62.461 秒，模型/动作/编排/loop 实际应用 38/0/1/2；L0 缓存确认命中，仍为 14/15、0.800、55.801 秒。注入状态缺失已修通，但旧经验并未因此变成有效策略；种子质量、浪费和时延都未达标，不发布。搜索继续从训练集生成改进，不把本次验证内容传给反思模型。
 
@@ -429,7 +429,7 @@ v1 原 `handle_run_skills_call` 只有收到 `evolution_parent_ref` 才发起按
 
 修复集中于 GEPA 目录与反思提示词。输入辅助视图限制在原字节预算内，单条修复反馈数量不变；CLI 与 local.so 在旧真实评测结束前未被替换。完整构建、130 项 GEPA 回归与关联 9 组 CTest 通过；新增 HTTP 回归核对真实发出的输入与落盘一致。4 条新测试初版配置违反 actor/scope 互斥规则，修正 fixture 后全组 5 项重跑通过，生产校验未放宽。
 
-修正版作业：[a1d722e4…a3e166b 搜索树](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/a1d722e4a70feebee0772b06b558b9bb119d625945cc3de968dc2c150a3e166b/search/tree.json)。后台 PID 3790195，从上一轮节点 5 的完整策略继续，4 题并发；保留同一数据、memory 和兼容 L0 缓存。新生成规则仍须通过真实训练、验证和最终留出评测，启动不等于达成目标。
+修正版作业：a1d722e4…a3e166b 搜索树（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/a1d722e4a70feebee0772b06b558b9bb119d625945cc3de968dc2c150a3e166b/search/tree.json`）。后台 PID 3790195，从上一轮节点 5 的完整策略继续，4 题并发；保留同一数据、memory 和兼容 L0 缓存。新生成规则仍须通过真实训练、验证和最终留出评测，启动不等于达成目标。
 
 ## 16. 不再把流程较长直接当成 L3 改进机会（CHG-319）
 
@@ -669,9 +669,9 @@ t-30 的两个独立视频分支都已派发，但 event-60 海豚分支的 Unsu
 
 证据文件：
 
-- [最终发布判定](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/e64d11cdad5dd991a5ee39774ab2a680f0b642572dfeec45cd1f7be62c0760fb/search/decision.json)
-- [最终留出报告](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/e64d11cdad5dd991a5ee39774ab2a680f0b642572dfeec45cd1f7be62c0760fb/search/evaluations/4c7fc18bcc1e1a4e3e9ebbdb7e2745a76635c851c34d018289755bd797796532/attempt-1/report.json)
-- [保留的入选候选](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/e64d11cdad5dd991a5ee39774ab2a680f0b642572dfeec45cd1f7be62c0760fb/search/selected-version.json)
+- 最终发布判定（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/e64d11cdad5dd991a5ee39774ab2a680f0b642572dfeec45cd1f7be62c0760fb/search/decision.json`）
+- 最终留出报告（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/e64d11cdad5dd991a5ee39774ab2a680f0b642572dfeec45cd1f7be62c0760fb/search/evaluations/4c7fc18bcc1e1a4e3e9ebbdb7e2745a76635c851c34d018289755bd797796532/attempt-1/report.json`）
+- 保留的入选候选（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/e64d11cdad5dd991a5ee39774ab2a680f0b642572dfeec45cd1f7be62c0760fb/search/selected-version.json`）
 
 ### 21.2 最终同题留出对照
 
@@ -738,7 +738,7 @@ t-30 的两个独立视频分支都已派发，但 event-60 海豚分支的 Unsu
 - 从旧验证节点 17 的策略继续，不是重新冷启动，也没有把节点 17 的旧验证成绩宣称为本轮结果。候选缓存未命中严格环境指纹，因此候选需要重新验证；已单独核对 L0 上下文仍等于旧缓存。
 - 为核对缓存短暂停止一次，暂停前完成且通过的 5 条候选试次保留，随后 retry 同一作业。此时尚未完成最终验收，不能认定本轮已达目标。
 
-新结果目录：[4714940a…37bd2 搜索](../../../trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/4714940a4e65451ecf95ffa6a90c593f884ec5dbdb19fc77e15b61b29ff37bd2/search)。
+新结果目录：4714940a…37bd2 搜索（工作区路径：`trace_output/v1-l4-coldstart/l3-current/gepa-full/agent-evaluation/4714940a4e65451ecf95ffa6a90c593f884ec5dbdb19fc77e15b61b29ff37bd2/search`）。
 
 接续核对：本轮起始策略验证完成 15/15，通过 15/15，平均无效 loop 0.0667、Agent 耗时 42.605 秒；L1 应用 14 次，学习型 L2 动作/编排各 1 次，基础 L3 1 次、学习型 L3 0 次。该结果属于原节点 17 策略的重新验证，不能归功于只影响后续提案的本次生成修复。验证 L0 与独立留出 L0 均已命中缓存，后者明确引用 e64 的完整 holdout 报告。
 

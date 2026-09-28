@@ -1,4 +1,10 @@
-"""Version-bound background evaluation and production-path isolation."""
+# test_agent_evaluation 回归验证：检查包内协议、边界条件与失败处理。
+# 本地桩用于重现确定性场景，不代表真实 Agent 或远程模型的业务能力。
+# 测试应同时验证正常路径与拒绝路径，避免错误数据被当成成功结果。
+
+"""验证后台评测绑定版本，并与生产 Agent 执行路径隔离。"""
+
+import fcntl
 import json
 from contextlib import closing
 import hashlib
@@ -18,7 +24,11 @@ import urllib.error
 import uuid
 
 BUILD = Path(sys.argv.pop(1)).resolve()
-PROTOC = sys.argv.pop(1) if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else shutil.which("protoc")
+PROTOC = (
+    sys.argv.pop(1)
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
+    else shutil.which("protoc")
+)
 SOURCE = Path(__file__).resolve().parents[1]
 CLI = BUILD / "trajectory_evolution"
 WORK = Path(tempfile.mkdtemp(prefix="agent-evaluation-tests.", dir=BUILD))
@@ -26,93 +36,200 @@ TOKEN = "agent-evaluation-test-user-a-token"
 TOKEN_B = "agent-evaluation-test-user-b-token"
 
 
+# 按照本模块的输出约定写入内容；调用方负责提供已验证的目标和数据。
 def write(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
 
 
 class AgentEvaluationTests(unittest.TestCase):
+    # 测试辅助函数：setUp。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="case.", dir=WORK))
         self.env = os.environ.copy()
         self.env.update(EVAL_USER_A_TOKEN=TOKEN, EVAL_USER_B_TOKEN=TOKEN_B)
-        task = dict(task_id="sum", group_id="sum", task_input="生成视频时缺少图片素材，计算总量20。",
-                    expected_behavior="返回20", initial_state={}, followup_inputs=["再次确认结果。"],
-                    difficulty="easy", category="data", split="train", review_status="reviewed")
+        task = dict(
+            task_id="sum",
+            group_id="sum",
+            task_input="生成视频时缺少图片素材，计算总量20。",
+            expected_behavior="返回20",
+            initial_state={},
+            followup_inputs=["再次确认结果。"],
+            difficulty="easy",
+            category="data",
+            split="train",
+            review_status="reviewed",
+        )
         write(self.root / "task.jsonl", task)
         dataset = json.loads((SOURCE / "config/dataset.json").read_text())
         dataset["sources"] = [dict(kind="golden", path=str(self.root / "task.jsonl"))]
         write(self.root / "dataset.json", dataset)
-        result = subprocess.run([str(CLI), "dataset", "build", "--config", str(self.root / "dataset.json"),
-                                 "--output-root", str(self.root / "dataset")], capture_output=True, text=True, timeout=20)
+        result = subprocess.run(
+            [
+                str(CLI),
+                "dataset",
+                "build",
+                "--config",
+                str(self.root / "dataset.json"),
+                "--output-root",
+                str(self.root / "dataset"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.evaluation = dict(schema_version=1, splits=["train"], repetitions=2, parallelism=1, timeout_ms=10000,
-            require_trace=True, variants=[dict(id="host", version="configured-host", pass_env=[],
-                command=[sys.executable, "-B", str(SOURCE / "tests/agent_evaluation_host.py"), "good",
-                         str(BUILD / "libtrajectory_evolution_local.so")])],
-            checks={"*": [dict(id="total", path="/state/value", op="equals", value=20)]}, judge=dict(enabled=False))
+        self.evaluation = dict(
+            schema_version=1,
+            splits=["train"],
+            repetitions=2,
+            parallelism=1,
+            timeout_ms=10000,
+            require_trace=True,
+            variants=[
+                dict(
+                    id="host",
+                    version="configured-host",
+                    pass_env=[],
+                    command=[
+                        sys.executable,
+                        "-B",
+                        str(SOURCE / "tests/agent_evaluation_host.py"),
+                        "good",
+                        str(BUILD / "libtrajectory_evolution_local.so"),
+                    ],
+                )
+            ],
+            checks={
+                "*": [dict(id="total", path="/state/value", op="equals", value=20)]
+            },
+            judge=dict(enabled=False),
+        )
         write(self.root / "evaluation.json", self.evaluation)
-        write(self.root / "agent-evaluation.json", dict(schema_version=1, dataset="dataset", evaluation_config="evaluation.json",
-            agent=dict(revision="fixture-agent-v1"), min_interval_ms=0, max_jobs_per_hour=100,
-            gate=dict(min_trials=2, min_coverage=1, min_pass_rate=1, max_pass_rate_drop=0)))
+        write(
+            self.root / "agent-evaluation.json",
+            dict(
+                schema_version=1,
+                dataset="dataset",
+                evaluation_config="evaluation.json",
+                agent=dict(revision="fixture-agent-v1"),
+                min_interval_ms=0,
+                max_jobs_per_hour=100,
+                gate=dict(
+                    min_trials=2, min_coverage=1, min_pass_rate=1, max_pass_rate_drop=0
+                ),
+            ),
+        )
         self.config = json.loads((SOURCE / "config/service.json").read_text())
-        self.config.update(agent_id="eval-test", port=0, max_level="L3", auto_evaluate=False,
-            data_dir=str(self.root / "production"), sharing=dict(enabled=False),
-            principals=[dict(user_id="user-a", token_env="EVAL_USER_A_TOKEN"), dict(user_id="user-b", token_env="EVAL_USER_B_TOKEN")],
+        self.config.update(
+            agent_id="eval-test",
+            port=0,
+            max_level="L3",
+            auto_evaluate=False,
+            data_dir=str(self.root / "production"),
+            sharing=dict(enabled=False),
+            principals=[
+                dict(user_id="user-a", token_env="EVAL_USER_A_TOKEN"),
+                dict(user_id="user-b", token_env="EVAL_USER_B_TOKEN"),
+            ],
             runtime_config=str(SOURCE / "config/standard-runtime.json"),
-            experience_template_file=str(SOURCE / "config/prompts/runtime-experience.txt"),
-            policy_evaluation_file="agent-evaluation.json")
+            experience_template_file=str(
+                SOURCE / "config/prompts/runtime-experience.txt"
+            ),
+            policy_evaluation_file="agent-evaluation.json",
+        )
         write(self.root / "service.json", self.config)
         self.process = None
 
+    # 开始一个新的规范运行上下文，绑定应用、用户与会话身份。
     def start(self):
-        self.process = subprocess.Popen([str(CLI), "serve", "--config", str(self.root / "service.json")],
-                                        env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.process = subprocess.Popen(
+            [str(CLI), "serve", "--config", str(self.root / "service.json")],
+            env=self.env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         ready, _, _ = select.select([self.process.stdout], [], [], 10)
         self.assertTrue(ready, "service did not start")
         line = self.process.stdout.readline()
-        self.assertIn("listening=", line, line + (self.process.stderr.read() if self.process.poll() is not None else ""))
+        self.assertIn(
+            "listening=",
+            line,
+            line
+            + (self.process.stderr.read() if self.process.poll() is not None else ""),
+        )
         self.url = "http://" + line.strip().split("listening=")[1] + "/v1/invoke"
 
+    # 包装宿主业务调用：先查询策略，再最多执行一次原业务函数，最后记录结果。
     def call(self, op, token=TOKEN, **fields):
         body = dict(operation=op, request_id=uuid.uuid4().hex, **fields)
-        request = urllib.request.Request(self.url, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+        request = urllib.request.Request(
+            self.url,
+            data=json.dumps(body).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token,
+            },
+        )
         try:
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=3) as response:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+                request, timeout=3
+            ) as response:
                 result = json.load(response)
         except urllib.error.HTTPError as error:
             return json.load(error)
         self.assertTrue(result["ok"], result)
         return result["result"]
 
+    # 测试辅助函数：wait_jobs。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def wait_jobs(self, token=TOKEN):
         deadline = time.monotonic() + 40
         while time.monotonic() < deadline:
             result = self.call("agent_evaluation.status", token=token)
-            if len(result["jobs"]) >= 4 and all(x["status"] not in ("pending", "running") for x in result["jobs"].values()):
+            if len(result["jobs"]) >= 4 and all(
+                x["status"] not in ("pending", "running")
+                for x in result["jobs"].values()
+            ):
                 return result
             time.sleep(0.05)
         self.fail("evaluation did not finish: " + json.dumps(result))
 
+    # 测试辅助函数：add_memory。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def add_memory(self):
         folder = self.root / "production/by-user/user-a/memory"
         folder.mkdir(parents=True, exist_ok=True)
-        source = '''schema_version: 1 store_kind: "trajectory_evolution_memory" store_version: "evolution-memory-store-v1" revision: 1
+        source = """schema_version: 1 store_kind: "trajectory_evolution_memory" store_version: "evolution-memory-store-v1" revision: 1
 entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
  candidate { schema_version: 1 candidate_id: "test-candidate" generator_version: "scoped-experience-generator-v1"
  target_type: CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION target_scope: "agent:eval-test/actor:assistant" status: EVOLUTION_CANDIDATE_STATUS_PROPOSED
  trigger_pattern: "生成视频时缺少图片素材" observed_problem: "素材缺失时重复执行"
  proposed_change: "缺少图片素材时先补充素材，独立的计算任务继续。" support_user_count: 1
  support_evidence { evidence_id: "test-evidence" source { user_id: "user-a" dialogue_id: "source-run" } }
- }}'''
+ }}"""
         protoc = PROTOC
-        self.assertTrue(protoc, "pass the configured protoc executable after the build directory")
-        result = subprocess.run([protoc, "--encode=agentflow.trajectory.evaluation.EvolutionMemoryStore",
-            "-I" + str(SOURCE / "proto"), "-I" + str(Path(protoc).resolve().parent.parent / "include"),
-            "hybrid_evaluation.proto"], input=source.encode(), capture_output=True, timeout=10)
+        self.assertTrue(
+            protoc, "pass the configured protoc executable after the build directory"
+        )
+        result = subprocess.run(
+            [
+                protoc,
+                "--encode=agentflow.trajectory.evaluation.EvolutionMemoryStore",
+                "-I" + str(SOURCE / "proto"),
+                "-I" + str(Path(protoc).resolve().parent.parent / "include"),
+                "hybrid_evaluation.proto",
+            ],
+            input=source.encode(),
+            capture_output=True,
+            timeout=10,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         (folder / "evolution-memory.pb").write_bytes(result.stdout)
 
+    # 测试辅助函数：prepare_checkpoint_retry。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def prepare_checkpoint_retry(self, invalid_json=False):
         requests = []
         self.pause_resume_judge = False
@@ -121,9 +238,13 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         owner = self
 
         class Judge(http.server.BaseHTTPRequestHandler):
+            # 测试辅助函数：log_message。
+            # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
             def log_message(self, *_):
                 pass
 
+            # 测试辅助函数：do_POST。
+            # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 requests.append(body)
@@ -131,31 +252,59 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
                     owner.resume_judge_entered.set()
                     owner.resume_judge_release.wait(5)
                 packet = json.loads(body["messages"][1]["content"])
-                reviews = [dict(iteration_id=k, decision="keep", reason="该轮提供完成任务所需的结果。",
-                    evidence_event_ids=[v.get("anchor_event_id", v["event_ids"][0])])
-                    for k, v in packet.get("loop_inventory", {}).items()]
-                judgment = dict(verdict="passed", reason="实际输出满足任务要求。", evidence_paths=["/output"],
-                    loop_review=dict(status="complete", iteration_reviews=reviews))
-                content = "{" if invalid_json and len(requests) == 2 else json.dumps(judgment)
-                payload = json.dumps(dict(choices=[dict(finish_reason="stop", message=dict(content=content))])).encode()
-                self.send_response(503 if len(requests) == 2 and not invalid_json else 200)
+                reviews = [
+                    dict(
+                        iteration_id=k,
+                        decision="keep",
+                        reason="该轮提供完成任务所需的结果。",
+                        evidence_event_ids=[
+                            v.get("anchor_event_id", v["event_ids"][0])
+                        ],
+                    )
+                    for k, v in packet.get("loop_inventory", {}).items()
+                ]
+                judgment = dict(
+                    verdict="passed",
+                    reason="实际输出满足任务要求。",
+                    evidence_paths=["/output"],
+                    loop_review=dict(status="complete", iteration_reviews=reviews),
+                )
+                content = (
+                    "{" if invalid_json and len(requests) == 2 else json.dumps(judgment)
+                )
+                payload = json.dumps(
+                    dict(
+                        choices=[
+                            dict(finish_reason="stop", message=dict(content=content))
+                        ]
+                    )
+                ).encode()
+                self.send_response(
+                    503 if len(requests) == 2 and not invalid_json else 200
+                )
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 try:
                     self.wfile.write(payload)
                 except OSError:
-                    pass  # Cancellation closes the in-flight grading socket.
+                    pass  # 取消操作会关闭在途评分请求的套接字。
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Judge)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
         self.addCleanup(self.resume_judge_release.set)
         shutil.copytree(SOURCE / "config", self.root / "model-config")
         runtime_path = self.root / "model-config/standard-runtime.json"
         runtime = json.loads(runtime_path.read_text())
-        runtime["model"].update(endpoint=f"http://127.0.0.1:{server.server_port}/chat/completions",
-            model_id="checkpoint-judge", no_api_key=True, max_retries=0, timeout_ms=3000)
+        runtime["model"].update(
+            endpoint=f"http://127.0.0.1:{server.server_port}/chat/completions",
+            model_id="checkpoint-judge",
+            no_api_key=True,
+            max_retries=0,
+            timeout_ms=3000,
+        )
         write(runtime_path, runtime)
         self.config.update(max_level="L0", principals=self.config["principals"][:1])
         write(self.root / "service.json", self.config)
@@ -163,10 +312,16 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.evaluation["variants"][0]["command"][-2] = "resume"
         self.evaluation["variants"][0]["pass_env"] = ["EVOLUTION_TEST_EXECUTIONS"]
         self.env["EVOLUTION_TEST_EXECUTIONS"] = str(self.root / "executions.txt")
-        self.evaluation["artifacts"] = {"*": [dict(path="proof.txt", media_type="text/plain")]}
-        self.evaluation["judge"] = dict(enabled=True, runtime_config=str(runtime_path),
+        self.evaluation["artifacts"] = {
+            "*": [dict(path="proof.txt", media_type="text/plain")]
+        }
+        self.evaluation["judge"] = dict(
+            enabled=True,
+            runtime_config=str(runtime_path),
             prompt=str(SOURCE / "config/prompts/task-judge-system.txt"),
-            loop_review_prompt=str(SOURCE / "config/prompts/task-loop-review.txt"), max_repair_attempts=0)
+            loop_review_prompt=str(SOURCE / "config/prompts/task-loop-review.txt"),
+            max_repair_attempts=0,
+        )
         write(self.root / "evaluation.json", self.evaluation)
         self.start()
         job_id, job = self.wait_checkpoint_job()
@@ -175,6 +330,8 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         folder = self.root / "production/agent-evaluation" / job_id
         return job_id, folder, requests
 
+    # 测试辅助函数：wait_checkpoint_job。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def wait_checkpoint_job(self):
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -183,9 +340,11 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
                 job_id, job = next(iter(state["jobs"].items()))
                 if job["status"] not in ("pending", "running"):
                     return job_id, job
-            time.sleep(.02)
+            time.sleep(0.02)
         self.fail("checkpoint job did not finish")
 
+    # 回归用例：test_automatic_level_selection_only_schedules_l2。
+    # 关键断言：self.assertTrue(result["jobs"], result)；此处只验证测试构造的场景。
     def test_automatic_level_selection_only_schedules_l2(self):
         self.add_memory()
         self.config.update(max_level="L2", evaluation_levels=["L2"])
@@ -195,7 +354,10 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         result = {}
         while time.monotonic() < deadline:
             result = self.call("agent_evaluation.status")
-            if result["jobs"] and all(x["status"] not in ("pending", "running") for x in result["jobs"].values()):
+            if result["jobs"] and all(
+                x["status"] not in ("pending", "running")
+                for x in result["jobs"].values()
+            ):
                 break
             time.sleep(0.05)
         self.assertTrue(result["jobs"], result)
@@ -203,6 +365,8 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         for job in result["jobs"].values():
             self.assertNotIn(job["status"], ("pending", "running", "error"), job)
 
+    # 回归用例：test_empty_automatic_levels_leaves_background_evaluation_idle。
+    # 关键断言：self.assertFalse(self.call("agent_evaluation.status")["jobs"])；此处只验证测试构造的场景。
     def test_empty_automatic_levels_leaves_background_evaluation_idle(self):
         self.add_memory()
         self.config.update(evaluation_levels=[])
@@ -212,6 +376,8 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
             self.assertFalse(self.call("agent_evaluation.status")["jobs"])
             time.sleep(0.1)
 
+    # 回归用例：test_retry_reuses_execution_and_only_regrades_failed_judgment。
+    # 关键断言：self.assertEqual(job["status"], "passed", job)；此处只验证测试构造的场景。
     def test_retry_reuses_execution_and_only_regrades_failed_judgment(self):
         job_id, folder, requests = self.prepare_checkpoint_retry()
         original = (folder / "attempt-1/report.json").read_bytes()
@@ -224,9 +390,14 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.assertEqual(resumed["summary"]["reused_trials"], 2)
         self.assertEqual(resumed["summary"]["regraded_trials"], 1)
         self.assertEqual(resumed["summary"]["model_calls"], 1)
-        self.assertEqual(resumed["summary"]["resume_source"]["report_sha256"], hashlib.sha256(original).hexdigest())
+        self.assertEqual(
+            resumed["summary"]["resume_source"]["report_sha256"],
+            hashlib.sha256(original).hexdigest(),
+        )
         self.assertEqual(len(requests), 4)
-        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+        self.assertEqual(
+            len((self.root / "executions.txt").read_text().splitlines()), 3
+        )
         self.assertEqual((folder / "attempt-1/report.json").read_bytes(), original)
         for before, after in zip(first["trials"], resumed["trials"]):
             self.assertEqual(before["trial_id"], after["trial_id"])
@@ -235,8 +406,13 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
             if before["verdict"] == "passed":
                 self.assertEqual(before, after)
             name = after["evidence"]["artifacts"]["proof.txt"]["stored_file"]
-            self.assertEqual((folder / "attempt-2/artifacts" / after["trial_id"] / name).read_text(), "verified execution")
+            self.assertEqual(
+                (folder / "attempt-2/artifacts" / after["trial_id"] / name).read_text(),
+                "verified execution",
+            )
 
+    # 回归用例：test_retry_rejects_changed_report_without_executing_agent。
+    # 重点核验字段或诊断：evaluation_checkpoint_changed；异常路径不能被当成成功。
     def test_retry_rejects_changed_report_without_executing_agent(self):
         job_id, folder, requests = self.prepare_checkpoint_retry()
         path = folder / "attempt-1/report.json"
@@ -245,23 +421,39 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         _, job = self.wait_checkpoint_job()
         self.assertEqual(job["error"], "evaluation_checkpoint_changed")
         self.assertEqual(len(requests), 3)
-        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+        self.assertEqual(
+            len((self.root / "executions.txt").read_text().splitlines()), 3
+        )
 
+    # 回归用例：test_successful_regrade_clears_previous_validation_diagnostics。
+    # 重点核验字段或诊断：evaluation_judge_failed、judge_validation_error；异常路径不能被当成成功。
     def test_successful_regrade_clears_previous_validation_diagnostics(self):
         job_id, folder, requests = self.prepare_checkpoint_retry(invalid_json=True)
         first = json.loads((folder / "attempt-1/report.json").read_text())
-        failed = next(t for t in first["trials"] if t.get("error_code") == "evaluation_judge_failed")
-        self.assertEqual(failed["evidence"]["judge_validation_error"]["code"], "invalid_json")
+        failed = next(
+            t
+            for t in first["trials"]
+            if t.get("error_code") == "evaluation_judge_failed"
+        )
+        self.assertEqual(
+            failed["evidence"]["judge_validation_error"]["code"], "invalid_json"
+        )
         self.call("agent_evaluation.retry", job_id=job_id)
         _, job = self.wait_checkpoint_job()
         self.assertEqual(job["status"], "passed", job)
         resumed = json.loads((folder / "attempt-2/report.json").read_text())
-        retried = next(t for t in resumed["trials"] if t["trial_id"] == failed["trial_id"])
+        retried = next(
+            t for t in resumed["trials"] if t["trial_id"] == failed["trial_id"]
+        )
         self.assertNotIn("judge_validation_error", retried["evidence"])
         self.assertEqual(retried["evidence"]["loop_review"]["status"], "complete")
         self.assertEqual(len(requests), 4)
-        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+        self.assertEqual(
+            len((self.root / "executions.txt").read_text().splitlines()), 3
+        )
 
+    # 回归用例：test_cancelled_regrade_keeps_checkpoints_for_another_retry。
+    # 关键断言：self.assertTrue(self.resume_judge_entered.wait(5))；此处只验证测试构造的场景。
     def test_cancelled_regrade_keeps_checkpoints_for_another_retry(self):
         job_id, folder, _ = self.prepare_checkpoint_retry()
         original = json.loads((folder / "attempt-1/report.json").read_text())
@@ -274,42 +466,59 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.assertEqual(job["error"], "evaluation_cancelled", job)
         cancelled = json.loads((folder / "attempt-2/report.json").read_text())
         self.assertFalse(cancelled["complete"])
-        self.assertEqual({t["trial_id"] for t in cancelled["trials"]}, {t["trial_id"] for t in original["trials"]})
+        self.assertEqual(
+            {t["trial_id"] for t in cancelled["trials"]},
+            {t["trial_id"] for t in original["trials"]},
+        )
         self.pause_resume_judge = False
         self.call("agent_evaluation.retry", job_id=job_id)
         _, job = self.wait_checkpoint_job()
         self.assertEqual(job["status"], "passed", job)
-        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+        self.assertEqual(
+            len((self.root / "executions.txt").read_text().splitlines()), 3
+        )
 
+    # 回归用例：test_retry_rejects_changed_grading_context。
+    # 重点核验字段或诊断：evaluation_checkpoint_context_mismatch；异常路径不能被当成成功。
     def test_retry_rejects_changed_grading_context(self):
         job_id, folder, requests = self.prepare_checkpoint_retry()
         path = folder / "attempt-1/report.json"
-        report = json.loads(path.read_text()); report["config_fingerprint"] = "0" * 64; write(path, report)
+        report = json.loads(path.read_text())
+        report["config_fingerprint"] = "0" * 64
+        write(path, report)
         manifest_path = folder / "attempt-1/manifest.json"
         manifest = json.loads(manifest_path.read_text())
-        manifest["files"]["report.json"] = hashlib.sha256(path.read_bytes()).hexdigest(); write(manifest_path, manifest)
+        manifest["files"]["report.json"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        write(manifest_path, manifest)
         self.call("agent_evaluation.retry", job_id=job_id)
         _, job = self.wait_checkpoint_job()
         self.assertEqual(job["error"], "evaluation_checkpoint_context_mismatch")
         self.assertEqual(len(requests), 3)
 
+    # 回归用例：test_retry_rejects_changed_deliverable。
+    # 重点核验字段或诊断：evaluation_checkpoint_artifact_changed；异常路径不能被当成成功。
     def test_retry_rejects_changed_deliverable(self):
         job_id, folder, requests = self.prepare_checkpoint_retry()
         first = json.loads((folder / "attempt-1/report.json").read_text())["trials"][0]
         name = first["evidence"]["artifacts"]["proof.txt"]["stored_file"]
-        (folder / "attempt-1/artifacts" / first["trial_id"] / name).write_text("changed")
+        (folder / "attempt-1/artifacts" / first["trial_id"] / name).write_text(
+            "changed"
+        )
         self.call("agent_evaluation.retry", job_id=job_id)
         _, job = self.wait_checkpoint_job()
         self.assertEqual(job["error"], "evaluation_checkpoint_artifact_changed")
         self.assertEqual(len(requests), 3)
 
+    # 回归用例：test_bundle_feedback_does_not_archive_each_memory。
+    # 重点核验字段或诊断：auto_approve_experiences、negative_trial_count；异常路径不能被当成成功。
     def test_bundle_feedback_does_not_archive_each_memory(self):
         self.add_memory()
         self.config["auto_approve_experiences"] = True
         write(self.root / "service.json", self.config)
         self.evaluation["variants"][0]["command"][-2] = "bad_candidate"
         write(self.root / "evaluation.json", self.evaluation)
-        self.start(); self.wait_jobs()
+        self.start()
+        self.wait_jobs()
         deadline = time.monotonic() + 5
         path = self.root / "production/by-user/user-a/memory/evolution-memory.json"
         memory = {}
@@ -318,39 +527,121 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
                 memory = json.loads(path.read_text())
                 if memory.get("entries", [{}])[0].get("evaluation_feedback"):
                     break
-            time.sleep(.05)
+            time.sleep(0.05)
         self.assertTrue(memory.get("entries"), self.call("agent_evaluation.status"))
         entry = memory["entries"][0]
         self.assertEqual(entry["status"], "EVOLUTION_MEMORY_STATUS_CANDIDATE")
         self.assertEqual(entry["evaluation_feedback"]["status"], "review_needed")
-        self.assertEqual(int(entry["evaluation_feedback"].get("negative_trial_count", 0)), 0)
+        self.assertEqual(
+            int(entry["evaluation_feedback"].get("negative_trial_count", 0)), 0
+        )
         self.assertEqual(self.call("agent_evaluation.feedback", token=TOKEN_B), {})
 
+    # 回归用例：test_single_memory_regression_is_archived。
+    # 重点核验字段或诊断：auto_approve_experiences、negative_trial_count；异常路径不能被当成成功。
     def test_single_memory_regression_is_archived(self):
         self.config["auto_approve_experiences"] = True
         write(self.root / "service.json", self.config)
         self.evaluation["variants"][0]["command"][-2] = "memory_bad"
         write(self.root / "evaluation.json", self.evaluation)
-        self.start(); self.wait_jobs(); self.tearDown()
-        self.add_memory(); self.start()
+        self.start()
+        self.wait_jobs()
+        self.tearDown()
+        self.add_memory()
+        self.start()
         deadline = time.monotonic() + 35
         path = self.root / "production/by-user/user-a/memory/evolution-memory.json"
         memory = {}
         while time.monotonic() < deadline:
             if path.exists():
                 memory = json.loads(path.read_text())
-                if memory.get("entries") and memory["entries"][0]["status"] == "EVOLUTION_MEMORY_STATUS_ARCHIVED":
+                if (
+                    memory.get("entries")
+                    and memory["entries"][0]["status"]
+                    == "EVOLUTION_MEMORY_STATUS_ARCHIVED"
+                ):
                     break
-            time.sleep(.05)
-        self.assertEqual(memory["entries"][0]["status"], "EVOLUTION_MEMORY_STATUS_ARCHIVED", self.call("agent_evaluation.status"))
-        self.assertGreaterEqual(int(memory["entries"][0]["evaluation_feedback"]["negative_trial_count"]), 2)
+            time.sleep(0.05)
+        self.assertEqual(
+            memory["entries"][0]["status"],
+            "EVOLUTION_MEMORY_STATUS_ARCHIVED",
+            self.call("agent_evaluation.status"),
+        )
+        self.assertGreaterEqual(
+            int(memory["entries"][0]["evaluation_feedback"]["negative_trial_count"]), 2
+        )
 
+    def test_concurrent_memory_update_preserved_during_feedback_refresh(self):
+        """另一个写者先入库时，评测在锁内基于最新记忆计算，不覆盖或报全局故障。"""
+        self.test_bundle_feedback_does_not_archive_each_memory()
+        self.tearDown()
+        # 恢复未写反馈的原记忆，保留已经完成的真实本地评测检查点。
+        self.add_memory()
+        folder = self.root / "production/by-user/user-a/memory"
+        path = folder / "evolution-memory.pb"
+        options = ["-I" + str(SOURCE / "proto"),
+                   "-I" + str(Path(PROTOC).resolve().parent.parent / "include"),
+                   "hybrid_evaluation.proto"]
+        decoded = subprocess.run(
+            [PROTOC, "--decode=agentflow.trajectory.evaluation.EvolutionMemoryStore", *options],
+            input=path.read_bytes(), capture_output=True, check=True, timeout=10).stdout.decode()
+        entry = decoded[decoded.index("entries {"):]
+        updated = (decoded.replace("revision: 1", "revision: 2", 1)
+                   + '\napplied_batch_ids: "concurrent-training-batch"\n'
+                   + entry.replace("test-experience", "concurrent-experience")
+                          .replace("test-candidate", "concurrent-candidate")
+                          .replace("test-evidence", "concurrent-evidence"))
+        encoded = subprocess.run(
+            [PROTOC, "--encode=agentflow.trajectory.evaluation.EvolutionMemoryStore", *options],
+            input=updated.encode(), capture_output=True, check=True, timeout=10).stdout
+        with Path(str(path) + ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.start()
+            # 等待服务已读取旧快照并阻塞在同一文件锁；不靠固定 sleep 猜测竞态。
+            blocked = False
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                for task in Path(f"/proc/{self.process.pid}/task").glob("*/wchan"):
+                    try:
+                        blocked |= "locks_lock_inode_wait" in task.read_text()
+                    except FileNotFoundError:
+                        pass
+                if blocked:
+                    break
+                time.sleep(0.01)
+            self.assertTrue(blocked, "evaluation did not wait on the memory file lock")
+            # 模拟已持有文件锁的训练写者提交一个新条目和批次幂等记录。
+            path.write_bytes(encoded)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        view = folder / "evolution-memory.json"
+        deadline = time.monotonic() + 5
+        memory = {}
+        while time.monotonic() < deadline:
+            if view.exists():
+                memory = json.loads(view.read_text())
+                entries = {item["memory_id"]: item for item in memory.get("entries", [])}
+                if "concurrent-experience" in entries and entries.get(
+                        "test-experience", {}).get("evaluation_feedback"):
+                    break
+            time.sleep(0.02)
+        self.assertIn("concurrent-experience", entries, memory)
+        self.assertIn("concurrent-training-batch", memory.get("applied_batch_ids", []))
+        self.assertEqual(entries["test-experience"]["evaluation_feedback"]["status"],
+                         "review_needed")
+
+    # 回归用例：test_slow_background_does_not_wait_in_run_begin。
+    # 关键断言：self.assertEqual(run["level"], "L0")；此处只验证测试构造的场景。
     def test_slow_background_does_not_wait_in_run_begin(self):
         self.evaluation["variants"][0]["command"][-2] = "slow"
         write(self.root / "evaluation.json", self.evaluation)
         self.start()
         started = time.monotonic()
-        run = self.call("run.begin", input="foreground", level="L3", capabilities=["model", "actions", "loop"])
+        run = self.call(
+            "run.begin",
+            input="foreground",
+            level="L3",
+            capabilities=["model", "actions", "loop"],
+        )
         self.assertLess(time.monotonic() - started, 1)
         self.assertEqual(run["level"], "L0")
         state = self.call("agent_evaluation.status")
@@ -358,6 +649,8 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
             if job["status"] in ("pending", "running"):
                 self.call("agent_evaluation.cancel", job_id=job_id)
 
+    # 回归用例：test_single_memory_improvement_is_validated。
+    # 重点核验字段或诊断：auto_approve_experiences、min_pass_rate、positive_trial_count；异常路径不能被当成成功。
     def test_single_memory_improvement_is_validated(self):
         self.config["auto_approve_experiences"] = True
         write(self.root / "service.json", self.config)
@@ -366,21 +659,35 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         settings = json.loads((self.root / "agent-evaluation.json").read_text())
         settings["gate"]["min_pass_rate"] = 0
         write(self.root / "agent-evaluation.json", settings)
-        self.start(); self.wait_jobs(); self.tearDown()
-        self.add_memory(); self.start()
+        self.start()
+        self.wait_jobs()
+        self.tearDown()
+        self.add_memory()
+        self.start()
         deadline = time.monotonic() + 35
         path = self.root / "production/by-user/user-a/memory/evolution-memory.json"
         memory = {}
         while time.monotonic() < deadline:
             if path.exists():
                 memory = json.loads(path.read_text())
-                if memory.get("entries") and memory["entries"][0]["status"] == "EVOLUTION_MEMORY_STATUS_VALIDATED":
+                if (
+                    memory.get("entries")
+                    and memory["entries"][0]["status"]
+                    == "EVOLUTION_MEMORY_STATUS_VALIDATED"
+                ):
                     break
-            time.sleep(.05)
-        self.assertEqual(memory.get("entries", [{}])[0].get("status"), "EVOLUTION_MEMORY_STATUS_VALIDATED",
-                         self.call("agent_evaluation.status"))
-        self.assertGreaterEqual(int(memory["entries"][0]["evaluation_feedback"]["positive_trial_count"]), 2)
+            time.sleep(0.05)
+        self.assertEqual(
+            memory.get("entries", [{}])[0].get("status"),
+            "EVOLUTION_MEMORY_STATUS_VALIDATED",
+            self.call("agent_evaluation.status"),
+        )
+        self.assertGreaterEqual(
+            int(memory["entries"][0]["evaluation_feedback"]["positive_trial_count"]), 2
+        )
 
+    # 测试辅助函数：tearDown。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def tearDown(self):
         if self.process and self.process.poll() is None:
             self.process.terminate()
@@ -390,37 +697,136 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
                 self.process.kill()
                 self.process.communicate()
 
+    def test_native_publication_refresh_without_memory_change(self):
+        """原生入口在记忆未变化时也要接收新发布；既有 run 不切换版本。"""
+        import importlib.util
+        from unittest.mock import patch
+
+        spec = importlib.util.spec_from_file_location(
+            "native_publication_client", SOURCE / "clients/python/evolution_local.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.dict(os.environ, {
+            "EVAL_USER_A_TOKEN": TOKEN, "EVAL_USER_B_TOKEN": TOKEN_B,
+        }):
+            local = module.LocalEvolution(
+                BUILD / "libtrajectory_evolution_local.so",
+                self.root / "service.json", TOKEN,
+            )
+            try:
+                original = local.invoke("run.begin", dict(
+                    conversation_id="before-publication", input="test", level="L3",
+                    capabilities=["model", "actions", "loop"],
+                ))
+                self.assertEqual(original.get("level"), "L0", original)
+                memory_path = self.root / "production/by-user/user-a/memory/evolution-memory.pb"
+                memory_before = memory_path.read_bytes()
+                # 管理状态确认发布，随后等待本地后台按通知更新只读快照；
+                # 主业务 run.begin 自身不允许等待评测或读取磁盘。
+                deadline = time.monotonic() + 30
+                status = {}
+                while time.monotonic() < deadline:
+                    status = local.manage("agent_evaluation.status")
+                    if len(status["jobs"]) == 4 and all(
+                        job["status"] not in ("pending", "running")
+                        for job in status["jobs"].values()
+                    ):
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(set(status["publications"]), {"L0", "L1", "L2", "L3"}, status)
+                version = status["publications"]["L3"]["version"]
+                run = {}
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    run = local.invoke("run.begin", dict(
+                        conversation_id="after-publication", input="test", level="L3",
+                        capabilities=["model", "actions", "loop"],
+                    ))
+                    local.invoke("run.end", dict(
+                        run_id=run["run_id"], status="completed", output="done",
+                    ))
+                    if run.get("agent_version_id") == version:
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(run.get("agent_version_id"), version, run)
+                self.assertEqual(run.get("level"), "L3", run)
+                self.assertEqual(memory_path.read_bytes(), memory_before)
+                # 发布变化不算新经验，不应递归启动下一轮评测。
+                self.assertEqual(len(local.manage("agent_evaluation.status")["jobs"]), 4)
+                local.invoke("run.end", dict(
+                    run_id=original["run_id"], status="completed", output="done",
+                ))
+            finally:
+                local.close()
+
+    # 回归用例：test_all_levels_publish_and_reload。
+    # 重点核验字段或诊断：host_reported_metrics、agent_version_id；异常路径不能被当成成功。
     def test_all_levels_publish_and_reload(self):
+        # 公共前置默认关闭后台评测，该用例专门验证 L0–L3 自动评测与发布。
+        self.config["auto_evaluate"] = True
+        write(self.root / "service.json", self.config)
         self.start()
         result = self.wait_jobs()
-        material = ((self.root / "agent-evaluation.json").read_text() + (self.root / "evaluation.json").read_text()
-                    + json.loads((self.root / "dataset/manifest.json").read_text())["metadata"]["dataset_version"])
-        old_context = hashlib.sha256(("boundary-current-request-v1:verified-controls-v1:failure-replan-v2:skill-schedule-v2:control-outcomes-v4:aggressive-controls-v1:retrieval-evidence-v4\n" + material).encode()).hexdigest()
-        context = hashlib.sha256(("boundary-current-request-v1:verified-controls-v1:failure-replan-v3:skill-schedule-v4:control-outcomes-v8:terminal-branch-v1:aggressive-controls-v1:retrieval-evidence-v7:current-turn-v1:control-feedback-v3:actor-loops-v2:effect-selection-v1\n" + material).encode()).hexdigest()
+        material = (
+            (self.root / "agent-evaluation.json").read_text()
+            + (self.root / "evaluation.json").read_text()
+            + json.loads((self.root / "dataset/manifest.json").read_text())["metadata"][
+                "dataset_version"
+            ]
+        )
+        old_context = hashlib.sha256(
+            (
+                "boundary-current-request-v1:verified-controls-v1:failure-replan-v2:skill-schedule-v2:control-outcomes-v4:aggressive-controls-v1:retrieval-evidence-v4\n"
+                + material
+            ).encode()
+        ).hexdigest()
+        context = hashlib.sha256(
+            (
+                "boundary-current-request-v1:verified-controls-v1:failure-replan-v3:skill-schedule-v4:control-outcomes-v8:terminal-branch-v1:aggressive-controls-v1:retrieval-evidence-v7:current-turn-v1:control-feedback-v3:actor-loops-v2:effect-selection-v1\n"
+                + material
+                + "\nturn-acceptance-v2:judge-contract-v3:action-requests-v1"
+            ).encode()
+        ).hexdigest()
         self.assertNotEqual(context, old_context)
-        self.assertTrue(all(job["context"] == context for job in result["jobs"].values()),
-                        "execution-semantic upgrade must not reuse the old evaluation context")
+        self.assertTrue(
+            all(job["context"] == context for job in result["jobs"].values()),
+            "execution-semantic upgrade must not reuse the old evaluation context",
+        )
         self.assertEqual(set(result["publications"]), {"L0", "L1", "L2", "L3"}, result)
         bundles = {}
         for job_id, job in result["jobs"].items():
             self.assertEqual(job["status"], "passed", job)
-            self.assertEqual(job["gate"]["candidate"]["host_reported_metrics"]["llm_calls"]["mean"], 2)
+            self.assertEqual(
+                job["gate"]["candidate"]["host_reported_metrics"]["llm_calls"]["mean"],
+                2,
+            )
             folder = self.root / "production/agent-evaluation" / job_id
             path = folder / "published-version.json"
             bundle = json.loads(path.read_text())
-            self.assertEqual(bundle["artifact"], json.loads((folder / "candidate.json").read_text()))
+            self.assertEqual(
+                bundle["artifact"], json.loads((folder / "candidate.json").read_text())
+            )
             self.assertEqual(bundle["version"], job["version"])
-            self.assertEqual(bundle["evaluation"], dict(job_id=job_id, context=job["context"], gate=job["gate"]))
+            self.assertEqual(
+                bundle["evaluation"],
+                dict(job_id=job_id, context=job["context"], gate=job["gate"]),
+            )
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             bundles[path] = path.read_bytes()
-        run = self.call("run.begin", input="test", level="L3", capabilities=["model", "actions", "loop"])
+        run = self.call(
+            "run.begin",
+            input="test",
+            level="L3",
+            capabilities=["model", "actions", "loop"],
+        )
         self.assertEqual(run["level"], "L3", run)
         self.assertEqual(run["policy_gate"], "published")
         self.assertIn("agent-version-v1:", run["agent_version_id"])
         self.call("run.end", run_id=run["run_id"], status="completed", output="done")
         count = len(result["jobs"])
         self.tearDown()
-        # Simulate a pre-fix installation: published state exists, exports do not.
+        # 模拟修复前安装：发布状态存在，但自动导出文件缺失。
         for path in bundles:
             path.unlink()
         self.start()
@@ -431,44 +837,102 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         for path, content in bundles.items():
             self.assertEqual(path.read_bytes(), content)
         mtimes = {path: path.stat().st_mtime_ns for path in bundles}
-        self.tearDown(); self.start(); self.wait_jobs()
+        self.tearDown()
+        self.start()
+        self.wait_jobs()
         self.assertEqual({path: path.stat().st_mtime_ns for path in bundles}, mtimes)
 
+    # 回归用例：test_fixed_candidate_bundle_runs_offline_without_memory。
+    # 重点核验字段或诊断：auto_approve_experiences、policy_evaluation_file、experience_template_file；异常路径不能被当成成功。
     def test_fixed_candidate_bundle_runs_offline_without_memory(self):
         self.add_memory()
         self.config["actors"].append("worker/secondary")
+        # 先由后台评测产生通过门槛的固定候选包，再验证它能脱离记忆库离线运行。
+        self.config["auto_evaluate"] = True
         self.config["auto_approve_experiences"] = True
         write(self.root / "service.json", self.config)
         self.start()
         state = self.wait_jobs()
-        job_id, job = next((key, value) for key, value in state["jobs"].items() if value["level"] == "L3")
+        job_id, job = next(
+            (key, value)
+            for key, value in state["jobs"].items()
+            if value["level"] == "L3"
+        )
         self.assertTrue(job["published"], job)
         self.tearDown()
         self.config.pop("policy_evaluation_file")
-        self.config.update(policy_version_file=str(self.root / "production/agent-evaluation" / job_id / "published-version.json"),
-                           data_dir=str(self.root / "offline"))
-        # A deployed bundle needs no training runtime, prompt files or memory.
-        for key in ("runtime_config", "experience_template_file", "shadow_options", "runtime_options"):
+        self.config.update(
+            policy_version_file=str(
+                self.root
+                / "production/agent-evaluation"
+                / job_id
+                / "published-version.json"
+            ),
+            data_dir=str(self.root / "offline"),
+        )
+        # 部署包不需要训练运行时、提示词文件或记忆库。
+        for key in (
+            "runtime_config",
+            "experience_template_file",
+            "shadow_options",
+            "runtime_options",
+        ):
             self.config.pop(key, None)
         write(self.root / "service.json", self.config)
         self.start()
-        run = self.call("run.begin", input="生成视频时缺少图片素材，计算总量20。", level="L3",
-                        capabilities=["model", "actions", "loop"])
+        run = self.call(
+            "run.begin",
+            input="生成视频时缺少图片素材，计算总量20。",
+            level="L3",
+            capabilities=["model", "actions", "loop"],
+        )
         self.assertEqual(run.get("agent_version_id"), job["version"], run)
-        activity = self.call("activity.begin", run_id=run["run_id"], kind="model", name="offline-model",
-            input={"messages": [{"role": "user", "content": "生成视频时缺少图片素材，计算总量20。"}]},
-            binding={"pointer": "/messages", "mode": "system_message"})
-        self.assertIn("缺少图片素材时先补充素材", json.dumps(activity["input"], ensure_ascii=False))
-        self.call("activity.end", run_id=run["run_id"], activity_id=activity["activity_id"],
-                  status="completed", output="20", actual_input=activity["input"], executed=True)
+        activity = self.call(
+            "activity.begin",
+            run_id=run["run_id"],
+            kind="model",
+            name="offline-model",
+            input={
+                "messages": [
+                    {"role": "user", "content": "生成视频时缺少图片素材，计算总量20。"}
+                ]
+            },
+            binding={"pointer": "/messages", "mode": "system_message"},
+        )
+        self.assertIn(
+            "缺少图片素材时先补充素材",
+            json.dumps(activity["input"], ensure_ascii=False),
+        )
+        self.call(
+            "activity.end",
+            run_id=run["run_id"],
+            activity_id=activity["activity_id"],
+            status="completed",
+            output="20",
+            actual_input=activity["input"],
+            executed=True,
+        )
         self.call("run.end", run_id=run["run_id"], status="completed", output="20")
-        other = self.call("run.begin", token=TOKEN_B, input="生成视频时缺少图片素材。", level="L3",
-                          capabilities=["model", "actions", "loop"])
+        other = self.call(
+            "run.begin",
+            token=TOKEN_B,
+            input="生成视频时缺少图片素材。",
+            level="L3",
+            capabilities=["model", "actions", "loop"],
+        )
         self.assertNotIn("agent_version_id", other)
-        self.call("run.end", token=TOKEN_B, run_id=other["run_id"], status="completed", output="done")
+        self.call(
+            "run.end",
+            token=TOKEN_B,
+            run_id=other["run_id"],
+            status="completed",
+            output="done",
+        )
         self.assertFalse((self.root / "offline/agent-evaluation").exists())
         self.assertFalse((self.root / "offline/by-user/user-a/memory").exists())
 
+    # 回归用例：test_offline_native_bundle_ignores_unused_files_and_checks_authority。
+    # 重点核验字段或诊断：auto_approve_experiences、policy_evaluation_file、agent_version_id；异常路径不能被当成成功。
     def test_offline_native_bundle_ignores_unused_files_and_checks_authority(self):
         self.add_memory()
         self.config["actors"].append("worker/secondary")
@@ -477,61 +941,149 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.start()
         state = self.wait_jobs()
         self.tearDown()
-        job_id, job = next((key, value) for key, value in state["jobs"].items() if value["level"] == "L3")
+        job_id, job = next(
+            (key, value)
+            for key, value in state["jobs"].items()
+            if value["level"] == "L3"
+        )
         self.config.pop("policy_evaluation_file")
-        self.config.update(policy_version_file=str(self.root / "production/agent-evaluation" / job_id / "published-version.json"),
-                           data_dir=str(self.root / "offline-native"), runtime_config="deleted-runtime.json",
-                           experience_template_file="deleted-template.txt", shadow_options={},
-                           runtime_options=dict(request_context_pointer="/messages", request_context_mode="system_message"))
-        old_memory = self.root / "offline-native/by-user/user-a/memory/evolution-memory.pb"
+        self.config.update(
+            policy_version_file=str(
+                self.root
+                / "production/agent-evaluation"
+                / job_id
+                / "published-version.json"
+            ),
+            data_dir=str(self.root / "offline-native"),
+            runtime_config="deleted-runtime.json",
+            experience_template_file="deleted-template.txt",
+            shadow_options={},
+            runtime_options=dict(
+                request_context_pointer="/messages",
+                request_context_mode="system_message",
+            ),
+        )
+        old_memory = (
+            self.root / "offline-native/by-user/user-a/memory/evolution-memory.pb"
+        )
         old_memory.parent.mkdir(parents=True)
         old_memory.write_bytes(b"unused malformed historical memory")
         write(self.root / "service.json", self.config)
         sys.path.insert(0, str(SOURCE / "clients/python"))
         from evolution_local import LocalEvolution
+
         os.environ.update(EVAL_USER_A_TOKEN=TOKEN, EVAL_USER_B_TOKEN=TOKEN_B)
-        with closing(LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "service.json", TOKEN)) as client:
-            run = client.invoke("run.begin", dict(conversation_id="native-offline", input="生成视频时缺少图片素材。",
-                                level="L3", capabilities=["model", "actions", "loop"]))
+        with closing(
+            LocalEvolution(
+                BUILD / "libtrajectory_evolution_local.so",
+                self.root / "service.json",
+                TOKEN,
+            )
+        ) as client:
+            run = client.invoke(
+                "run.begin",
+                dict(
+                    conversation_id="native-offline",
+                    input="生成视频时缺少图片素材。",
+                    level="L3",
+                    capabilities=["model", "actions", "loop"],
+                ),
+            )
             self.assertEqual(run.get("agent_version_id"), job["version"], run)
             self.assertEqual(run.get("policy_gate"), "offline_version", run)
-            client.invoke("run.end", dict(run_id=run["run_id"], status="completed", output="done"))
-            missing = client.invoke("run.begin", dict(conversation_id="missing-boundary", input="test",
-                                    level="L3", capabilities=["loop"]))
+            client.invoke(
+                "run.end", dict(run_id=run["run_id"], status="completed", output="done")
+            )
+            missing = client.invoke(
+                "run.begin",
+                dict(
+                    conversation_id="missing-boundary",
+                    input="test",
+                    level="L3",
+                    capabilities=["loop"],
+                ),
+            )
             self.assertTrue(missing.get("degraded"), missing)
-            self.assertEqual(missing.get("reason"), "offline_policy_capability_missing", missing)
+            self.assertEqual(
+                missing.get("reason"), "offline_policy_capability_missing", missing
+            )
             client.drain()
         self.assertEqual(old_memory.read_bytes(), b"unused malformed historical memory")
-        self.config["runtime_options"] = dict(loop_rules=[dict(rule_id="new-strict-limit", actor_id="assistant",
-            max_iterations=1, no_progress_decision="stop", reason="current deployment budget")])
+        self.config["runtime_options"] = dict(
+            loop_rules=[
+                dict(
+                    rule_id="new-strict-limit",
+                    actor_id="assistant",
+                    max_iterations=1,
+                    no_progress_decision="stop",
+                    reason="current deployment budget",
+                )
+            ]
+        )
         write(self.root / "service.json", self.config)
-        with closing(LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "service.json", TOKEN)) as client:
-            denied = client.invoke("run.begin", dict(conversation_id="strict-deployment", input="test",
-                                   level="L3", capabilities=["model", "actions", "loop"]))
+        with closing(
+            LocalEvolution(
+                BUILD / "libtrajectory_evolution_local.so",
+                self.root / "service.json",
+                TOKEN,
+            )
+        ) as client:
+            denied = client.invoke(
+                "run.begin",
+                dict(
+                    conversation_id="strict-deployment",
+                    input="test",
+                    level="L3",
+                    capabilities=["model", "actions", "loop"],
+                ),
+            )
             self.assertTrue(denied.get("degraded"), denied)
-            self.assertEqual(denied.get("reason"), "offline_policy_limits_changed", denied)
+            self.assertEqual(
+                denied.get("reason"), "offline_policy_limits_changed", denied
+            )
 
+    # 回归用例：test_restart_rejects_changed_export。
+    # 关键断言：self.assertEqual(path.read_bytes(), before)；此处只验证测试构造的场景。
     def test_restart_rejects_changed_export(self):
         self.start()
         state = self.wait_jobs()
         self.tearDown()
-        job_id = next(key for key, value in state["jobs"].items() if value["level"] == "L3")
-        path = self.root / "production/agent-evaluation" / job_id / "published-version.json"
+        job_id = next(
+            key for key, value in state["jobs"].items() if value["level"] == "L3"
+        )
+        path = (
+            self.root
+            / "production/agent-evaluation"
+            / job_id
+            / "published-version.json"
+        )
         bundle = json.loads(path.read_text())
         bundle["evaluation"]["gate"]["passed"] = False
         write(path, bundle)
         before = path.read_bytes()
-        result = subprocess.run([str(CLI), "serve", "--config", str(self.root / "service.json")],
-                                env=self.env, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            [str(CLI), "serve", "--config", str(self.root / "service.json")],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(path.read_bytes(), before)
 
+    # 回归用例：test_backfill_old_context_does_not_approve_current_context。
+    # 重点核验字段或诊断：max_pass_rate_drop；异常路径不能被当成成功。
     def test_backfill_old_context_does_not_approve_current_context(self):
         self.start()
         state = self.wait_jobs()
         self.tearDown()
-        paths = {key: self.root / "production/agent-evaluation" / key / "published-version.json"
-                 for key in state["jobs"]}
+        paths = {
+            key: self.root
+            / "production/agent-evaluation"
+            / key
+            / "published-version.json"
+            for key in state["jobs"]
+        }
         original = {key: path.read_bytes() for key, path in paths.items()}
         for path in paths.values():
             path.unlink()
@@ -546,17 +1098,30 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.assertEqual(set(current["jobs"]), set(state["jobs"]))
         for key, path in paths.items():
             self.assertEqual(path.read_bytes(), original[key])
-            self.assertEqual(current["jobs"][key]["attempt"], state["jobs"][key]["attempt"])
+            self.assertEqual(
+                current["jobs"][key]["attempt"], state["jobs"][key]["attempt"]
+            )
 
+    # 回归用例：test_native_management_uses_existing_background_service。
+    # 重点核验字段或诊断：management_operation_required；异常路径不能被当成成功。
     def test_native_management_uses_existing_background_service(self):
         sys.path.insert(0, str(SOURCE / "clients/python"))
         from evolution_local import LocalEvolution
+
         os.environ["EVAL_USER_A_TOKEN"] = TOKEN
         os.environ["EVAL_USER_B_TOKEN"] = TOKEN_B
         with self.assertRaises(RuntimeError):
-            # An invalid deployment does not create an unmanaged runtime.
-            LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "missing.json", TOKEN)
-        evo = LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "service.json", TOKEN)
+            # 无效部署不能创建无人管理的运行时。
+            LocalEvolution(
+                BUILD / "libtrajectory_evolution_local.so",
+                self.root / "missing.json",
+                TOKEN,
+            )
+        evo = LocalEvolution(
+            BUILD / "libtrajectory_evolution_local.so",
+            self.root / "service.json",
+            TOKEN,
+        )
         try:
             result = evo.manage("agent_evaluation.status")
             self.assertIn("jobs", result)
@@ -564,10 +1129,15 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
                 evo.manage("run.begin", {"input": "not an administrative operation"})
             run = evo.invoke("run.begin", {"input": "test", "level": "L0"})
             self.assertFalse(run.get("degraded", False), run)
-            evo.invoke("run.end", {"run_id": run["run_id"], "status": "completed", "output": "done"})
+            evo.invoke(
+                "run.end",
+                {"run_id": run["run_id"], "status": "completed", "output": "done"},
+            )
         finally:
             evo.close()
 
+    # 回归用例：test_failed_candidates_leave_baseline_and_user_isolation。
+    # 重点核验字段或诊断：evaluation_job_not_found、credential_value_rejected；异常路径不能被当成成功。
     def test_failed_candidates_leave_baseline_and_user_isolation(self):
         self.evaluation["variants"][0]["command"][-2] = "bad_candidate"
         write(self.root / "evaluation.json", self.evaluation)
@@ -575,38 +1145,60 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         result = self.wait_jobs()
         self.assertEqual(set(result["publications"]), {"L0"}, result)
         for job_id, job in result["jobs"].items():
-            exported = self.root / "production/agent-evaluation" / job_id / "published-version.json"
+            exported = (
+                self.root
+                / "production/agent-evaluation"
+                / job_id
+                / "published-version.json"
+            )
             self.assertEqual(exported.exists(), job["level"] == "L0")
-        run = self.call("run.begin", input="test", level="L3", capabilities=["model", "actions", "loop"])
+        run = self.call(
+            "run.begin",
+            input="test",
+            level="L3",
+            capabilities=["model", "actions", "loop"],
+        )
         self.assertEqual(run["level"], "L0", run)
-        denied = self.call("agent_evaluation.retry", token=TOKEN_B, job_id=next(iter(result["jobs"])))
+        denied = self.call(
+            "agent_evaluation.retry", token=TOKEN_B, job_id=next(iter(result["jobs"]))
+        )
         self.assertFalse(denied["ok"])
         self.assertEqual(denied["error"], "evaluation_job_not_found")
         rejected = self.call("agent_evaluation.submit", artifact={"revision": TOKEN})
         self.assertEqual(rejected["error"], "credential_value_rejected")
 
+    # 回归用例：test_zero_baseline_is_not_a_positive_loop_reduction。
+    # 重点核验字段或诊断：min_invalid_loop_reduction、loop_baseline_has_no_observed_waste；异常路径不能被当成成功。
     def test_zero_baseline_is_not_a_positive_loop_reduction(self):
         config = json.loads((self.root / "agent-evaluation.json").read_text())
-        config["gate"]["min_invalid_loop_reduction"] = .3
+        config["gate"]["min_invalid_loop_reduction"] = 0.3
         write(self.root / "agent-evaluation.json", config)
         self.start()
         result = self.wait_jobs()
         self.assertEqual(set(result["publications"]), {"L0"})
         for job in result["jobs"].values():
             if job["level"] != "L0":
-                self.assertIn("loop_baseline_has_no_observed_waste", job["gate"]["reasons"])
+                self.assertIn(
+                    "loop_baseline_has_no_observed_waste", job["gate"]["reasons"]
+                )
 
+    # 回归用例：test_wrong_loaded_version_is_rejected。
+    # 重点核验字段或诊断：evaluation_loaded_version_mismatch；异常路径不能被当成成功。
     def test_wrong_loaded_version_is_rejected(self):
         self.evaluation["variants"][0]["command"][-2] = "wrong_version"
         write(self.root / "evaluation.json", self.evaluation)
         self.start()
         result = self.wait_jobs()
         self.assertEqual(result["publications"], {}, result)
-        reports = list((self.root / "production/agent-evaluation").glob("*/attempt-*/report.json"))
+        reports = list(
+            (self.root / "production/agent-evaluation").glob("*/attempt-*/report.json")
+        )
         self.assertTrue(reports)
         for path in reports:
             for trial in json.loads(path.read_text())["trials"]:
-                self.assertEqual(trial["error_code"], "evaluation_loaded_version_mismatch")
+                self.assertEqual(
+                    trial["error_code"], "evaluation_loaded_version_mismatch"
+                )
 
 
 if __name__ == "__main__":

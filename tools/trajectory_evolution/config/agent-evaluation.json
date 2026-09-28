@@ -16,7 +16,7 @@
     "min_trials": 2,
     "memory_min_pairs": 2,
     "min_coverage": 1.0,
-    "min_pass_rate": 0.8,
+    "max_quality_drop": 0.0,
     "max_pass_rate_drop": 0.0
   }
 }

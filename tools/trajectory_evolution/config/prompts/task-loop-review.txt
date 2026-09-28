@@ -1,20 +1,22 @@
-本次启用逐轮效率评审：先核对标准与执行事实，输出 reason、evidence_paths，再输出 loop_review，最后综合核验输出 verdict，避免未读完整执行就提前判通过。业务只按主契约的本题标准验收；工具内部规范或效率建议不能新增业务禁令。浪费可与业务 passed 同时成立，明确违反本题禁令的重试也不能解释为必要探索。
+逐轮效率评审与业务验收独立：先按主契约核验目标和逐轮要求，再判断循环浪费，最后汇总业务 verdict。浪费可与业务 passed 同时成立；内部规范和效率建议不能新增业务禁令。输出 goal_verdicts/turn_verdicts（契约要求时）、reason、evidence_paths、loop_review，最后 verdict，不在阅读证据前先判通过。
 
-loop_inventory 的每个键对应一个 Run、执行实例、loop 和轮次；同轮模型/工具/控制事件已合并，不合并并发分支或不同轮次。键按锚点在各 Run 中的观测顺序排列，不表示并发分支之间存在依赖；前因仍以 caused_by 为准。逐一评审全部键，不遗漏或重复。
-无效轮次：依据该轮开始前已知的信息，省去整轮不会减少标准要求的成果、必要信息或实际交付。只判“整轮可省”，不是某个动作不理想。
+loop_inventory 每个键对应一个 Run、执行实例、loop 和轮次，同轮事件已合并；键按锚点观测顺序排列，不代表并发依赖，前因以 caused_by 为准。逐项覆盖全部键，不合并不同执行实例或轮次。
 
-每轮按以下顺序判断：
-1. 找本轮实际执行及结果，核对此前已生效的约束。明确禁止重试/次数已用尽，或已知同一不可重试失败、缺失前提仍未改变时，仅换名称、模型、参数或协议重试不是合理探索。若本轮只有这些操作及其内部准备、分析、调度、重复错误记录，判 waste。不得因“首次用这个参数”“是重试链的一部分”“承担了决策”改判 keep。
-2. 查本轮是否还有独立必要贡献：首次合理探索带来的信息、用户新要求、独立并发成果、必须的状态改变或实际交付。有则 keep，即使同轮也有低效动作；是否业务 failed 只按本题标准判断。keep 理由须指出实际贡献，任务失败、token 多、文本相似本身不是 waste 依据。不可用后来的失败倒推首次合理探索无效。
-3. 单独保留必要收尾：首次向上游交付执行结果、向用户答复或报告已确认失败，都是交付；向不同接收者转达同一事实不算重复。仅当此前已向同一接收者完成等价交付，且删掉本轮不损失必要成果时，才能判纯总结为 waste。不得假设“上一轮本可顺便回答”，把无效操作和随后必要报告各算一次浪费。
-4. 工具调度不等于交付：已知工具契约不允许的空调度、只返回校验错误且没派发工作或发送答案，不以“首次报告尝试”“让下一轮纠错”为由保留。首次探明此前未知限制、确实获得必要信息时可 keep。实际交付的后续轮单独判断。
-5. 其余重复操作或已完成后继续空转，无新依据且无独立贡献则 waste；无法从现有证据确定是否可省则 uncertain。必要性不是保持历史/DAG 逐字不变；后续引用本轮，不自动证明业务贡献。
+无效轮次：按该轮开始前已知信息，省去整轮不损失标准要求的成果、必要信息或交付。只判“整轮可省”，不因单个动作不理想、任务失败或 token 多就判 waste。
+按以下优先序核验：
+1. 已知禁止重试、次数耗尽、不可重试错误或前提未改变，整轮只有重试及其准备/调度/重复错误记录，判 waste。换参数、模型、协议不自动成为新探索，重新派发也不是新用户目标。
+2. 开始前已明确对象错误、前提不成立或与任务无关，整轮只服务该错误子任务，连同仅为它准备的查询/调度判 waste。成功调用、状态变化或被后续引用不单独证明必要；不能以“违规已经发生，必须保留历史”为由 keep。
+3. 本轮仍有独立必要贡献则 keep，并说明具体贡献：首次合理探索取得信息、用户新增要求、独立并发成果、必需状态改变、纠错或撤销副作用。不能用事后失败否定首次合理探索。
+4. 首次向上游交付结果、向用户答复或报告已知失败是必要收尾；不同接收者不是重复。只有同一接收者已获等价交付且无新贡献才 waste。不得假设上一轮本可顺便答复，把无效操作和后续必要报告都删掉。
+5. 调度不等于交付。已知契约不允许的空调度、只返回校验错误且未派发或答复，不能以“让下一轮纠错”为由 keep；若首次探明此前未知限制并取得必要信息，可 keep。其余无新依据的重复/空转判 waste；证据不足则 uncertain。
 
-证据规则：按 loop_inventory 的键逐项构造结果。anchor_event_id 是该轮一条真实已执行 action.end 事件，仅用于定位，不预设该轮有效或无效。evidence_event_ids 只填当前键的 anchor_event_id，逐字复制；判断贡献仍须阅读整轮 event_ids 对应的实际内容。前提和其他支持事件可在 reason 中说明，不追加到 evidence_event_ids，不猜 ID、不按数字范围推断所属轮次。并发或重新派发后，即使 actor/轮次数字相同，也须按本次 execution_id 和清单键区分。
+逐轮核对具体工具返回：无关条目、正常查询无匹配、调用失败不同。第一次结果不相关时，有针对性的修正查询可能必要；已确认同一数据源缺资料后，无新依据反复换词不自动合理。不要将后一次结果套到前一次，也不为保持历史/DAG 逐字不变而保留无效轮次。
 
-loop_review 格式：{"status":"complete","iteration_reviews":[{"iteration_id":"loop_inventory中的键","reason":"该轮首次向用户交付结果，省去会丢失答复。","decision":"keep","evidence_event_ids":["该键的anchor_event_id原值"]}]}。
-每项按 iteration_id、reason、decision、evidence_event_ids 顺序输出，一两句简体中文说明实际贡献和省去影响，再填写一致的 keep/waste/uncertain。不要自行输出 count 或 wasted_iterations，程序计算。全部键都有 keep/waste 结论才 complete；存在 uncertain 或清单为空时整体 uncertain，空清单返回空数组。不把缺少评审当零浪费。
+证据与格式：
+anchor_event_id 只是该轮一条已执行 action.end 的定位符，不预设有效性。判断须读本键 event_ids 的实际内容；evidence_event_ids 只逐字填本键 anchor_event_id，其他前提在 reason 说明。不得猜 ID、按数字区间推断或引用别的并发分支。
+loop_review = {"status":"complete|uncertain","iteration_reviews":[{"iteration_id":"清单键","reason":"简体中文说明实际贡献及省去影响","decision":"keep|waste|uncertain","evidence_event_ids":["本键anchor_event_id"]}]}。
+逐项先写 reason 再写一致的 decision；不要输出 count/wasted_iterations，程序负责计数。全部键判为 keep/waste 才 complete；含 uncertain 或清单为空则整体 uncertain，空清单返回空数组，不能把缺评审当零浪费。
 
-输出前复核：理由承认“只有已禁止的重试、无额外贡献”应 waste；承认“首次必要交付”应 keep。例：A 得到不可重试错误，B 无依据再次调用，C 首次报告结果；B 可省，C 保留，不因 B 本可回答而删 C。重新派发不是新用户目标，不能把同一目标的再次尝试当作首次探索。
-最后汇总业务结论：逐轮核验若发现违反本题明确的必需动作、禁令或停止条件，整体不能 passed；不得一边认定违反题目，一边因最终如实报告而判通过。例如题目要求失败后停止，实际失败后换模型再次尝试再报告，仍违反停止条件，无须另写数字上限或“不得重试”。仅效率浪费、内部规范冲突不能据此判业务失败。
-若 validation_feedback.loop_review_error 存在，constraint 指出约束，iteration_review_index 是 previous_response 中零起始下标（旧格式为 wasted_iteration_index）。reference.evidence_event_index 指出错误引用，allowed_iteration_event_ids 给出真实本轮事件；重核全部评审项的键与锚点，不照抄旧引用，不用无关合法 ID 替换错误证据。找不到支持依据则该轮及整体 uncertain，反馈不意味着该轮一定浪费。
+复核理由和决定：只有被禁重试且无独立贡献应 waste；首次必要交付应 keep。例：A 得到不可重试错误、B 无依据再次调用、C 首次报告结果，B 可省、C 保留。
+业务 verdict 只汇总适用要求。违反必需动作、禁令或停止条件不能 passed，如“失败后停止”却换模型重试；后续如实报告不抵消违规。未触发的可选分支、单纯效率浪费、内部规范冲突不构成业务失败；适用必需项未完成仍失败。
+若 validation_feedback.loop_review_error 存在，constraint 给出错误，iteration_review_index（旧格式 wasted_iteration_index）是 previous_response 零起始下标，reference.evidence_event_index 指出错误引用，allowed_iteration_event_ids 给出真实本轮事件。重核全部键与锚点，不以无关合法 ID 代替错误证据；证据不足就 uncertain，反馈不表示该轮一定浪费。

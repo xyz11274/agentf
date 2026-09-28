@@ -1,0 +1,1508 @@
+{
+  "schema_version": 1,
+  "splits": [
+    "train",
+    "val",
+    "holdout"
+  ],
+  "repetitions": 1,
+  "parallelism": 1,
+  "max_trials": 120,
+  "timeout_ms": 480000,
+  "max_output_bytes": 8388608,
+  "max_artifact_bytes": 33554432,
+  "max_report_bytes": 134217728,
+  "require_trace": true,
+  "variants": [
+    {
+      "id": "L0",
+      "version": "real-v1-fresh-policy-transfer",
+      "command": [
+        "/bin/bash",
+        "-c",
+        "set -euo pipefail\nAF_TRANSFER_REPO=\"$(cd \"{config_dir}/../../..\" && pwd)\"\nexport PATH=\"$(dirname \"$AF_TRANSFER_PYTHON\"):$PATH\"\nexport AF_COORDINATOR_VERSION=v1 AF_BR_ENV=policy-transfer AF_BR_DAEMON_PORT=18821 AF_BR_SANDBOX_MODE=local AF_SANDBOX_MODE=local\nexport AF_LLM_MODEL=deepseek-v4-flash OPENAI_MODEL=deepseek-v4-flash AF_LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3 OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3\nexport AF_LLM_API_KEY=\"$OPENAI_API_KEY\" AF_LLM_THINKING_MODE=disabled AF_LLM_TEMPERATURE=0 AF_SKILL_LLM_TEMPERATURE=0 AF_LLM_TIMEOUT=90 AF_LLM_MAX_RETRIES=1 AF_NODE_EXECUTION_TIMEOUT=240 AF_BR_CHAT_TURN_TIMEOUT_SECONDS=330\nexport OPENAI_IMAGE_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 OPENAI_IMAGE_MODEL=doubao-seedream-5.0-lite OPENAI_IMAGE_SIZE=2K ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 ARK_IMAGE_MODEL=doubao-seedream-5.0-lite ARK_VIDEO_MODEL=doubao-seedance-1.5-pro\nexport AF_BR_VISION_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 VISION_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 AF_BR_VISION_MODEL=kimi-k3 VISION_MODEL=kimi-k3\nexport PYTHONPATH=\"$AF_TRANSFER_REPO/packages/agentflow-runtime/src:$AF_TRANSFER_REPO/tools/trajectory_evolution/clients/python:$AF_TRANSFER_REPO/src/runtime/databus/clients/python:$AF_TRANSFER_REPO/frontend/bridge\" PIP_NO_INDEX=1\nexport EVOLUTION_POINT_CONFIG=\"{config_dir}/point-client.json\"\nexport AF_BR_SESSION_DB_PATH=\"$PWD/bridge-sessions.db\" AF_BR_AGENT_PACKAGES_DIR=\"$PWD/examples/agent\" AF_BR_ARTIFACTS_STORAGE_DIR=\"$PWD/artifacts-storage\" AF_BR_ARTIFACT_PUBLIC_BASE_URL=http://127.0.0.1:18822 AF_ARTIFACT_STORAGE_URL=http://127.0.0.1:18822 AF_TRACE_OUTPUT_DIR=\"$PWD/native-trace\" AF_SESSIONLOG_ENABLED=0\nmkdir -p examples/agent/outfit-test-agent docker/sandbox\ncp -a \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/agent.json\" \"{config_dir}/agent.md\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/manifest.jsonc\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/package.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/requirements.txt\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/coordinator_workflow.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/skill_workflow.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/dummy_pre_skill_workflow.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/nodes\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/harness\" examples/agent/outfit-test-agent/\ncp -a \"$AF_TRANSFER_REPO/docker/sandbox/http_server\" docker/sandbox/\ncp \"{config_dir}/bridge.yaml\" config.yaml\n\"$AF_TRANSFER_REPO/build/agentflowd\" --config \"{config_dir}/daemon.json\" --package \"$PWD/examples/agent/outfit-test-agent\" > daemon.log 2>&1 &\nexec \"$AF_TRANSFER_PYTHON\" -m uvicorn main:app --app-dir \"$AF_TRANSFER_REPO/frontend/bridge\" --host 127.0.0.1 --port 18822"
+      ],
+      "instrumentation_config": "service.json",
+      "entry": {
+        "input": {
+          "agent_id": "outfit-assistant",
+          "body": {
+            "content": {
+              "$eval": "input"
+            },
+            "user_id": {
+              "$eval": "user_id"
+            },
+            "client_id": {
+              "$eval": "conversation_id"
+            }
+          }
+        },
+        "output_pointer": "/response"
+      },
+      "pass_env": [
+        "OPENAI_API_KEY",
+        "OPENAI_IMAGE_API_KEY",
+        "ARK_API_KEY",
+        "AF_BR_VISION_API_KEY",
+        "VISION_API_KEY",
+        "QWEATHER_API_KEY",
+        "QWEATHER_API_HOST",
+        "AF_TRANSFER_PYTHON"
+      ]
+    },
+    {
+      "id": "L3",
+      "policy_version_file": "published-version.json",
+      "command": [
+        "/bin/bash",
+        "-c",
+        "set -euo pipefail\nAF_TRANSFER_REPO=\"$(cd \"{config_dir}/../../..\" && pwd)\"\nexport PATH=\"$(dirname \"$AF_TRANSFER_PYTHON\"):$PATH\"\nexport AF_COORDINATOR_VERSION=v1 AF_BR_ENV=policy-transfer AF_BR_DAEMON_PORT=18821 AF_BR_SANDBOX_MODE=local AF_SANDBOX_MODE=local\nexport AF_LLM_MODEL=deepseek-v4-flash OPENAI_MODEL=deepseek-v4-flash AF_LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3 OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3\nexport AF_LLM_API_KEY=\"$OPENAI_API_KEY\" AF_LLM_THINKING_MODE=disabled AF_LLM_TEMPERATURE=0 AF_SKILL_LLM_TEMPERATURE=0 AF_LLM_TIMEOUT=90 AF_LLM_MAX_RETRIES=1 AF_NODE_EXECUTION_TIMEOUT=240 AF_BR_CHAT_TURN_TIMEOUT_SECONDS=330\nexport OPENAI_IMAGE_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 OPENAI_IMAGE_MODEL=doubao-seedream-5.0-lite OPENAI_IMAGE_SIZE=2K ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 ARK_IMAGE_MODEL=doubao-seedream-5.0-lite ARK_VIDEO_MODEL=doubao-seedance-1.5-pro\nexport AF_BR_VISION_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 VISION_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 AF_BR_VISION_MODEL=kimi-k3 VISION_MODEL=kimi-k3\nexport PYTHONPATH=\"$AF_TRANSFER_REPO/packages/agentflow-runtime/src:$AF_TRANSFER_REPO/tools/trajectory_evolution/clients/python:$AF_TRANSFER_REPO/src/runtime/databus/clients/python:$AF_TRANSFER_REPO/frontend/bridge\" PIP_NO_INDEX=1\nexport EVOLUTION_POINT_CONFIG=\"{config_dir}/point-client.json\"\nexport AF_BR_SESSION_DB_PATH=\"$PWD/bridge-sessions.db\" AF_BR_AGENT_PACKAGES_DIR=\"$PWD/examples/agent\" AF_BR_ARTIFACTS_STORAGE_DIR=\"$PWD/artifacts-storage\" AF_BR_ARTIFACT_PUBLIC_BASE_URL=http://127.0.0.1:18822 AF_ARTIFACT_STORAGE_URL=http://127.0.0.1:18822 AF_TRACE_OUTPUT_DIR=\"$PWD/native-trace\" AF_SESSIONLOG_ENABLED=0\nmkdir -p examples/agent/outfit-test-agent docker/sandbox\ncp -a \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/agent.json\" \"{config_dir}/agent.md\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/manifest.jsonc\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/package.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/requirements.txt\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/coordinator_workflow.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/skill_workflow.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/dummy_pre_skill_workflow.json\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/nodes\" \"$AF_TRANSFER_REPO/examples/agent/outfit-test-agent/harness\" examples/agent/outfit-test-agent/\ncp -a \"$AF_TRANSFER_REPO/docker/sandbox/http_server\" docker/sandbox/\ncp \"{config_dir}/bridge.yaml\" config.yaml\n\"$AF_TRANSFER_REPO/build/agentflowd\" --config \"{config_dir}/daemon.json\" --package \"$PWD/examples/agent/outfit-test-agent\" > daemon.log 2>&1 &\nexec \"$AF_TRANSFER_PYTHON\" -m uvicorn main:app --app-dir \"$AF_TRANSFER_REPO/frontend/bridge\" --host 127.0.0.1 --port 18822"
+      ],
+      "instrumentation_config": "service.json",
+      "entry": {
+        "input": {
+          "agent_id": "outfit-assistant",
+          "body": {
+            "content": {
+              "$eval": "input"
+            },
+            "user_id": {
+              "$eval": "user_id"
+            },
+            "client_id": {
+              "$eval": "conversation_id"
+            }
+          }
+        },
+        "output_pointer": "/response"
+      },
+      "pass_env": [
+        "OPENAI_API_KEY",
+        "OPENAI_IMAGE_API_KEY",
+        "ARK_API_KEY",
+        "AF_BR_VISION_API_KEY",
+        "VISION_API_KEY",
+        "QWEATHER_API_KEY",
+        "QWEATHER_API_HOST",
+        "AF_TRANSFER_PYTHON"
+      ]
+    }
+  ],
+  "checks": {},
+  "judge": {
+    "enabled": true,
+    "runtime_config": "judge-runtime.json",
+    "prompt": "../../../tools/trajectory_evolution/config/prompts/task-judge-system.txt",
+    "loop_review_prompt": "../../../tools/trajectory_evolution/config/prompts/task-loop-review.txt",
+    "include_model_requests": false,
+    "share_repeated_text": true,
+    "share_repeated_inputs": true,
+    "max_model_calls": 360,
+    "max_input_bytes": 262144
+  },
+  "artifacts": {
+    "*": [
+      {
+        "pattern": "sandbox/*/outputs/*.html",
+        "media_type": "text/html"
+      },
+      {
+        "pattern": "sandbox/*/outputs/*.json",
+        "media_type": "application/json"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.html",
+        "media_type": "text/html"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.json",
+        "media_type": "application/json"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.html",
+        "media_type": "text/html"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.json",
+        "media_type": "application/json"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.html",
+        "media_type": "text/html"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.json",
+        "media_type": "application/json"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.html",
+        "media_type": "text/html"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.json",
+        "media_type": "application/json"
+      },
+      {
+        "pattern": "sandbox/*/outputs/*.md",
+        "media_type": "text/markdown"
+      },
+      {
+        "pattern": "sandbox/*/outputs/*.csv",
+        "media_type": "text/csv"
+      },
+      {
+        "pattern": "sandbox/*/result.txt",
+        "media_type": "text/plain"
+      },
+      {
+        "pattern": "sandbox/*/output/task_*.txt",
+        "media_type": "text/plain"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.md",
+        "media_type": "text/markdown"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.csv",
+        "media_type": "text/csv"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/result.txt",
+        "media_type": "text/plain"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/output/task_*.txt",
+        "media_type": "text/plain"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.md",
+        "media_type": "text/markdown"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.csv",
+        "media_type": "text/csv"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/result.txt",
+        "media_type": "text/plain"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/output/task_*.txt",
+        "media_type": "text/plain"
+      }
+    ],
+    "t-01": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-02": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-03": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-04": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-05": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-06": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-07": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-08": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-09": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-10": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-11": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-12": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-13": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-14": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-15": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-16": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-17": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-18": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-19": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-20": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-21": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-22": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-23": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-24": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-25": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-26": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-27": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-28": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-29": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "t-30": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-accessible-html": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-budget-audit": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-image-chinese-path": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-image-conflicting-request": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-image-independent": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-image-logo": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-image-no-reference": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-material-filter": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-rain-transfer": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-video-and-report": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-video-dependency": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-video-missing-frame": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-video-no-generation": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-video-text": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "v-wardrobe-csv": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-capsule-packing": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-discount-shipping": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-image-english": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-image-flatlay": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-image-json-dependency": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-image-missing-source": [
+      {
+        "pattern": "sandbox/*/assets/broken.png",
+        "media_type": "text/plain"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/broken.png",
+        "media_type": "text/plain"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/broken.png",
+        "media_type": "text/plain"
+      }
+    ],
+    "h-image-two-branches": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-network-unavailable": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-private-preference": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-repair-json": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-video-credential-boundary": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-video-preserve-upstream": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-video-storyboard-budget": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-video-terminal": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ],
+    "h-video-unavailable-source": [
+      {
+        "pattern": "sandbox/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "artifacts-storage/*/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/outputs/*.png",
+        "media_type": "image/png"
+      },
+      {
+        "pattern": "examples/agent/*/workspace/*/assets/*.png",
+        "media_type": "image/png"
+      }
+    ]
+  }
+}

@@ -9,6 +9,7 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def call(skill, args):
+    from .task_context import worker_task
     try:
         base = os.environ["BUSINESS_BACKEND_URL"].rstrip("/")
         parsed = urllib.parse.urlsplit(base)
@@ -20,7 +21,8 @@ def call(skill, args):
         req = urllib.request.Request(base + "/v1/services/" + skill,
             data=json.dumps(args, ensure_ascii=False).encode(),
             headers={"Content-Type": "application/json", "X-Business-User": urllib.parse.quote(user),
-                     "X-Business-Client": urllib.parse.quote(client)}, method="POST")
+                     "X-Business-Client": urllib.parse.quote(client),
+                     "X-Business-Task": urllib.parse.quote(worker_task(), safe="")}, method="POST")
         with OPENER.open(req, timeout=130) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:

@@ -1,3 +1,7 @@
+// test_hybrid_evaluator 回归验证：检查包内协议、边界条件与失败处理。
+// 本地桩用于重现确定性场景，不代表真实 Agent 或远程模型的业务能力。
+// 测试应同时验证正常路径与拒绝路径，避免错误数据被当成成功结果。
+
 #include "agentflow/trajectory/hybrid_evaluator.h"
 
 #include <chrono>
@@ -13,26 +17,30 @@ namespace {
 namespace trajectory = agentflow::trajectory;
 namespace ep = agentflow::trajectory::evaluation;
 
-void expect(bool condition, const std::string& message) {
-  if(!condition) {
+// 测试辅助函数：expect。
+// 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
+void expect(bool condition, const std::string &message) {
+  if (!condition) {
     throw std::runtime_error(message);
   }
 }
 
-std::filesystem::path write_temporary(
-    const std::string& name,
-    const std::string& content) {
+// 测试辅助函数：write_temporary。
+// 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
+std::filesystem::path write_temporary(const std::string &name, const std::string &content) {
   const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-  const auto path = std::filesystem::temp_directory_path()
-      / ("agentflow-hybrid-" + name + '-' + std::to_string(nonce));
+  const auto path = std::filesystem::temp_directory_path() /
+                    ("agentflow-hybrid-" + name + '-' + std::to_string(nonce));
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  if(!output) {
+  if (!output) {
     throw std::runtime_error("cannot create temporary test file");
   }
   output << content;
   return path;
 }
 
+// 测试辅助函数：analysis_json。
+// 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
 std::string analysis_json(bool trace_valid = true) {
   return std::string(R"JSON({
     "schema_version": 1,
@@ -46,9 +54,8 @@ std::string analysis_json(bool trace_valid = true) {
       "user_id": "user1",
       "fingerprint_algorithm": "sha256-v1"
     },
-    "trace_integrity": {"valid": )JSON")
-      + (trace_valid ? "true" : "false")
-      + R"JSON(, "issues": []},
+    "trace_integrity": {"valid": )JSON") +
+         (trace_valid ? "true" : "false") + R"JSON(, "issues": []},
     "summary": {"episode_count": 3},
     "episodes": [
       {
@@ -193,7 +200,7 @@ std::string analysis_json(bool trace_valid = true) {
 }
 
 class FixedModelAdapter final : public trajectory::ModelAdapter {
- public:
+public:
   enum class Mode {
     valid_useful,
     valid_necessary_retry,
@@ -204,51 +211,55 @@ class FixedModelAdapter final : public trajectory::ModelAdapter {
     throw_exception,
   };
 
+  // 测试辅助函数：FixedModelAdapter。
+  // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
   explicit FixedModelAdapter(Mode mode) : mode_(mode) {}
 
-  trajectory::RawModelResponse evaluate(
-      const trajectory::ModelRequest& request) override {
+  // 通过本模块的评测入口处理请求，执行与采集生命周期由对应契约约束。
+  trajectory::RawModelResponse evaluate(const trajectory::ModelRequest &request) override {
     ++calls;
-    if(mode_ == Mode::throw_exception) {
+    if (mode_ == Mode::throw_exception) {
       throw std::runtime_error("sensitive adapter detail must not escape");
     }
     trajectory::RawModelResponse response;
     response.adapter = name();
     response.model_id = model_id();
     response.attempts = 1;
-    if(mode_ == Mode::transport_error) {
+    if (mode_ == Mode::transport_error) {
       response.error_code = "timeout";
       return response;
     }
     response.transport_ok = true;
-    const std::string event_id = mode_ == Mode::unknown_evidence
-        ? "fabricated-event"
-        : request.allowed_event_ids.front();
-    const std::string verdict = mode_ == Mode::valid_necessary_retry
-        ? "necessary_retry"
-        : "useful";
+    const std::string event_id =
+        mode_ == Mode::unknown_evidence ? "fabricated-event" : request.allowed_event_ids.front();
+    const std::string verdict = mode_ == Mode::valid_necessary_retry ? "necessary_retry" : "useful";
     const std::string reason = mode_ == Mode::credential
-        ? "该步骤有效，key=ark-secret-value-12345678901234567890"
-        : mode_ == Mode::credential_escaped
-            ? "该步骤有效，key=\\u0061rk-secret-value-12345678901234567890"
-            : "该步骤产生了可观察的必要状态变化。";
-    response.body =
-        "{\"verdict\":\"" + verdict
-        + "\",\"confidence\":0.81,"
-          "\"expected_state_change\":\"形成新的可验证状态\","
-          "\"observed_state_change\":\"证据显示状态已变化\","
-          "\"concise_reason\":\"" + reason
-        + "\",\"evidence_event_ids\":[\"" + event_id + "\"]}";
-    if(fenced) response.body = "```json\r\n" + response.body + "\r\n```";
-    if(compact) response.body = "{\"verdict\":\"" + verdict + "\",\"confidence\":0.81,\"concise_reason\":\""
-        + reason + "\",\"evidence_event_ids\":[\"" + event_id + "\"]}";
+                                   ? "该步骤有效，key=ark-secret-value-12345678901234567890"
+                               : mode_ == Mode::credential_escaped
+                                   ? "该步骤有效，key=\\u0061rk-secret-value-12345678901234567890"
+                                   : "该步骤产生了可观察的必要状态变化。";
+    response.body = "{\"verdict\":\"" + verdict +
+                    "\",\"confidence\":0.81,"
+                    "\"expected_state_change\":\"形成新的可验证状态\","
+                    "\"observed_state_change\":\"证据显示状态已变化\","
+                    "\"concise_reason\":\"" +
+                    reason + "\",\"evidence_event_ids\":[\"" + event_id + "\"]}";
+    if (fenced)
+      response.body = "```json\r\n" + response.body + "\r\n```";
+    if (compact)
+      response.body = "{\"verdict\":\"" + verdict + "\",\"confidence\":0.81,\"concise_reason\":\"" +
+                      reason + "\",\"evidence_event_ids\":[\"" + event_id + "\"]}";
     return response;
   }
 
+  // 测试辅助函数：name。
+  // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
   std::string name() const override {
     return "fixed-test";
   }
 
+  // 测试辅助函数：model_id。
+  // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
   std::string model_id() const override {
     return "fixed-test-model";
   }
@@ -257,89 +268,78 @@ class FixedModelAdapter final : public trajectory::ModelAdapter {
   bool fenced = false;
   bool compact = false;
 
- private:
+private:
   Mode mode_;
 };
 
-trajectory::EvaluationOutput evaluate(
-    const std::string& name,
-    trajectory::EvaluatorOptions options,
-    std::shared_ptr<trajectory::ModelAdapter> adapter = nullptr,
-    bool trace_valid = true) {
+// 通过本模块的评测入口处理请求，执行与采集生命周期由对应契约约束。
+trajectory::EvaluationOutput evaluate(const std::string &name, trajectory::EvaluatorOptions options,
+                                      std::shared_ptr<trajectory::ModelAdapter> adapter = nullptr,
+                                      bool trace_valid = true) {
   const auto path = write_temporary(name + ".json", analysis_json(trace_valid));
   try {
     trajectory::HybridTrajectoryEvaluator evaluator(options, std::move(adapter));
     auto output = evaluator.evaluate_file(path);
     std::filesystem::remove(path);
     return output;
-  } catch(...) {
+  } catch (...) {
     std::filesystem::remove(path);
     throw;
   }
 }
 
+// 回归用例：test_deterministic_metrics_and_privacy。
+// 关键断言：expect(report.assessments_size() == 3, "all episodes must be preserved");；此处只验证测试构造的场景。
 void test_deterministic_metrics_and_privacy() {
   trajectory::EvaluatorOptions options;
   const auto output = evaluate("deterministic", options);
-  const auto& report = output.report;
+  const auto &report = output.report;
   expect(report.assessments_size() == 3, "all episodes must be preserved");
   expect(report.metrics().episode_count() == 3, "episode metric mismatch");
   expect(report.metrics().invalid_episode_count() == 1, "invalid metric mismatch");
   expect(report.metrics().tool_call_count() == 1, "tool metric mismatch");
   expect(report.metrics().failed_tool_call_count() == 1, "failed tool mismatch");
   expect(report.metrics().evaluation_count() == 2, "evaluation metric mismatch");
-  expect(
-      report.metrics().passed_evaluation_count() == 1,
-      "passed evaluation metric mismatch");
-  expect(
-      report.metrics().failed_evaluation_count() == 0,
-      "null pass value must not count as failed");
-  expect(
-      report.metrics().workflow_status() == ep::AGGREGATE_STATUS_SUCCEEDED,
-      "workflow completion must remain separate from business failure");
-  expect(
-      report.metrics().business_status() == ep::AGGREGATE_STATUS_PARTIAL,
-      "mixed branch results should produce partial business status");
+  expect(report.metrics().passed_evaluation_count() == 1, "passed evaluation metric mismatch");
+  expect(report.metrics().failed_evaluation_count() == 0,
+         "null pass value must not count as failed");
+  expect(report.metrics().workflow_status() == ep::AGGREGATE_STATUS_SUCCEEDED,
+         "workflow completion must remain separate from business failure");
+  expect(report.metrics().business_status() == ep::AGGREGATE_STATUS_PARTIAL,
+         "mixed branch results should produce partial business status");
   expect(report.model_requested_count() == 0, "offline must be the default");
-  expect(
-      report.assessments(1).final_verdict() == ep::SEMANTIC_VERDICT_INVALID,
-      "hard invalid rule must become final verdict");
-  expect(
-      report.assessments(2).evidence().has_previous_same_owner(),
-      "same-owner predecessor must be represented");
-  expect(
-      report.assessments(2).evidence().evaluations_size() == 2,
-      "evaluation evidence must remain attached to its episode");
-  expect(
-      report.assessments(1).evidence().evaluations_size() == 1,
-      "shared evaluation must remain attached to every target episode");
+  expect(report.assessments(1).final_verdict() == ep::SEMANTIC_VERDICT_INVALID,
+         "hard invalid rule must become final verdict");
+  expect(report.assessments(2).evidence().has_previous_same_owner(),
+         "same-owner predecessor must be represented");
+  expect(report.assessments(2).evidence().evaluations_size() == 2,
+         "evaluation evidence must remain attached to its episode");
+  expect(report.assessments(1).evidence().evaluations_size() == 1,
+         "shared evaluation must remain attached to every target episode");
   expect(report.metrics().evaluation_count() == 2, "shared event must count once");
 
-  const std::string json = trajectory::HybridTrajectoryEvaluator::to_json(
-      report, false);
-  expect(
-      json.find("should-never-be-copied") == std::string::npos,
-      "unknown raw fields must not be copied");
-  expect(
-      json.find("/must/not/appear") == std::string::npos,
-      "source filesystem path must not be copied");
+  const std::string json = trajectory::HybridTrajectoryEvaluator::to_json(report, false);
+  expect(json.find("should-never-be-copied") == std::string::npos,
+         "unknown raw fields must not be copied");
+  expect(json.find("/must/not/appear") == std::string::npos,
+         "source filesystem path must not be copied");
 
   std::string binary;
   expect(report.SerializeToString(&binary), "Protobuf serialization failed");
   ep::HybridEvaluationReport round_trip;
   expect(round_trip.ParseFromString(binary), "Protobuf round trip failed");
-  expect(
-      round_trip.source().dialogue_id() == "d1",
-      "Protobuf round trip changed identity");
+  expect(round_trip.source().dialogue_id() == "d1", "Protobuf round trip changed identity");
 }
 
+// 回归用例：test_failed_evaluation_enters_semantic_review。
+// 重点核验字段或诊断：adapter_not_configured；异常路径不能被当成成功。
 void test_failed_evaluation_enters_semantic_review() {
   std::string input = analysis_json();
   const std::string passing = "\"passed\": true";
   const std::string failing = "\"passed\": false";
   std::size_t position = 0;
   std::size_t replacement_count = 0;
-  while((position = input.find(passing, position)) != std::string::npos) {
+  while ((position = input.find(passing, position)) != std::string::npos) {
     input.replace(position, passing.size(), failing);
     position += failing.size();
     ++replacement_count;
@@ -353,31 +353,27 @@ void test_failed_evaluation_enters_semantic_review() {
     trajectory::HybridTrajectoryEvaluator evaluator(options);
     output = evaluator.evaluate_file(path);
     std::filesystem::remove(path);
-  } catch(...) {
+  } catch (...) {
     std::filesystem::remove(path);
     throw;
   }
 
-  expect(
-      output.report.metrics().failed_evaluation_count() == 1,
-      "failed evaluation metric mismatch");
-  const auto& assessment = output.report.assessments(2);
-  expect(
-      assessment.rule().verdict() == ep::SEMANTIC_VERDICT_UNCERTAIN,
-      "failed evaluation must enter semantic review");
-  expect(
-      assessment.rule().confidence() == 0.9,
-      "failed evaluation review confidence mismatch");
-  expect(
-      assessment.rule().evidence_event_ids_size() == 1
-          && assessment.rule().evidence_event_ids(0) == "event-e1",
-      "failed evaluation event must be retained as rule evidence");
-  expect(
-      output.model_requests.size() == 3
-          && assessment.model().error_code() == "adapter_not_configured",
-      "failed evaluation must be selected for pluggable model review");
+  expect(output.report.metrics().failed_evaluation_count() == 1,
+         "failed evaluation metric mismatch");
+  const auto &assessment = output.report.assessments(2);
+  expect(assessment.rule().verdict() == ep::SEMANTIC_VERDICT_UNCERTAIN,
+         "failed evaluation must enter semantic review");
+  expect(assessment.rule().confidence() == 0.9, "failed evaluation review confidence mismatch");
+  expect(assessment.rule().evidence_event_ids_size() == 1 &&
+             assessment.rule().evidence_event_ids(0) == "event-e1",
+         "failed evaluation event must be retained as rule evidence");
+  expect(output.model_requests.size() == 3 &&
+             assessment.model().error_code() == "adapter_not_configured",
+         "failed evaluation must be selected for pluggable model review");
 }
 
+// 回归用例：test_conflicting_shared_evaluation_is_rejected。
+// 关键断言：expect(position != std::string::npos, "shared evaluation was not found");；此处只验证测试构造的场景。
 void test_conflicting_shared_evaluation_is_rejected() {
   std::string input = analysis_json();
   const std::string passing = "\"passed\": true";
@@ -389,180 +385,167 @@ void test_conflicting_shared_evaluation_is_rejected() {
   try {
     trajectory::HybridTrajectoryEvaluator evaluator;
     evaluator.evaluate_file(path);
-  } catch(const trajectory::EvaluationError&) {
+  } catch (const trajectory::EvaluationError &) {
     threw = true;
   }
   std::filesystem::remove(path);
-  expect(
-      threw,
-      "conflicting payloads with one Evaluation event_id must be rejected");
+  expect(threw, "conflicting payloads with one Evaluation event_id must be rejected");
 }
 
+// 回归用例：test_hard_rule_cannot_be_overridden。
+// 关键断言：expect(adapter->calls == 3, "all selection must invoke all episodes");；此处只验证测试构造的场景。
 void test_hard_rule_cannot_be_overridden() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
-  auto adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::valid_useful);
+  auto adapter = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::valid_useful);
   const auto output = evaluate("conflict", options, adapter);
-  const auto& invalid = output.report.assessments(1);
+  const auto &invalid = output.report.assessments(1);
   expect(adapter->calls == 3, "all selection must invoke all episodes");
-  expect(
-      invalid.model().status() == ep::MODEL_CALL_STATUS_SUCCEEDED,
-      "valid model response was not accepted");
-  expect(
-      invalid.final_verdict() == ep::SEMANTIC_VERDICT_INVALID,
-      "model must not override deterministic invalid rule");
+  expect(invalid.model().status() == ep::MODEL_CALL_STATUS_SUCCEEDED,
+         "valid model response was not accepted");
+  expect(invalid.final_verdict() == ep::SEMANTIC_VERDICT_INVALID,
+         "model must not override deterministic invalid rule");
   expect(invalid.rule_model_conflict(), "rule/model conflict must be visible");
-  expect(
-      invalid.decision_source() == ep::DECISION_SOURCE_RULE,
-      "conflicting hard rule must remain the decision source");
+  expect(invalid.decision_source() == ep::DECISION_SOURCE_RULE,
+         "conflicting hard rule must remain the decision source");
 }
 
+// 回归用例：test_model_can_resolve_uncertain_business_failure。
+// 关键断言：expect(adapter->calls == 2, "suspicious selection should evaluate two episodes");；此处只验证测试构造的场景。
 void test_model_can_resolve_uncertain_business_failure() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::suspicious;
-  auto adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::valid_necessary_retry);
+  auto adapter =
+      std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::valid_necessary_retry);
   const auto output = evaluate("resolve", options, adapter);
   expect(adapter->calls == 2, "suspicious selection should evaluate two episodes");
-  const auto& coordinator = output.report.assessments(0);
-  expect(
-      coordinator.final_verdict() == ep::SEMANTIC_VERDICT_NECESSARY_RETRY,
-      "validated model verdict should resolve suspicious episode");
-  expect(
-      coordinator.decision_source() == ep::DECISION_SOURCE_MODEL,
-      "unassessed rule plus model should use model source");
+  const auto &coordinator = output.report.assessments(0);
+  expect(coordinator.final_verdict() == ep::SEMANTIC_VERDICT_NECESSARY_RETRY,
+         "validated model verdict should resolve suspicious episode");
+  expect(coordinator.decision_source() == ep::DECISION_SOURCE_MODEL,
+         "unassessed rule plus model should use model source");
 }
 
+// 回归用例：test_fenced_model_response_preserves_validation。
+// 关键断言：expect(adapter->calls > 0, "fenced response was not evaluated");；此处只验证测试构造的场景。
 void test_fenced_model_response_preserves_validation() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
-  for(const auto mode : {FixedModelAdapter::Mode::valid_useful,
-                        FixedModelAdapter::Mode::unknown_evidence,
-                        FixedModelAdapter::Mode::credential}) {
+  for (const auto mode :
+       {FixedModelAdapter::Mode::valid_useful, FixedModelAdapter::Mode::unknown_evidence,
+        FixedModelAdapter::Mode::credential}) {
     auto adapter = std::make_shared<FixedModelAdapter>(mode);
     adapter->fenced = true;
     const auto output = evaluate("fenced-response", options, adapter);
     expect(adapter->calls > 0, "fenced response was not evaluated");
-    expect(output.report.model_failed_count()
-        == (mode == FixedModelAdapter::Mode::valid_useful ? 0 : adapter->calls),
-        "JSON envelope changed evidence or privacy validation");
+    expect(output.report.model_failed_count() ==
+               (mode == FixedModelAdapter::Mode::valid_useful ? 0 : adapter->calls),
+           "JSON envelope changed evidence or privacy validation");
   }
   auto compact = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::valid_useful);
   compact->compact = true;
   const auto output = evaluate("compact-response", options, compact);
   expect(output.report.model_failed_count() == 0 && output.report.model_succeeded_count() == 3,
-      "compact episode response was rejected");
-  for(const auto& item : output.report.assessments())
-    expect(item.model().expected_state_change().empty() && item.model().observed_state_change().empty(),
-        "compact response fabricated a state description");
+         "compact episode response was rejected");
+  for (const auto &item : output.report.assessments())
+    expect(item.model().expected_state_change().empty() &&
+               item.model().observed_state_change().empty(),
+           "compact response fabricated a state description");
 }
 
+// 回归用例：test_invalid_model_evidence_degrades_without_corrupting_rules。
+// 重点核验字段或诊断：unknown_evidence_event_id；异常路径不能被当成成功。
 void test_invalid_model_evidence_degrades_without_corrupting_rules() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
-  auto adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::unknown_evidence);
+  auto adapter = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::unknown_evidence);
   const auto output = evaluate("unknown-evidence", options, adapter);
   expect(output.report.model_failed_count() == 3, "all invalid responses must count");
   expect(output.report.model_failures_degraded(), "non-strict failure must degrade");
-  expect(
-      output.report.assessments(1).final_verdict()
-          == ep::SEMANTIC_VERDICT_INVALID,
-      "model validation failure must preserve rule verdict");
-  expect(
-      output.report.assessments(1).model().error_code()
-          == "unknown_evidence_event_id",
-      "specific validation error must be recorded");
+  expect(output.report.assessments(1).final_verdict() == ep::SEMANTIC_VERDICT_INVALID,
+         "model validation failure must preserve rule verdict");
+  expect(output.report.assessments(1).model().error_code() == "unknown_evidence_event_id",
+         "specific validation error must be recorded");
 }
 
+// 回归用例：test_credential_like_model_output_is_rejected。
+// 重点核验字段或诊断：credential_like_output；异常路径不能被当成成功。
 void test_credential_like_model_output_is_rejected() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
-  auto adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::credential);
+  auto adapter = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::credential);
   const auto output = evaluate("credential", options, adapter);
-  const std::string json = trajectory::HybridTrajectoryEvaluator::to_json(
-      output.report, false);
-  expect(
-      output.report.assessments(0).model().error_code()
-          == "credential_like_output",
-      "credential-like output must be rejected");
-  expect(
-      json.find("ark-secret-value") == std::string::npos,
-      "rejected model body must never be persisted");
+  const std::string json = trajectory::HybridTrajectoryEvaluator::to_json(output.report, false);
+  expect(output.report.assessments(0).model().error_code() == "credential_like_output",
+         "credential-like output must be rejected");
+  expect(json.find("ark-secret-value") == std::string::npos,
+         "rejected model body must never be persisted");
 
-  auto escaped_adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::credential_escaped);
-  const auto escaped_output = evaluate(
-      "credential-escaped", options, escaped_adapter);
-  expect(
-      escaped_output.report.assessments(0).model().error_code()
-          == "credential_like_output",
-      "decoded credential-like output must be rejected");
+  auto escaped_adapter =
+      std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::credential_escaped);
+  const auto escaped_output = evaluate("credential-escaped", options, escaped_adapter);
+  expect(escaped_output.report.assessments(0).model().error_code() == "credential_like_output",
+         "decoded credential-like output must be rejected");
   const std::string escaped_json =
-      trajectory::HybridTrajectoryEvaluator::to_json(
-          escaped_output.report, false);
-  expect(
-      escaped_json.find("ark-secret-value") == std::string::npos,
-      "decoded credential-like model text must never be persisted");
+      trajectory::HybridTrajectoryEvaluator::to_json(escaped_output.report, false);
+  expect(escaped_json.find("ark-secret-value") == std::string::npos,
+         "decoded credential-like model text must never be persisted");
 }
 
+// 回归用例：test_strict_model_failure_throws。
+// 关键断言：expect(threw, "strict model mode must fail on transport error");；此处只验证测试构造的场景。
 void test_strict_model_failure_throws() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
   options.strict_model = true;
-  auto adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::transport_error);
+  auto adapter = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::transport_error);
   bool threw = false;
   try {
     evaluate("strict", options, adapter);
-  } catch(const trajectory::EvaluationError&) {
+  } catch (const trajectory::EvaluationError &) {
     threw = true;
   }
   expect(threw, "strict model mode must fail on transport error");
 }
 
+// 回归用例：test_adapter_exception_degrades_without_leaking_detail。
+// 关键断言：expect(output.report.model_failed_count() == 3,；此处只验证测试构造的场景。
 void test_adapter_exception_degrades_without_leaking_detail() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
-  auto adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::throw_exception);
+  auto adapter = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::throw_exception);
   const auto output = evaluate("adapter-exception", options, adapter);
-  expect(
-      output.report.model_failed_count() == 3,
-      "adapter exceptions must become per-episode model failures");
-  expect(
-      output.report.assessments(0).model().error_code() == "adapter_exception",
-      "adapter exception must use a stable generic error code");
-  const std::string json = trajectory::HybridTrajectoryEvaluator::to_json(
-      output.report, false);
-  expect(
-      json.find("sensitive adapter detail") == std::string::npos,
-      "adapter exception detail must not be persisted");
+  expect(output.report.model_failed_count() == 3,
+         "adapter exceptions must become per-episode model failures");
+  expect(output.report.assessments(0).model().error_code() == "adapter_exception",
+         "adapter exception must use a stable generic error code");
+  const std::string json = trajectory::HybridTrajectoryEvaluator::to_json(output.report, false);
+  expect(json.find("sensitive adapter detail") == std::string::npos,
+         "adapter exception detail must not be persisted");
 }
 
+// 回归用例：test_credential_like_structural_evidence_is_rejected。
+// 关键断言：expect(position != std::string::npos, "test diagnostic was not found");；此处只验证测试构造的场景。
 void test_credential_like_structural_evidence_is_rejected() {
   std::string input = analysis_json();
   const std::string original = "同一不可重试错误类别被重复观察到。";
   const std::size_t position = input.find(original);
   expect(position != std::string::npos, "test diagnostic was not found");
-  input.replace(
-      position,
-      original.size(),
-      "api_key=ark-secret-structural-evidence-1234567890");
+  input.replace(position, original.size(), "api_key=ark-secret-structural-evidence-1234567890");
   const auto path = write_temporary("structural-secret.json", input);
   bool threw = false;
   try {
     trajectory::HybridTrajectoryEvaluator evaluator;
     evaluator.evaluate_file(path);
-  } catch(const trajectory::EvaluationError&) {
+  } catch (const trajectory::EvaluationError &) {
     threw = true;
   }
   std::filesystem::remove(path);
   expect(threw, "credential-like structural evidence must be rejected");
 }
 
+// 回归用例：test_http_adapter_rejects_unsafe_configuration_without_network。
+// 重点核验字段或诊断：request_too_large；异常路径不能被当成成功。
 void test_http_adapter_rejects_unsafe_configuration_without_network() {
   trajectory::OpenAiCompatibleOptions options;
   options.model_id = "test-model";
@@ -570,7 +553,7 @@ void test_http_adapter_rejects_unsafe_configuration_without_network() {
   options.endpoint = "http://example.com/v1/chat/completions";
   try {
     trajectory::make_openai_compatible_model_adapter(options);
-  } catch(const trajectory::EvaluationError&) {
+  } catch (const trajectory::EvaluationError &) {
     external_http_rejected = true;
   }
   expect(external_http_rejected, "non-loopback HTTP must be rejected");
@@ -579,7 +562,7 @@ void test_http_adapter_rejects_unsafe_configuration_without_network() {
   options.endpoint = "http://127.0.0.1:18080/v1/chat/completions?key=secret";
   try {
     trajectory::make_openai_compatible_model_adapter(options);
-  } catch(const trajectory::EvaluationError&) {
+  } catch (const trajectory::EvaluationError &) {
     query_rejected = true;
   }
   expect(query_rejected, "endpoint query must be rejected");
@@ -589,7 +572,7 @@ void test_http_adapter_rejects_unsafe_configuration_without_network() {
   options.max_retries = 11;
   try {
     trajectory::make_openai_compatible_model_adapter(options);
-  } catch(const trajectory::EvaluationError&) {
+  } catch (const trajectory::EvaluationError &) {
     resource_limit_rejected = true;
   }
   expect(resource_limit_rejected, "excessive retry count must be rejected");
@@ -599,7 +582,7 @@ void test_http_adapter_rejects_unsafe_configuration_without_network() {
   options.thinking_type = "sometimes";
   try {
     trajectory::make_openai_compatible_model_adapter(options);
-  } catch(const trajectory::EvaluationError&) {
+  } catch (const trajectory::EvaluationError &) {
     thinking_mode_rejected = true;
   }
   expect(thinking_mode_rejected, "unknown thinking mode must be rejected");
@@ -611,77 +594,68 @@ void test_http_adapter_rejects_unsafe_configuration_without_network() {
   request.packet_id = "oversized";
   request.user_prompt = "larger than eight bytes";
   const auto response = adapter->evaluate(request);
-  expect(
-      !response.transport_ok && response.error_code == "request_too_large",
-      "oversized adapter request must be rejected before network access");
+  expect(!response.transport_ok && response.error_code == "request_too_large",
+         "oversized adapter request must be rejected before network access");
 }
 
+// 回归用例：test_model_request_limit_bounds_export_and_execution。
+// 重点核验字段或诊断：model_call_limit_reached；异常路径不能被当成成功。
 void test_model_request_limit_bounds_export_and_execution() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
   options.max_model_calls = 1;
   const auto output = evaluate("request-limit", options);
-  expect(
-      output.model_requests.size() == 1
-          && output.report.model_requested_count() == 1,
-      "model request export must honor the configured call limit");
-  expect(
-      output.report.assessments(1).model().status()
-              == ep::MODEL_CALL_STATUS_SKIPPED
-          && output.report.assessments(1).model().error_code()
-              == "model_call_limit_reached",
-      "episodes beyond the model call limit must be explicitly skipped");
+  expect(output.model_requests.size() == 1 && output.report.model_requested_count() == 1,
+         "model request export must honor the configured call limit");
+  expect(output.report.assessments(1).model().status() == ep::MODEL_CALL_STATUS_SKIPPED &&
+             output.report.assessments(1).model().error_code() == "model_call_limit_reached",
+         "episodes beyond the model call limit must be explicitly skipped");
 }
 
+// 回归用例：test_invalid_trace_is_quarantined。
+// 关键断言：expect(adapter->calls == 0, "invalid source trace must never reach the model");；此处只验证测试构造的场景。
 void test_invalid_trace_is_quarantined() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
   options.allow_invalid_trace = true;
-  auto adapter = std::make_shared<FixedModelAdapter>(
-      FixedModelAdapter::Mode::valid_useful);
+  auto adapter = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::valid_useful);
   const auto output = evaluate("quarantine", options, adapter, false);
   expect(adapter->calls == 0, "invalid source trace must never reach the model");
-  expect(
-      output.model_requests.empty()
-          && output.report.model_requested_count() == 0,
-      "invalid source trace must not produce exportable model requests");
-  expect(
-      output.report.assessments(0).model().status()
-          == ep::MODEL_CALL_STATUS_SKIPPED,
-      "quarantined model call must be marked skipped");
-  expect(
-      output.report.assessments(1).final_verdict()
-          == ep::SEMANTIC_VERDICT_INVALID,
-      "quarantine must retain deterministic evidence");
+  expect(output.model_requests.empty() && output.report.model_requested_count() == 0,
+         "invalid source trace must not produce exportable model requests");
+  expect(output.report.assessments(0).model().status() == ep::MODEL_CALL_STATUS_SKIPPED,
+         "quarantined model call must be marked skipped");
+  expect(output.report.assessments(1).final_verdict() == ep::SEMANTIC_VERDICT_INVALID,
+         "quarantine must retain deterministic evidence");
 }
 
+// 回归用例：test_jsonl_adapter_replays_by_packet_id。
+// 关键断言：expect(response.transport_ok, "known JSONL packet must replay");；此处只验证测试构造的场景。
 void test_jsonl_adapter_replays_by_packet_id() {
   const auto path = write_temporary(
-      "responses.jsonl",
-      "{\"packet_id\":\"p1\",\"judgment\":{\"verdict\":\"uncertain\"}}\n");
+      "responses.jsonl", "{\"packet_id\":\"p1\",\"judgment\":{\"verdict\":\"uncertain\"}}\n");
   try {
     const auto adapter = trajectory::make_jsonl_model_adapter(path);
     trajectory::ModelRequest request;
     request.packet_id = "p1";
     const auto response = adapter->evaluate(request);
     expect(response.transport_ok, "known JSONL packet must replay");
-    expect(
-        response.body.find("uncertain") != std::string::npos,
-        "JSONL judgment was not returned");
+    expect(response.body.find("uncertain") != std::string::npos, "JSONL judgment was not returned");
     request.packet_id = "missing";
     const auto missing = adapter->evaluate(request);
-    expect(
-        !missing.transport_ok && missing.error_code == "missing_record",
-        "missing JSONL packet must be explicit");
+    expect(!missing.transport_ok && missing.error_code == "missing_record",
+           "missing JSONL packet must be explicit");
     std::filesystem::remove(path);
-  } catch(...) {
+  } catch (...) {
     std::filesystem::remove(path);
     throw;
   }
 }
 
-}  // namespace
+} // 结束当前匿名命名空间。
 
+// 回归用例：main。
+// 构造本函数中的固定输入并核验状态与返回结果；不发起真实业务实验。
 int main() {
   try {
     test_deterministic_metrics_and_privacy();
@@ -701,7 +675,7 @@ int main() {
     test_jsonl_adapter_replays_by_packet_id();
     std::cout << "trajectory hybrid evaluator tests passed\n";
     return 0;
-  } catch(const std::exception& error) {
+  } catch (const std::exception &error) {
     std::cerr << "test failure: " << error.what() << '\n';
     return 1;
   }

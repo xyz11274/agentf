@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "product-simulation-v1",
+  "clock": "2026-09-21T09:00:00+08:00",
+  "history_days": 35,
+  "weather": {"default": {"temperature_min": 18, "temperature_max": 26, "humidity": 70, "rain": true}},
+  "external_responses": [],
+  "notice": "业务仿真环境定义，不是业务标准答案。使用合成历史、测试片库和样例产品资料；不连接真实付费或写操作服务。"
+}

@@ -11,6 +11,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 REPO = PACKAGE.parents[2]
 sys.path.insert(0, str(REPO / "benchmark"))
 from run_eval import compute_metrics
+from business_observer import multi_intent_metrics
 
 
 def main():
@@ -47,7 +48,8 @@ def main():
     cases.sort(key=lambda c: ids.index(c["case_id"]))
     report = {"meta": {"isolation": "independent daemons and databases, serial cases per daemon",
                        "judge": args.judge, "source": "benchmark/datasets/product.json",
-                       "workers": [r["meta"] for r in reports]}, **compute_metrics(cases), "cases": cases}
+                       "workers": [r["meta"] for r in reports]}, **compute_metrics(cases),
+              "multi_intent_observation": multi_intent_metrics(cases), "cases": cases}
     (root / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report["summary"], ensure_ascii=False), flush=True)
 

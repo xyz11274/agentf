@@ -1,10 +1,16 @@
+// hybrid_evaluation 持久化协议：字段编号用于跨语言序列化兼容。
+// 新增能力优先增加字段，不复用已有编号改变原含义。
+// 身份、执行事实、评分和策略版本分别记录；缺失信息不能等同于零或成功。
+
 syntax = "proto3";
 
 package agentflow.trajectory.evaluation;
 
-// The persisted report stores structural evidence and validated conclusions.
-// Direct SessionLog mode builds one transient, redacted content prompt, but raw
-// prompts, messages, tool payloads, and credentials are not copied into Protobuf.
+import "google/protobuf/struct.proto";
+
+// 持久化报告只保存结构证据和已验证结论。
+// 直接读取 SessionLog 时，构建一份临时且脱敏的内容提示词；
+// 原始提示词、消息、工具载荷和凭据不会复制到 Protobuf 报告。
 
 enum SemanticVerdict {
   SEMANTIC_VERDICT_UNSPECIFIED = 0;
@@ -215,12 +221,14 @@ message DialogueTaskAssessment {
   uint32 attempts = 11;
 }
 
-// Explicit recipient, condition, behavior and evidence; never an activation grant.
+// 明确的接收对象、条件、行为和证据不等于允许激活控制。
 message ExperienceAdvice {
   string target_scope = 1;
   string trigger_pattern = 2;
   string proposed_change = 3;
   repeated string evidence_event_ids = 4;
+  // 缺省保留旧版 L1 含义；编排和停止建议也使用同一条目级条件、证据契约。
+  CandidateTargetType target_type = 5;
 }
 
 message EvolutionReflection {
@@ -231,7 +239,7 @@ message EvolutionReflection {
   repeated string stop_condition_changes = 5;
   repeated string wasted_episode_ids = 6;
   repeated string evidence_event_ids = 7;
-  // Additive: experience_injections remains the readable/legacy string view.
+  // 增量字段；experience_injections 继续作为可读的旧版字符串视图。
   repeated ExperienceAdvice experience_details = 8;
   reserved "prompt_changes";
 }
@@ -457,6 +465,12 @@ message MemoryUpdateResult {
   string full_curation_error_code = 21;
   uint64 evicted_entry_count = 22;
   uint64 pruned_applied_batch_id_count = 23;
+  // 入库完成、关系复核完成与未决判断分别报告，不能用 applied 代替复核状态。
+  uint64 review_cache_hit_count = 24;
+  uint64 review_pending_count = 25;
+  uint64 review_unresolved_count = 26;
+  uint64 review_next_due_ms = 27;
+  uint64 management_duration_ms = 28;
 }
 
 message HybridEvaluationBatchReport {
@@ -521,4 +535,7 @@ message EvolutionMemoryStore {
   repeated EvolutionMemoryEntry entries = 6;
   reserved 7;
   uint64 new_entries_since_full_curation = 8;
+  // GEPA 的训练配对证据与有支持的策略修订属于同一权威记忆库。
+  // 不保存完整策略副本；每项只包含变化组件、来源修订和去重后的题目证据。
+  google.protobuf.Struct gepa_feedback = 9;
 }

@@ -114,7 +114,8 @@ def image_generate(args, store, scope):
 @contextmanager
 def request_lock(store, scope, args):
     # Serialize explicit write retries across skill subprocesses without holding SQLite during I/O.
-    identity = scope+':'+args.get('request_id',uuid.uuid4().hex)
+    from .task_context import current_task
+    identity = scope+':'+current_task()+':'+args.get('request_id',uuid.uuid4().hex)
     root = store.path.parent/'locks'; root.mkdir(parents=True, exist_ok=True)
     with (root/(hashlib.sha256(identity.encode()).hexdigest()+'.lock')).open('a') as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
@@ -123,6 +124,7 @@ def request_lock(store, scope, args):
 
 def execute(skill, args, store, scope):
     from . import reminders
+    from .task_context import receipt_key
     action = args['action']
     if action.startswith('browser_') and args.get('ref') and not args.get('request_id'):
         args = {**args,'request_id':'browser-'+hashlib.sha256(json.dumps(args,sort_keys=True,ensure_ascii=False).encode()).hexdigest()}
@@ -136,7 +138,7 @@ def execute(skill, args, store, scope):
     with request_lock(store, scope, args):
         if args.get('request_id'):
             with store.connect() as db:
-                old = db.execute('SELECT fingerprint,result FROM requests WHERE scope=? AND skill=? AND request_id=?', (scope,skill,args['request_id'])).fetchone()
+                old = db.execute('SELECT fingerprint,result FROM requests WHERE scope=? AND skill=? AND request_id=?', (scope,receipt_key(skill),args['request_id'])).fetchone()
             if old:
                 fingerprint = hashlib.sha256(json.dumps(args,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
                 if old[0] != fingerprint:
@@ -146,7 +148,12 @@ def execute(skill, args, store, scope):
         imported = None
         if store.read(scope)['services'].get(skill, True) is False:
             return store.run(scope,skill,args,lambda _state:result('业务能力暂不可用。',status='failed',retryable=True))
-        if action.startswith('browser_'):
+        evaluation = store.read(scope).get('evaluation_world')
+        if evaluation:
+            # 快照世界所有外部读取/写入由下方统一路由，不能漏回实时接口。
+            if skill == 'health-advice' and action == 'notifications':
+                prepared = result('仿真时钟下的通知。', {'notifications': reminders.notifications(store, scope)})
+        elif action.startswith('browser_'):
             from .browser_receipts import execute as browse
             prepared = browse(store,scope,skill,args)
         elif skill == 'smart-home' and args.get('execution_target') == 'home_assistant':
@@ -188,7 +195,12 @@ def execute(skill, args, store, scope):
             imported = import_page(store,scope,args)
         elif skill == 'movie-query' and action in ('play','pause','resume'):
             from .movies import playback
-            prepared = playback(store,scope,args)
+            from .task_context import task_context
+            # 播放器是会话内明确共享的业务资源：新一轮暂停仍操作原播放器。
+            # 普通 browser_* 页面按分支隔离；播放器整段操作按资源串行。
+            with task_context('movie-player'):
+                with request_lock(store, scope, {'request_id': 'player-control'}):
+                    prepared = playback(store,scope,args)
         elif skill == 'multimodal' and action == 'generate_image':
             prepared = image_generate(args,store,scope)
         elif skill == 'health-advice' and action == 'notifications':
@@ -196,7 +208,11 @@ def execute(skill, args, store, scope):
         scheduler_running = reminders.running(store) if skill == 'health-advice' and action.startswith('reminder_') else False
 
         def run(state, db):
-            if prepared is not None:
+            from .evaluation_world import execute as evaluate_action, clock
+            answer = evaluate_action(state, skill, args)
+            if answer is not None:
+                pass
+            elif prepared is not None:
                 if prepared['status'] == 'succeeded':
                     state.setdefault('last_information',{})[skill] = prepared['UserOutputObject']
                     if skill in ('device-gui','multi-device') and prepared['UserOutputObject'].get('device_id'):
@@ -212,7 +228,7 @@ def execute(skill, args, store, scope):
                 answer = navigation(state,args)
             elif skill == 'health-advice':
                 if action.startswith('appointment_'):
-                    answer = appointments.execute(state,args,db,store.owner_scope(scope,db))
+                    answer = appointments.execute(state,args,db,store.owner_scope(scope,db),now=clock(state))
                 elif action == 'reminder_create':
                     answer = reminders.create(state,args,store,scope)
                 elif action.startswith('reminder_'):
@@ -246,5 +262,8 @@ def execute(skill, args, store, scope):
                 answer = unavailable('可用的视频模型',['video_model_access_currently_UnsupportedModel'])
             else:
                 answer = document(state,args,skill,store,scope)
+            if evaluation:
+                answer = {**answer, 'simulated': True, 'snapshot_sha256': evaluation['sha256'],
+                          'environment': 'business_test_system', 'physical_effect': False}
             return {**answer,'skill':skill,'execution_mode':'real'}
         return store.run(scope,skill,args,run,transactional=True)

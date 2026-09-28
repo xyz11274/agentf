@@ -1,9 +1,10 @@
-"""Real tool-using Agent example for the language-neutral evaluation host contract.
+# agentplan-host 接入示例：演示宿主如何在已有执行边界调用公开接口。
+# 示例用于说明接入方式，实际执行和业务工具仍由宿主自身负责。
+# 需要保留真实请求、结果及因果关联，不能用示例常量代替生产运行证据。
 
-Python is only the example host, not a requirement of the C++ evaluator. Model
-and image requests use the subscriber's Agent Plan endpoint; never fall back to
-the ordinary pay-as-you-go route. Requires Pillow only for image decoding.
-"""
+"""语言无关评测宿主契约的真实工具调用 Agent 示例。
+Python 仅是示例宿主语言，不是 C++ 评测器的要求。
+模型和图片请求使用订阅的 Agent Plan 端点，不回落按量付费路由；仅图片解码依赖 Pillow。"""
 
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +21,7 @@ import urllib.request
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
+    # 处理下载重定向时约束凭据传递，避免把 API 密钥发送到产物地址。
     def redirect_request(self, *args, **kwargs):
         return None
 
@@ -27,6 +29,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
+# 程序入口：读取参数后路由到对应实现，统一处理退出状态和资源收尾。
 def main():
     request = json.load(sys.stdin)
     task = request["task"]
@@ -35,9 +38,23 @@ def main():
     model = os.environ.get("OPENAI_MODEL", "")
     image_model = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5.0-lite")
     parsed = urllib.parse.urlsplit(base)
-    if (parsed.scheme, parsed.netloc, parsed.path) != ("https", "ark.cn-beijing.volces.com", "/api/plan/v3") or not key or not model:
-        print(json.dumps(dict(schema_version=1, trial_id=request["trial_id"], execution_status="environment_error",
-                              output="请配置 Agent Plan 接口、模型和环境变量凭据。", state={})))
+    if (
+        (parsed.scheme, parsed.netloc, parsed.path)
+        != ("https", "ark.cn-beijing.volces.com", "/api/plan/v3")
+        or not key
+        or not model
+    ):
+        print(
+            json.dumps(
+                dict(
+                    schema_version=1,
+                    trial_id=request["trial_id"],
+                    execution_status="environment_error",
+                    output="请配置 Agent Plan 接口、模型和环境变量凭据。",
+                    state={},
+                )
+            )
+        )
         return
     timeout = float(os.environ.get("AF_EVAL_API_TIMEOUT_SECONDS", "1800"))
     if not 0 < timeout <= 86400:
@@ -48,13 +65,24 @@ def main():
     counters = {"steps": 0, "tool_calls": 0, "tokens": 0, "loop_count": 0}
     run_id = request["trial_id"]
 
+    # 构造当前阶段的事件或打点，保留调用身份与父子关系。
     def event(kind, **fields):
         with lock:
             identifier = f"e{len(events) + 1}"
-            events.append(dict(event_id=identifier, kind=kind, producer_id="example-host", actor_id="agent",
-                               sequence=len(events) + 1, timestamp_us=str(time.time_ns() // 1000), **fields))
+            events.append(
+                dict(
+                    event_id=identifier,
+                    kind=kind,
+                    producer_id="example-host",
+                    actor_id="agent",
+                    sequence=len(events) + 1,
+                    timestamp_us=str(time.time_ns() // 1000),
+                    **fields,
+                )
+            )
         return identifier
 
+    # 校验文件路径属于当前试验工作区，拒绝越界访问。
     def path_in_workspace(name):
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
@@ -64,19 +92,31 @@ def main():
             raise ValueError("path_rejected")
         return path
 
+    # 发送示例宿主所需的 HTTP 请求，使用受限超时并避免输出敏感响应。
     def post(suffix, payload, limit=32 * 1024 * 1024):
-        http = urllib.request.Request(base + suffix, data=json.dumps(payload).encode(),
-                                      headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+        http = urllib.request.Request(
+            base + suffix,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Authorization": "Bearer " + key,
+                "Content-Type": "application/json",
+            },
+        )
         with OPENER.open(http, timeout=timeout) as response:
             body = response.read(limit + 1)
         if len(body) > limit:
             raise ValueError("response_limit")
         return json.loads(body)
 
+    # 路由示例支持的工具调用，执行结果按实际状态记录。
     def tool(name, arguments):
         if name == "read_source":
             source = arguments["name"]
-            return task["initial_state"].get("data_sources", {}).get(source, {"error": "source_not_found", "retryable": False})
+            return (
+                task["initial_state"]
+                .get("data_sources", {})
+                .get(source, {"error": "source_not_found", "retryable": False})
+            )
         if name == "write_file":
             target = path_in_workspace(arguments["path"])
             content = arguments["content"]
@@ -92,25 +132,36 @@ def main():
             return {"path": arguments["path"], "written": True}
         if name == "generate_image":
             from PIL import Image
+
             filename = arguments.get("path", "poster.png")
             target = path_in_workspace(filename)
             with lock:
                 if state.get("image_requested"):
                     return {"error": "image_already_requested", "retryable": False}
                 state["image_requested"] = True
-            result = post("/images/generations", dict(model=image_model, prompt=arguments["prompt"],
-                          size=task["initial_state"].get("image_size", "2K"), response_format="b64_json",
-                          sequential_image_generation="disabled", watermark=True))
+            result = post(
+                "/images/generations",
+                dict(
+                    model=image_model,
+                    prompt=arguments["prompt"],
+                    size=task["initial_state"].get("image_size", "2K"),
+                    response_format="b64_json",
+                    sequential_image_generation="disabled",
+                    watermark=True,
+                ),
+            )
             item = result["data"][0]
             if item.get("b64_json"):
                 image_bytes = base64.b64decode(item["b64_json"], validate=True)
             else:
                 url = item["url"]
                 location = urllib.parse.urlsplit(url)
-                if location.scheme != "https" or not any((location.hostname or "").endswith(suffix)
-                        for suffix in (".volces.com", ".byteimg.com", ".volccdn.com")):
+                if location.scheme != "https" or not any(
+                    (location.hostname or "").endswith(suffix)
+                    for suffix in (".volces.com", ".byteimg.com", ".volccdn.com")
+                ):
                     raise ValueError("image_download_origin_rejected")
-                # Never send the API credential to a signed artifact URL.
+                # 不能把 API 凭据发送到带签名的产物下载地址。
                 with OPENER.open(url, timeout=timeout) as download:
                     image_bytes = download.read(16 * 1024 * 1024 + 1)
             if len(image_bytes) > 16 * 1024 * 1024:
@@ -121,7 +172,12 @@ def main():
                     raise ValueError("image_pixel_limit")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 image.save(target, format="PNG")
-                info = {"decoded": True, "width": image.width, "height": image.height, "path": filename}
+                info = {
+                    "decoded": True,
+                    "width": image.width,
+                    "height": image.height,
+                    "path": filename,
+                }
             with lock:
                 state["image"] = info
                 generated[filename] = "image/png"
@@ -129,14 +185,49 @@ def main():
         raise ValueError("unknown_tool")
 
     definitions = [
-        ("read_source", "读取一个数据源；不同源可并行。", {"name": {"type": "string"}}, ["name"]),
-        ("write_file", "写入测试工作区文件。", {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
-        ("generate_image", "生成、下载并解码一张图片；每个任务最多请求一次。", {"prompt": {"type": "string"}, "path": {"type": "string"}}, ["prompt", "path"]),
+        (
+            "read_source",
+            "读取一个数据源；不同源可并行。",
+            {"name": {"type": "string"}},
+            ["name"],
+        ),
+        (
+            "write_file",
+            "写入测试工作区文件。",
+            {"path": {"type": "string"}, "content": {"type": "string"}},
+            ["path", "content"],
+        ),
+        (
+            "generate_image",
+            "生成、下载并解码一张图片；每个任务最多请求一次。",
+            {"prompt": {"type": "string"}, "path": {"type": "string"}},
+            ["prompt", "path"],
+        ),
     ]
-    tools = [dict(type="function", function=dict(name=name, description=description,
-                  parameters=dict(type="object", properties=properties, required=required, additionalProperties=False)))
-             for name, description, properties, required in definitions]
-    messages = [{"role": "system", "content": (Path(__file__).parent / "agent-system.txt").read_text(encoding="utf-8")}]
+    tools = [
+        dict(
+            type="function",
+            function=dict(
+                name=name,
+                description=description,
+                parameters=dict(
+                    type="object",
+                    properties=properties,
+                    required=required,
+                    additionalProperties=False,
+                ),
+            ),
+        )
+        for name, description, properties, required in definitions
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": (Path(__file__).parent / "agent-system.txt").read_text(
+                encoding="utf-8"
+            ),
+        }
+    ]
     start = event("run.start", input=task["task_input"])
     previous = start
     output, status = "", "completed"
@@ -151,23 +242,66 @@ def main():
             counters["loop_count"] += 1
             iteration = counters["steps"]
             step = f"step-{iteration}"
-            context = dict(execution_id="main", step_id=step, loop_id=f"user-turn-{turn_index + 1}", iteration=iteration)
+            context = dict(
+                execution_id="main",
+                step_id=step,
+                loop_id=f"user-turn-{turn_index + 1}",
+                iteration=iteration,
+            )
             step_start = event("step.start", caused_by=[previous], **context)
             llm_id = f"llm-{iteration}"
-            llm_start = event("action.start", action_id=llm_id, operation="llm.chat", input={"turn": turn_index + 1}, caused_by=[step_start], **context)
+            llm_start = event(
+                "action.start",
+                action_id=llm_id,
+                operation="llm.chat",
+                input={"turn": turn_index + 1},
+                caused_by=[step_start],
+                **context,
+            )
             try:
-                result = post("/chat/completions", dict(model=model, messages=messages, tools=tools,
-                              thinking={"type": "disabled"}, max_tokens=4096))
+                result = post(
+                    "/chat/completions",
+                    dict(
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        thinking={"type": "disabled"},
+                        max_tokens=4096,
+                    ),
+                )
                 choice = result["choices"][0]
                 if choice.get("finish_reason") == "length":
                     raise ValueError("model_output_truncated")
                 message = choice["message"]
-                counters["tokens"] += int(result.get("usage", {}).get("total_tokens", 0))
-                llm_end = event("action.end", action_id=llm_id, status="completed", output={"content": message.get("content") or ""}, caused_by=[llm_start], **context)
+                counters["tokens"] += int(
+                    result.get("usage", {}).get("total_tokens", 0)
+                )
+                llm_end = event(
+                    "action.end",
+                    action_id=llm_id,
+                    status="completed",
+                    output={"content": message.get("content") or ""},
+                    caused_by=[llm_start],
+                    **context,
+                )
             except Exception as exc:
-                code = f"http_{exc.code}" if isinstance(exc, urllib.error.HTTPError) else "model_request_failed"
-                llm_end = event("action.end", action_id=llm_id, status="failed", output={"error": code}, error={"code": code, "retryability": "unknown"}, caused_by=[llm_start], **context)
-                previous = event("step.end", status="failed", caused_by=[llm_end], **context)
+                code = (
+                    f"http_{exc.code}"
+                    if isinstance(exc, urllib.error.HTTPError)
+                    else "model_request_failed"
+                )
+                llm_end = event(
+                    "action.end",
+                    action_id=llm_id,
+                    status="failed",
+                    output={"error": code},
+                    error={"code": code, "retryability": "unknown"},
+                    caused_by=[llm_start],
+                    **context,
+                )
+                previous = event(
+                    "step.end", status="failed", caused_by=[llm_end], **context
+                )
                 output, status = "模型调用未完成，不能声称任务成功。", "failed"
                 break
             calls = message.get("tool_calls") or []
@@ -177,11 +311,27 @@ def main():
             messages.append(assistant)
             if not calls:
                 output = assistant["content"]
-                previous = event("step.end", status="completed", output=output, caused_by=[llm_end], **context)
-                event("loop.decision", decision="stop", reason="当前用户轮已得到答复。", caused_by=[previous], **context)
+                previous = event(
+                    "step.end",
+                    status="completed",
+                    output=output,
+                    caused_by=[llm_end],
+                    **context,
+                )
+                event(
+                    "loop.decision",
+                    decision="stop",
+                    reason="当前用户轮已得到答复。",
+                    caused_by=[previous],
+                    **context,
+                )
                 break
-            if counters["tool_calls"] + len(calls) > int(task["budget"]["max_tool_calls"]):
-                previous = event("step.end", status="failed", caused_by=[llm_end], **context)
+            if counters["tool_calls"] + len(calls) > int(
+                task["budget"]["max_tool_calls"]
+            ):
+                previous = event(
+                    "step.end", status="failed", caused_by=[llm_end], **context
+                )
                 output, status = "达到工具调用预算。", "failed"
                 break
             counters["tool_calls"] += len(calls)
@@ -193,7 +343,14 @@ def main():
                         args = json.loads(call["function"]["arguments"])
                     except (ValueError, TypeError):
                         args = {}
-                    call_start = event("action.start", action_id=call["id"], operation=name, input=args, caused_by=[llm_end], **context)
+                    call_start = event(
+                        "action.start",
+                        action_id=call["id"],
+                        operation=name,
+                        input=args,
+                        caused_by=[llm_end],
+                        **context,
+                    )
                     futures[pool.submit(tool, name, args)] = (call, call_start)
                 ends = []
                 for future in as_completed(futures):
@@ -201,31 +358,90 @@ def main():
                     try:
                         answer = future.result()
                     except Exception as exc:
-                        answer = {"error": f"http_{exc.code}" if isinstance(exc, urllib.error.HTTPError) else "tool_failed", "retryable": False}
-                    fields = dict(action_id=call["id"], status="failed" if answer.get("error") else "completed", output=answer, caused_by=[call_start], **context)
+                        answer = {
+                            "error": f"http_{exc.code}"
+                            if isinstance(exc, urllib.error.HTTPError)
+                            else "tool_failed",
+                            "retryable": False,
+                        }
+                    fields = dict(
+                        action_id=call["id"],
+                        status="failed" if answer.get("error") else "completed",
+                        output=answer,
+                        caused_by=[call_start],
+                        **context,
+                    )
                     if answer.get("error"):
-                        fields["error"] = {"code": answer["error"], "retryability": "retryable" if answer.get("retryable") else "non_retryable"}
+                        fields["error"] = {
+                            "code": answer["error"],
+                            "retryability": "retryable"
+                            if answer.get("retryable")
+                            else "non_retryable",
+                        }
                     ends.append(event("action.end", **fields))
                     completed[call["id"]] = answer
                 for call in calls:
-                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(completed[call["id"]], ensure_ascii=False)})
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(
+                                completed[call["id"]], ensure_ascii=False
+                            ),
+                        }
+                    )
             previous = event("step.end", status="completed", caused_by=ends, **context)
-            event("loop.decision", decision="continue", reason="消费工具结果后继续处理。", caused_by=[previous], **context)
+            event(
+                "loop.decision",
+                decision="continue",
+                reason="消费工具结果后继续处理。",
+                caused_by=[previous],
+                **context,
+            )
         if status != "completed":
             break
-    event("run.end", caused_by=[e["event_id"] for e in events], output=output,
-          outcome={"execution_status": status, "business_status": "unknown"})
-    trace = dict(schema_version=1, trace_kind="trajectory.v1", identity={"run_id": run_id, "agent_id": "agentplan-example",
-                 "user_id": "evaluation-user", "conversation_id": run_id}, events=events)
-    print(json.dumps(dict(schema_version=1, trial_id=run_id, execution_status=status, output=output, state=state,
-                          metrics=counters, trace=trace, artifacts=[{"path": name, "media_type": media} for name, media in generated.items()]), ensure_ascii=False))
+    event(
+        "run.end",
+        caused_by=[e["event_id"] for e in events],
+        output=output,
+        outcome={"execution_status": status, "business_status": "unknown"},
+    )
+    trace = dict(
+        schema_version=1,
+        trace_kind="trajectory.v1",
+        identity={
+            "run_id": run_id,
+            "agent_id": "agentplan-example",
+            "user_id": "evaluation-user",
+            "conversation_id": run_id,
+        },
+        events=events,
+    )
+    print(
+        json.dumps(
+            dict(
+                schema_version=1,
+                trial_id=run_id,
+                execution_status=status,
+                output=output,
+                state=state,
+                metrics=counters,
+                trace=trace,
+                artifacts=[
+                    {"path": name, "media_type": media}
+                    for name, media in generated.items()
+                ],
+            ),
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception:
-        # Provider errors can include signed URLs and credentials. Do not dump
-        # tracebacks, response bodies, or request headers to the evaluator.
+        # 提供方错误可能包含签名 URL 和凭据；禁止输出
+        # 堆栈、响应正文或请求头到评测器。
         print("example_host_failed", file=sys.stderr)
         sys.exit(2)

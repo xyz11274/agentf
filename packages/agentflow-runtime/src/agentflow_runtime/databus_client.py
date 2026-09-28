@@ -149,6 +149,34 @@ class DataBusClient:
             print(f"[timing] databus.get session={_safe_text(self._session_id)} duration_ms={_ms:.1f}",
                   file=sys.stderr)
 
+    def get_strict(self, key: str) -> str | None:
+        """读取关键 sys 值；缺失返回 None，传输/协议错误原样抛出。
+
+        普通 ``get`` 保持旁路 best-effort 语义。完成批等控制面数据必须使用
+        本方法，避免把 UDS 超时误报成“键不存在”。官方客户端会在失败后
+        废弃连接，后续 marker 写入可自动建立新连接。
+        """
+        if not self._client:
+            raise DataBusError("DataBus UDS client is not connected")
+        _t0 = time.monotonic()
+        scoped_key = _scoped_key(self._dialogue_id, key)
+        try:
+            raw = self._client.sys().get(scoped_key, None)
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            safe_raw, _ = redact_secrets(raw)
+            return safe_raw
+        except DataBusError as exc:
+            _log_warn(f"strict get transport failed for key={scoped_key}: {exc}")
+            raise
+        except Exception as exc:
+            _log_warn(f"strict get failed for key={scoped_key}: {exc}")
+            raise DataBusError(f"strict get failed for key={scoped_key}: {exc}") from exc
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.get_strict session={_safe_text(self._session_id)} duration_ms={_ms:.1f}",
+                  file=sys.stderr)
+
     def delete(self, key: str) -> bool:
         """Delete from sys namespace WITH dialogue_id prefix."""
         if not self._client:

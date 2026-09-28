@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "v1-policy-transfer-unseen-20260915",
+  "split_seed": "unseen-v1-policy-transfer-20260915",
+  "split_percent": [
+    60,
+    20,
+    20
+  ],
+  "max_tasks": 30,
+  "max_input_bytes": 8388608,
+  "max_model_calls": 0,
+  "budget": {
+    "max_steps": 60,
+    "max_tool_calls": 80,
+    "timeout_ms": 480000
+  },
+  "sources": [
+    {
+      "kind": "golden",
+      "path": "tasks.jsonl"
+    }
+  ]
+}

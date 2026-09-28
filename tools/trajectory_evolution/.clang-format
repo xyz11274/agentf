@@ -1,0 +1,12 @@
+# 包内统一排版：展开挤在同一行的控制语句，保留现有 include 顺序和注释内容。
+BasedOnStyle: LLVM
+IndentWidth: 2
+ColumnLimit: 100
+SortIncludes: Never
+ReflowComments: false
+FixNamespaceComments: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+SeparateDefinitionBlocks: Always

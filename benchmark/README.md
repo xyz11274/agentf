@@ -38,7 +38,7 @@ benchmark/
     "budget": {"max_steps": 128, "max_tool_calls": 96, "timeout_ms": 1800000},  // 可选
     "checks": [{"id": "...", "op": "action_count", "operation": "image-gen", "max": 1}],  // 可选，确定性检查
     "split": "train|val|holdout",             // 可选（coldstart）
-    "level": "L1|L2|L3",                      // 可选（product 智能等级）
+    "case_level": "L1|L2|L3",                 // 可选：业务用例智能等级，非进化能力等级
     "turns": [{                               // 单轮任务 = turns 长度 1
       "user": "...",
       "expected_skills": ["..."],             // skill 集合；[] = 不应 dispatch（负例）；
@@ -226,7 +226,7 @@ action_count 等确定性检查记 `error`（未知不当零），意图指标�
   无意图 GT（`expected_skills=null`）。
 - **product xlsx**：`测试步骤（语料）`按编号拆轮（支持行内 `1. xxx。2. yyy` 与换行编号）；
   `预期意图`经 `domain_skill_map.json` 映射为 skill 集合，**空标注（如 `1.`）视为未标注（null），
-  不是负例**；`智能等级 L1-L3`→difficulty + `level` 字段；约 1/3 用例无预期结果列，
+  不是负例**；`智能等级 L1-L3`→difficulty + `case_level` 字段，与进化能力 L0–L4 无关；旧用例的 `level` 输入兼容读取，新输出只保留 `case_level`。约 1/3 用例无预期结果列，
   对应轮次由 judge 按通用标准评分（加载时告警统计）。
 - **daily-qa**：原生兼容，`rubric` 自动映射为 `expected_behavior`。
 

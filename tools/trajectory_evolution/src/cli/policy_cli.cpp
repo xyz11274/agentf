@@ -1,3 +1,6 @@
+// 策略命令：处理版本编译、导入导出和可复用策略包。
+// 策略版本与本次运行身份分开；导出不能携带凭据或依赖临时工作目录。
+
 #include "policy_cli.h"
 #include "trajectory_evolution/policy_runtime.h"
 #include "trajectory_evolution/trace.h"
@@ -7,50 +10,62 @@
 #include <google/protobuf/util/json_util.h>
 
 namespace agentflow::trajectory {
-int run_policy_runtime(int argc, char** argv) {
+// 处理策略编译、导出或查询命令，不把命令行解析嵌入运行算法。
+int run_policy_runtime(int argc, char **argv) {
   namespace te = ::trajectory::evolution;
-  if(argc != 3 || (std::string(argv[2]) != "compile" && std::string(argv[2]) != "recompile" && std::string(argv[2]) != "query"
-                  && std::string(argv[2]) != "verify")) {
-    std::cerr << "Usage: trajectory_evolution runtime compile|recompile|query|verify < request.json\n";
+  if (argc != 3 || (std::string(argv[2]) != "compile" && std::string(argv[2]) != "recompile" &&
+                    std::string(argv[2]) != "query" && std::string(argv[2]) != "verify")) {
+    std::cerr
+        << "Usage: trajectory_evolution runtime compile|recompile|query|verify < request.json\n";
     return 2;
   }
   try {
     std::string input;
     std::array<char, 4096> buffer{};
-    while(std::cin) {
+    while (std::cin) {
       std::cin.read(buffer.data(), buffer.size());
       input.append(buffer.data(), static_cast<std::size_t>(std::cin.gcount()));
-      if(input.size() > 2U * 1024U * 1024U) throw std::runtime_error("runtime_request_too_large");
+      if (input.size() > 2U * 1024U * 1024U)
+        throw std::runtime_error("runtime_request_too_large");
     }
     te::v1::RuntimeCommand request;
-    if(!google::protobuf::util::JsonStringToMessage(input, &request).ok())
+    if (!google::protobuf::util::JsonStringToMessage(input, &request).ok())
       throw std::runtime_error("runtime_request_invalid");
     const std::string operation = argv[2];
-    if(operation == "compile") {
-      if(request.has_policy() || request.has_query() || request.has_observation())
+    if (operation == "compile") {
+      if (request.has_policy() || request.has_query() || request.has_observation())
         throw std::runtime_error("runtime_compile_invalid");
       const auto snapshot = te::compile_shadow_policy_file(
           request.memory_path(), request.identity(), request.shadow_options());
-      std::cout << te::to_json(te::compile_runtime_policy(snapshot, request.options()), false) << '\n';
-    } else if(operation == "recompile") {
-      if(!request.has_policy() || !request.has_options() || !request.memory_path().empty()
-          || request.has_identity() || request.has_shadow_options() || request.has_query() || request.has_observation())
+      std::cout << te::to_json(te::compile_runtime_policy(snapshot, request.options()), false)
+                << '\n';
+    } else if (operation == "recompile") {
+      if (!request.has_policy() || !request.has_options() || !request.memory_path().empty() ||
+          request.has_identity() || request.has_shadow_options() || request.has_query() ||
+          request.has_observation())
         throw std::runtime_error("runtime_recompile_invalid");
       const te::PolicyRuntime validated(request.policy());
-      std::cout << te::to_json(te::compile_runtime_policy(request.policy().snapshot(), request.options()), false) << '\n';
+      std::cout << te::to_json(
+                       te::compile_runtime_policy(request.policy().snapshot(), request.options()),
+                       false)
+                << '\n';
     } else {
-      if(!request.memory_path().empty() || request.has_identity() || request.has_shadow_options()
-          || request.has_options() || (operation == "query" && request.has_observation()))
+      if (!request.memory_path().empty() || request.has_identity() ||
+          request.has_shadow_options() || request.has_options() ||
+          (operation == "query" && request.has_observation()))
         throw std::runtime_error("runtime_query_invalid");
       te::PolicyRuntime runtime(request.policy());
-      if(operation == "query") std::cout << te::to_json(runtime.decide(request.query()), false) << '\n';
-      else std::cout << te::to_json(runtime.verify(request.query(), request.observation()), false) << '\n';
+      if (operation == "query")
+        std::cout << te::to_json(runtime.decide(request.query()), false) << '\n';
+      else
+        std::cout << te::to_json(runtime.verify(request.query(), request.observation()), false)
+                  << '\n';
     }
     return 0;
-  } catch(...) {
-    // Fixed diagnostics only: input/model/parser errors may contain secrets.
+  } catch (...) {
+    // 只输出固定诊断，输入、模型和解析错误都可能包含敏感信息。
     std::cout << R"({"status":"error","reason":"runtime_request_failed"})" << '\n';
     return 2;
   }
 }
-}  // namespace agentflow::trajectory
+} // 命名空间结束：agentflow::trajectory

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "prompts": {
+    "episode_system": "prompts/episode-system.txt",
+    "episode_user": "prompts/episode-user.txt",
+    "dialogue_system": "prompts/dialogue-system.txt",
+    "dialogue_user": "prompts/dialogue-user.txt",
+    "meta_reflection_system": "prompts/meta-reflection-system.txt",
+    "meta_reflection_user": "prompts/meta-reflection-user.txt",
+    "memory_curator_system": "prompts/memory-curator-system.txt",
+    "memory_curator_user": "prompts/memory-curator-user.txt",
+    "standard_dialogue_system": "prompts/standard-dialogue-system.txt"
+  },
+  "evaluation": {
+    "max_file_bytes": 268435456,
+    "max_model_calls": 512,
+    "model_selection": "auto",
+    "strict_model": true,
+    "allow_invalid_trace": false,
+    "require_chinese_reason": true
+  },
+  "evolution": {
+    "max_input_files": 100000,
+    "max_candidates": 10000,
+    "min_supporting_dialogues": 2,
+    "min_supporting_episodes": 2,
+    "max_memory_entries": 512,
+    "max_applied_batch_ids": 4096,
+    "max_meta_prompt_bytes": 2097152,
+    "max_memory_bytes": 268435456,
+    "max_memory_match_candidates": 8,
+    "max_memory_match_prompt_bytes": 262144,
+    "max_memory_update_retries": 3,
+    "full_curation_new_entry_threshold": 20,
+    "min_memory_duplicate_confidence": 0.9,
+    "min_memory_relation_confidence": 0.75,
+    "enable_meta_reflection": true,
+    "enable_memory_semantic_matching": true,
+    "require_chinese_reason": true
+  },
+  "model": {
+    "endpoint": "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
+    "model_id": "deepseek-v4-flash",
+    "api_key_env": "OPENAI_API_KEY",
+    "no_api_key": false,
+    "thinking_mode": "disabled",
+    "timeout_ms": 120000,
+    "connect_timeout_ms": 5000,
+    "max_retries": 1,
+    "max_response_bytes": 262144,
+    "max_request_bytes": 2097152,
+    "max_output_tokens": 16384,
+    "sessionlog_max_output_tokens": 16384,
+    "disable_proxy": true
+  }
+}

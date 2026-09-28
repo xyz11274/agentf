@@ -96,12 +96,15 @@ def check_case(case):
             check(f"预约满足 {key}={value}", ok)
         check("返回号源编号和医生", record.get("slot_id") and record.get("doctor"))
     elif cid.startswith("ZJ_JJ_XGCX"):
-        group, outcome = "home_habits", "insufficient_history"
+        group = "home_habits"
         observations = successful("smart-home", "habits")
         check("实际调用历史统计", observations)
-        check("没有虚构历史或为了查询而控制设备", not state.get("home_history"))
-        check("缺历史时不填造模式与时刻", observations and not observations[-1]["UserOutputObject"].get("modeList") and observations[-1]["UserOutputObject"].get("enough_history") is False)
-        notes.append("原始前置条件没有历史，缺少习惯数据不能记为完整习惯任务成功。")
+        check("查询不执行新的设备控制", not successful("smart-home", "control"))
+        if evidence.get('history_days', 0) > 0:
+            check("返回基于快照历史的分析", observations and observations[-1]['UserOutputObject'].get('sample_count', 0) > 0)
+        else:
+            outcome = 'insufficient_history'
+            check("缺历史时不填造模式与时刻", observations and not observations[-1]["UserOutputObject"].get("modeList") and observations[-1]["UserOutputObject"].get("enough_history") is False)
     elif cid.startswith("ZJ_JK_GHCX"):
         check("真实查询预约，空结果允许", successful("health-advice", "appointment_query"))
         check("没有为查询创建预约", not state.get("appointments"))
@@ -133,14 +136,15 @@ def check_case(case):
         notes.append("用例没有给出就诊资料，只能请求补充，不能记为档案更新完成。")
     elif cid.startswith("CK_GUI"):
         group = "gui_plan"
-        amount = 100 if cid.endswith("001") else 88
         plans = state.get("gui", {}).get("plans", [])
-        matches = [p for p in plans if p.get("operation") == "recharge" and p.get("constraints", {}).get("amount") == amount]
-        if cid.endswith("003"):
-            matches = [p for p in matches if p.get("constraints", {}).get("phone_number") == "18610002895"]
-        check("有保存的充值计划且号码/金额正确", matches)
-        check("明确只生成计划，未声称实际支付", matches and all(p.get("execution") == "planned" and p.get("device_connected") is False for p in matches))
-        notes.append("此处验收原数据要求的步骤；没有验证真实手机点击或支付。")
+        check("存在已保存且非空的操作步骤", plans and all(p.get('steps') for p in plans))
+        check("规划与设备执行明确区分", plans and all(p.get('execution') == 'planned' and p.get('device_connected') is False for p in plans))
+        # 不能从 CK_GUI 前缀或编号尾数猜动作/金额。参数正确性由逐轮业务裁判验收。
+        if all(t.get('judge_pass') is True for t in case['turns']) and plans:
+            notes.append('操作对象、参数与步骤已通过逐轮裁判。')
+        else:
+            outcome = 'manual_review'
+            notes.append('结构检查通过不等于业务参数正确；需要逐轮裁判。')
     elif cid in ("QA_JJ_009", "TGJK_YD2_010"):
         group = "conditional"
         weather = successful("web-search", "weather")
@@ -164,7 +168,12 @@ def check_case(case):
             notes.append("天气为湿时不创建提醒是正确分支；原expected_skills仍要求健康skill，原分数保留。徒步文字未自动判定质量。")
     else:
         group, outcome = "text", "manual_review"
-        notes.append("写作/长文翻译需内容评分，不能用非空回复或数据库存在替代质量判断。")
+        turns = case.get('turns', [])
+        if turns and all('execution_evidence' in t and t.get('judge_score') is not None for t in turns):
+            check('逐轮执行证据与内容裁判均通过', all(t.get('business_rule_pass') and t.get('judge_pass') for t in turns))
+            outcome = 'passed'
+        else:
+            notes.append("需要带执行证据的内容评分；非空回复或数据库存在不能替代质量判断。")
     if any(not item["passed"] for item in checks):
         outcome = "failed"
     return {"case_id": cid, "group": group, "outcome": outcome, "checks": checks, "notes": notes,

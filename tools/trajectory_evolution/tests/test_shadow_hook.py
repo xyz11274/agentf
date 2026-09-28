@@ -1,3 +1,7 @@
+# test_shadow_hook 回归验证：检查包内协议、边界条件与失败处理。
+# 本地桩用于重现确定性场景，不代表真实 Agent 或远程模型的业务能力。
+# 测试应同时验证正常路径与拒绝路径，避免错误数据被当成成功结果。
+
 """Shadow Hook 回归：真实 C++ 查询、SDK/UDS、跨进程重入和 SessionLog。"""
 
 from __future__ import annotations
@@ -20,12 +24,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 COMPONENT = ROOT / "tools/trajectory_evolution"
 HOOK = COMPONENT / "integrations/agentflow/shadow_hook.py"
-BINARY = Path(os.environ.get(
-    "TRAJECTORY_EVOLUTION_EXE", ROOT / "build/trajectory-evolution/trajectory_evolution",
-))
+BINARY = Path(
+    os.environ.get(
+        "TRAJECTORY_EVOLUTION_EXE",
+        ROOT / "build/trajectory-evolution/trajectory_evolution",
+    )
+)
 SDK = ROOT / "src/runtime/databus/clients/python"
 
 
+# 测试辅助函数：load_module。
+# 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
 def load_module(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -33,11 +42,15 @@ def load_module(path, name):
     return module
 
 
+# 测试辅助函数：memory_entry。
+# 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
 def memory_entry(name, user="user-a"):
     return {
-        "memory_id": name, "status": "EVOLUTION_MEMORY_STATUS_CANDIDATE",
+        "memory_id": name,
+        "status": "EVOLUTION_MEMORY_STATUS_CANDIDATE",
         "candidate": {
-            "schema_version": 1, "candidate_id": "candidate-" + name,
+            "schema_version": 1,
+            "candidate_id": "candidate-" + name,
             "generator_version": "scoped-experience-generator-v1",
             "target_type": "CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION",
             "target_scope": "coordinator",
@@ -46,62 +59,90 @@ def memory_entry(name, user="user-a"):
             "observed_problem": "缺少图片素材仍反复调用工具",
             "proposed_change": "先请求补充图片素材，独立网络检索继续。",
             "support_user_count": 1,
-            "support_evidence": [{
-                "evidence_id": "evidence-" + name,
-                "source": {"user_id": user, "dialogue_id": "source-" + name},
-            }],
+            "support_evidence": [
+                {
+                    "evidence_id": "evidence-" + name,
+                    "source": {"user_id": user, "dialogue_id": "source-" + name},
+                }
+            ],
         },
     }
 
 
+# 测试辅助函数：memory_store。
+# 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
 def memory_store():
     return {
-        "schema_version": 1, "store_kind": "trajectory_evolution_memory",
-        "store_version": "evolution-memory-store-v1", "revision": "1",
+        "schema_version": 1,
+        "store_kind": "trajectory_evolution_memory",
+        "store_version": "evolution-memory-store-v1",
+        "revision": "1",
         "entries": [memory_entry("a"), memory_entry("b", "user-b")],
     }
 
 
 class Namespace:
+    # 初始化 __init__ 的状态和资源；输入参数的校验与所有权在构造阶段确定。
+    # 对象创建后复用既有配置，实际执行与收尾分别由后续接口负责。
     def __init__(self):
         self.data, self.writes = {}, 0
 
+    # 测试辅助函数：get。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def get(self, key):
         return self.data.get(key)
 
+    # 测试辅助函数：put。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def put(self, key, value):
         self.writes += 1
         self.data[key] = value
         return True
 
+    # 测试辅助函数：remove。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def remove(self, key):
         return self.data.pop(key, None) is not None
 
 
 @pytest.fixture
+# 测试辅助函数：runtime。
+# 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
 def runtime(monkeypatch, tmp_path):
-    assert BINARY.is_file(), "请先构建 trajectory_evolution，或设置 TRAJECTORY_EVOLUTION_EXE"
+    assert BINARY.is_file(), (
+        "请先构建 trajectory_evolution，或设置 TRAJECTORY_EVOLUTION_EXE"
+    )
     from agentflow_runtime.context import AgentContext
     from agentflow_runtime import trace
 
     module = load_module(HOOK, "shadow_hook_test")
     config = json.loads((COMPONENT / "config/shadow.json").read_text())
-    config.update(mode="shadow", memory_path=str(tmp_path / "memory.json"),
-                  executable=str(BINARY.resolve()))
+    config.update(
+        mode="shadow",
+        memory_path=str(tmp_path / "memory.json"),
+        executable=str(BINARY.resolve()),
+    )
     config_path = tmp_path / "shadow.json"
 
+    # 保存当前模块的完整状态，使后台恢复或后续读取能看到一致结果。
     def save():
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
 
-    Path(config["memory_path"]).write_text(json.dumps(memory_store(), ensure_ascii=False))
+    Path(config["memory_path"]).write_text(
+        json.dumps(memory_store(), ensure_ascii=False)
+    )
     save()
     for key, value in {
         "AF_EVOLUTION_SHADOW_CONFIG": str(config_path),
-        "AF_USER_ID": "user-a", "AF_CLIENT_ID": "conversation-a",
-        "AF_DIALOGUE_ID": "run-a", "AF_SESSION_ID": "shared-slot",
+        "AF_USER_ID": "user-a",
+        "AF_CLIENT_ID": "conversation-a",
+        "AF_DIALOGUE_ID": "run-a",
+        "AF_SESSION_ID": "shared-slot",
         "AF_AGENT_PACKAGE_DIR": str(ROOT / "examples/agent/outfit-assistant"),
-        "AF_TRACE_OUTPUT_DIR": str(tmp_path), "AF_SESSIONLOG_ENABLED": "1",
-        "AF_NODE_ID": "coordinator_decide", "AF_SELF_TASK_ID": "coordinator",
+        "AF_TRACE_OUTPUT_DIR": str(tmp_path),
+        "AF_SESSIONLOG_ENABLED": "1",
+        "AF_NODE_ID": "coordinator_decide",
+        "AF_SELF_TASK_ID": "coordinator",
     }.items():
         monkeypatch.setenv(key, value)
     for key in ("AF_EXEC_SKILL_KEY", "AF_BATCH_ID"):
@@ -110,29 +151,63 @@ def runtime(monkeypatch, tmp_path):
     namespace, records = Namespace(), []
     real_namespace = module._namespace
     monkeypatch.setattr(module, "_namespace", lambda config: nullcontext(namespace))
-    monkeypatch.setattr(module, "_record", lambda name, data: records.append((name, data)))
-    ctx = AgentContext(messages=[
-        {"role": "system", "content": "保持原始策略"},
-        {"role": "user", "content": "生成视频但是没有图片素材，请同时完成独立网络检索"},
-        {"role": "tool", "tool_call_id": "t1", "content": "生成视频需要图片素材"},
-    ])
+    monkeypatch.setattr(
+        module, "_record", lambda name, data: records.append((name, data))
+    )
+    ctx = AgentContext(
+        messages=[
+            {"role": "system", "content": "保持原始策略"},
+            {
+                "role": "user",
+                "content": "生成视频但是没有图片素材，请同时完成独立网络检索",
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "生成视频需要图片素材"},
+        ]
+    )
 
+    # 测试辅助函数：fire。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def fire(name="coordinator_v1.before_llm_call", payload=None):
-        module.handle(SimpleNamespace(name=name, payload=payload or {
-            "round": 1, "activation_index": 1, "decision_index": 1,
-        }), ctx)
+        module.handle(
+            SimpleNamespace(
+                name=name,
+                payload=payload
+                or {
+                    "round": 1,
+                    "activation_index": 1,
+                    "decision_index": 1,
+                },
+            ),
+            ctx,
+        )
 
-    return SimpleNamespace(module=module, config=config, save=save, fire=fire, ctx=ctx,
-                           namespace=namespace, records=records, tmp=tmp_path,
-                           real_namespace=real_namespace)
+    return SimpleNamespace(
+        module=module,
+        config=config,
+        save=save,
+        fire=fire,
+        ctx=ctx,
+        namespace=namespace,
+        records=records,
+        tmp=tmp_path,
+        real_namespace=real_namespace,
+    )
 
 
+# 回归用例：test_default_off_has_no_io_or_intervention。
+# 关键断言：assert runtime.ctx == original；此处只验证测试构造的场景。
 def test_default_off_has_no_io_or_intervention(runtime, monkeypatch):
     monkeypatch.delenv("AF_EVOLUTION_SHADOW_CONFIG")
-    monkeypatch.setattr(runtime.module, "_namespace",
-                        lambda _: pytest.fail("disabled attempted DataBus"))
-    monkeypatch.setattr(runtime.module, "_invoke",
-                        lambda *args: pytest.fail("disabled started subprocess"))
+    monkeypatch.setattr(
+        runtime.module,
+        "_namespace",
+        lambda _: pytest.fail("disabled attempted DataBus"),
+    )
+    monkeypatch.setattr(
+        runtime.module,
+        "_invoke",
+        lambda *args: pytest.fail("disabled started subprocess"),
+    )
     original = copy.deepcopy(runtime.ctx)
     for name in runtime.module.HOOK_EVENTS:
         runtime.fire(name)
@@ -140,21 +215,35 @@ def test_default_off_has_no_io_or_intervention(runtime, monkeypatch):
     assert runtime.records == []
 
 
-@pytest.mark.parametrize("protocol_input", [
-    "not-json synthetic-credential-do-not-echo",
-    '{"memory_path":"synthetic-credential-do-not-echo","unknown_field":true}',
-])
+@pytest.mark.parametrize(
+    "protocol_input",
+    [
+        "not-json synthetic-credential-do-not-echo",
+        '{"memory_path":"synthetic-credential-do-not-echo","unknown_field":true}',
+    ],
+)
+# 回归用例：test_cli_rejects_invalid_protocol_without_echo。
+# 重点核验字段或诊断：shadow_request_failed；异常路径不能被当成成功。
 def test_cli_rejects_invalid_protocol_without_echo(runtime, protocol_input):
-    result = subprocess.run([str(BINARY), "shadow", "compile"], input=protocol_input,
-                            capture_output=True, text=True, timeout=5)
+    result = subprocess.run(
+        [str(BINARY), "shadow", "compile"],
+        input=protocol_input,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
     assert result.returncode == 2
     assert "synthetic-credential-do-not-echo" not in result.stdout + result.stderr
     assert json.loads(result.stdout) == {
-        "status": "error", "reason": "shadow_request_failed", "mode": "shadow",
+        "status": "error",
+        "reason": "shadow_request_failed",
+        "mode": "shadow",
         "application_status": "not_applied",
     }
 
 
+# 回归用例：test_run_snapshot_frozen_and_queries_do_not_change_context。
+# 重点核验字段或诊断：max_advice_items；异常路径不能被当成成功。
 def test_run_snapshot_frozen_and_queries_do_not_change_context(runtime, monkeypatch):
     original = copy.deepcopy(runtime.ctx)
     runtime.fire("agent.dialogue.start")
@@ -169,8 +258,10 @@ def test_run_snapshot_frozen_and_queries_do_not_change_context(runtime, monkeypa
     runtime.save()
     runtime.fire("agent.dialogue.start")
     assert runtime.namespace.writes == 1
-    assert all(key.startswith("run-a/_trajectory_evolution/shadow/")
-               for key in runtime.namespace.data)
+    assert all(
+        key.startswith("run-a/_trajectory_evolution/shadow/")
+        for key in runtime.namespace.data
+    )
     for _ in range(5):
         runtime.fire()
         result = runtime.records[-1][1]
@@ -178,8 +269,16 @@ def test_run_snapshot_frozen_and_queries_do_not_change_context(runtime, monkeypa
         assert result["status"] == "matched"
         assert result["application_status"] == "not_applied"
         assert result["advice"][0]["experience"]["memory_id"] == "a"
-    assert len({data["query_id"] for name, data in runtime.records
-                if name == "evolution.shadow.query"}) == 5
+    assert (
+        len(
+            {
+                data["query_id"]
+                for name, data in runtime.records
+                if name == "evolution.shadow.query"
+            }
+        )
+        == 5
+    )
     assert runtime.ctx == original
     monkeypatch.setenv("AF_DIALOGUE_ID", "run-b")
     runtime.config["query_scope"] = "coordinator"
@@ -188,10 +287,15 @@ def test_run_snapshot_frozen_and_queries_do_not_change_context(runtime, monkeypa
     assert runtime.records[-1][1]["snapshot"]["snapshot_id"] != first
 
 
-@pytest.mark.parametrize("field,value,reason", [
-    ("AF_USER_ID", "", "identity_invalid"),
-    ("AF_AGENT_PACKAGE_DIR", "/agents/another-agent", "agent_binding_mismatch"),
-])
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("AF_USER_ID", "", "identity_invalid"),
+        ("AF_AGENT_PACKAGE_DIR", "/agents/another-agent", "agent_binding_mismatch"),
+    ],
+)
+# 回归用例：test_invalid_identity_fails_open。
+# 关键断言：assert runtime.records[-1][1]["reason"] == reason；此处只验证测试构造的场景。
 def test_invalid_identity_fails_open(runtime, monkeypatch, field, value, reason):
     original = copy.deepcopy(runtime.ctx)
     monkeypatch.setenv(field, value)
@@ -201,12 +305,16 @@ def test_invalid_identity_fails_open(runtime, monkeypatch, field, value, reason)
     assert runtime.ctx == original
 
 
+# 回归用例：test_no_lazy_compile_and_compile_failure_is_not_retried。
+# 重点核验字段或诊断：run_not_initialized；异常路径不能被当成成功。
 def test_no_lazy_compile_and_compile_failure_is_not_retried(runtime, monkeypatch):
     original = copy.deepcopy(runtime.ctx)
     runtime.fire()
     assert runtime.records[-1][1]["reason"] == "run_not_initialized"
     attempts = []
 
+    # 测试辅助函数：timeout。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def timeout(*args):
         attempts.append(1)
         raise subprocess.TimeoutExpired("test-component", 0.01)
@@ -222,6 +330,8 @@ def test_no_lazy_compile_and_compile_failure_is_not_retried(runtime, monkeypatch
     assert not runtime.namespace.data
 
 
+# 回归用例：test_one_corrupt_run_does_not_affect_another_user。
+# 关键断言：assert runtime.records[-1][1]["status"] == "error"；此处只验证测试构造的场景。
 def test_one_corrupt_run_does_not_affect_another_user(runtime, monkeypatch):
     runtime.fire("agent.dialogue.start")
     key = runtime.module._state_key(runtime.module._identity(runtime.config))
@@ -239,6 +349,8 @@ def test_one_corrupt_run_does_not_affect_another_user(runtime, monkeypatch):
     assert "user-a" not in json.dumps(result)
 
 
+# 回归用例：test_privacy_truncation_and_text_only_context。
+# 关键断言：assert result["status"] == "matched"；此处只验证测试构造的场景。
 def test_privacy_truncation_and_text_only_context(runtime, monkeypatch):
     secret = "synthetic-shadow-vendor-" + "z" * 24
     monkeypatch.setenv("ANY_VENDOR_TEST_KEY", secret)
@@ -249,10 +361,21 @@ def test_privacy_truncation_and_text_only_context(runtime, monkeypatch):
     unsafe["candidate"]["proposed_change"] = "生成视频图片素材 " + secret
     store["entries"].append(unsafe)
     Path(runtime.config["memory_path"]).write_text(json.dumps(store))
-    runtime.ctx.messages.append({"role": "user", "content": [
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,private"}},
-        {"type": "text", "text": "生成视频图片素材 " + secret + " 长文本" * 10000},
-    ]})
+    runtime.ctx.messages.append(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,private"},
+                },
+                {
+                    "type": "text",
+                    "text": "生成视频图片素材 " + secret + " 长文本" * 10000,
+                },
+            ],
+        }
+    )
     original = copy.deepcopy(runtime.ctx)
     runtime.fire("agent.dialogue.start")
     runtime.fire()
@@ -270,6 +393,8 @@ def test_privacy_truncation_and_text_only_context(runtime, monkeypatch):
 
 
 @pytest.mark.parametrize("version", ["v1", "v2"])
+# 回归用例：test_real_hook_loader_and_sessionlog_causal_links。
+# 重点核验字段或诊断：trajectory_evolution_shadow_v1、source_event_ids；异常路径不能被当成成功。
 def test_real_hook_loader_and_sessionlog_causal_links(runtime, monkeypatch, version):
     from agentflow_runtime.hooks import engine
     from agentflow_runtime.hooks.loader import load_hooks_from_dir
@@ -278,7 +403,9 @@ def test_real_hook_loader_and_sessionlog_causal_links(runtime, monkeypatch, vers
 
     hooks_dir = runtime.tmp / "hooks"
     hooks_dir.mkdir()
-    (hooks_dir / "sessionlog_hook.py").symlink_to(ROOT / "docs/sessionlog/sessionlog_hook.py")
+    (hooks_dir / "sessionlog_hook.py").symlink_to(
+        ROOT / "docs/sessionlog/sessionlog_hook.py"
+    )
     (hooks_dir / "shadow_hook.py").symlink_to(HOOK)
     registry = HookRegistry()
     loaded = load_hooks_from_dir(str(hooks_dir), registry)
@@ -294,25 +421,51 @@ def test_real_hook_loader_and_sessionlog_causal_links(runtime, monkeypatch, vers
             data["_get_databus"] = lambda: None
             data["_current_span_id"] = lambda: "llm-span-1"
     monkeypatch.setattr(observability, "emit_event", lambda *args: None)
-    monkeypatch.setattr(hooks, "trigger", lambda name, payload:
-                        engine.trigger(name, payload, registry=registry))
+    monkeypatch.setattr(
+        hooks,
+        "trigger",
+        lambda name, payload: engine.trigger(name, payload, registry=registry),
+    )
     original = copy.deepcopy(runtime.ctx)
 
+    # 发送一份已构造的协议请求，保持请求身份、超时和响应上限。
     def send(name, payload):
         prior = copy.deepcopy(payload)
-        assert engine.trigger(name, payload, ctx=runtime.ctx, registry=registry) == prior
+        assert (
+            engine.trigger(name, payload, ctx=runtime.ctx, registry=registry) == prior
+        )
 
-    send("agent.dialogue.start", {"input": "生成视频缺少图片素材", "trigger_type": "first"})
+    send(
+        "agent.dialogue.start",
+        {"input": "生成视频缺少图片素材", "trigger_type": "first"},
+    )
     send("coordinator.trigger", {"trigger_type": "first", "activation_index": 1})
-    send("coordinator_" + version + ".before_llm_call",
-         {"model": "test-model", "round": 1, "activation_index": 1, "decision_index": 1})
-    send("coordinator.llm_result", {
-        "call_id": "llm-1", "skill_name": "coordinator", "round": 1,
-        "response": {"choices": [{"message": {
-            "role": "assistant", "content": "请补充图片素材",
-        }, "finish_reason": "stop"}]},
-    })
-    send("agent.dialogue.end", {"status": "completed", "response_text": "请补充图片素材"})
+    send(
+        "coordinator_" + version + ".before_llm_call",
+        {"model": "test-model", "round": 1, "activation_index": 1, "decision_index": 1},
+    )
+    send(
+        "coordinator.llm_result",
+        {
+            "call_id": "llm-1",
+            "skill_name": "coordinator",
+            "round": 1,
+            "response": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "请补充图片素材",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        },
+    )
+    send(
+        "agent.dialogue.end", {"status": "completed", "response_text": "请补充图片素材"}
+    )
     assert runtime.ctx == original
     assert not runtime.namespace.data
     files = list((runtime.tmp / "sessionlogs/by-user").glob("*/*/run-a.jsonl"))
@@ -324,7 +477,10 @@ def test_real_hook_loader_and_sessionlog_causal_links(runtime, monkeypatch, vers
     assert observation["data"]["status"] == "matched"
     assert observation["source_event_ids"] == [request["event_id"]]
     assert observation["span_id"] == observation["data"]["decision_id"] == "llm-span-1"
-    assert observation["data"]["snapshot_id"] == snapshot["data"]["snapshot"]["snapshot_id"]
+    assert (
+        observation["data"]["snapshot_id"]
+        == snapshot["data"]["snapshot"]["snapshot_id"]
+    )
     assert observation["data"]["application_status"] == "not_applied"
     assert all(row["type"] != "advice.applied" for row in rows)
     assert rows[0]["user_id"] == "user-a"
@@ -332,9 +488,13 @@ def test_real_hook_loader_and_sessionlog_causal_links(runtime, monkeypatch, vers
 
 
 @pytest.fixture
+# 测试辅助函数：rpc_server。
+# 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
 def rpc_server(tmp_path):
     # 真实 SDK 的 JSON-RPC 协议；仅服务测试内存，不启动 AgentFlow daemon。
     class Handler(socketserver.StreamRequestHandler):
+        # 测试辅助函数：handle。
+        # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
         def handle(self):
             with self.server.guard:
                 self.server.connections += 1
@@ -348,13 +508,26 @@ def rpc_server(tmp_path):
                             self.server.data[key] = params["value"]
                             result = {"success": True}
                         elif request["method"] == "get":
-                            result = {"exists": key in self.server.data,
-                                      "value": self.server.data.get(key)}
+                            result = {
+                                "exists": key in self.server.data,
+                                "value": self.server.data.get(key),
+                            }
                         else:
-                            result = {"success": self.server.data.pop(key, None) is not None}
-                    self.wfile.write((json.dumps({
-                        "jsonrpc": "2.0", "id": request["id"], "result": result,
-                    }) + "\n").encode())
+                            result = {
+                                "success": self.server.data.pop(key, None) is not None
+                            }
+                    self.wfile.write(
+                        (
+                            json.dumps(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": request["id"],
+                                    "result": result,
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
                     self.wfile.flush()
             finally:
                 with self.server.guard:
@@ -379,7 +552,11 @@ def rpc_server(tmp_path):
     Path(socket_path).unlink(missing_ok=True)
 
 
-def test_sdk_connection_closed_on_return_and_exception(runtime, monkeypatch, rpc_server):
+# 回归用例：test_sdk_connection_closed_on_return_and_exception。
+# 关键断言：assert namespace.put("test-key", "value")；此处只验证测试构造的场景。
+def test_sdk_connection_closed_on_return_and_exception(
+    runtime, monkeypatch, rpc_server
+):
     monkeypatch.syspath_prepend(str(SDK))
     monkeypatch.setenv("AF_DATABUS_UDS_FILE", rpc_server.server_address)
     for fail in (False, True):
@@ -396,6 +573,8 @@ def test_sdk_connection_closed_on_return_and_exception(runtime, monkeypatch, rpc
         assert rpc_server.connections == 0
 
 
+# 回归用例：test_real_subprocess_reentry_two_users_three_conversations。
+# 关键断言：assert result.returncode == 0, "Shadow 子进程失败"；此处只验证测试构造的场景。
 def test_real_subprocess_reentry_two_users_three_conversations(runtime, rpc_server):
     code = r"""
 import importlib.util, json, sys
@@ -410,14 +589,27 @@ ctx = AgentContext(messages=[{"role":"user","content":"生成视频但是没有�
 for name in request:
     module.handle(HookEvent(name=name, payload={"round":1}), ctx)
 """
+
+    # 测试辅助函数：worker。
+    # 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
     def worker(user, conv, names):
-        env = dict(os.environ, AF_USER_ID=user, AF_CLIENT_ID=conv,
-                   AF_DIALOGUE_ID="run-" + conv,
-                   AF_DATABUS_UDS_FILE=rpc_server.server_address,
-                   PYTHONPATH=os.pathsep.join((str(SDK), str(ROOT / "packages/agentflow-runtime/src"))))
+        env = dict(
+            os.environ,
+            AF_USER_ID=user,
+            AF_CLIENT_ID=conv,
+            AF_DIALOGUE_ID="run-" + conv,
+            AF_DATABUS_UDS_FILE=rpc_server.server_address,
+            PYTHONPATH=os.pathsep.join(
+                (str(SDK), str(ROOT / "packages/agentflow-runtime/src"))
+            ),
+        )
         result = subprocess.run(
-            [sys.executable, "-c", code, str(HOOK)], input=json.dumps(names),
-            capture_output=True, text=True, env=env, timeout=10,
+            [sys.executable, "-c", code, str(HOOK)],
+            input=json.dumps(names),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
         )
         assert result.returncode == 0, "Shadow 子进程失败"
         return [json.loads(line)["data"] for line in result.stdout.splitlines()]
@@ -433,9 +625,15 @@ for name in request:
     store["entries"][0]["candidate"]["proposed_change"] = "这条新经验不应进入既有 Run"
     Path(runtime.config["memory_path"]).write_text(json.dumps(store))
     with ThreadPoolExecutor(max_workers=3) as pool:
-        second = list(pool.map(lambda item: worker(
-            *item, ["coordinator_v1.before_llm_call"] * 3 + ["agent.dialogue.end"],
-        ), identities))
+        second = list(
+            pool.map(
+                lambda item: worker(
+                    *item,
+                    ["coordinator_v1.before_llm_call"] * 3 + ["agent.dialogue.end"],
+                ),
+                identities,
+            )
+        )
     for identity, earlier, later in zip(identities, first, second):
         for result in later:
             assert result["status"] == "matched"

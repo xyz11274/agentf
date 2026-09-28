@@ -1,3 +1,9 @@
+// go 客户端：通过统一协议收集执行事件并接收策略建议。
+// 传输与业务执行分离；接收回执不代表 Agent 已完成整个任务。
+// 打点的输入是建议修改前的请求，执行后必须回传实际输入、输出与状态。
+// 取消、超时和采集缺口需要显式处理，不能把缺失证据当成正常完成。
+// 本文件包含协议验证或接入示例，不作为真实业务效果的评测成绩。
+
 package evolution
 
 import (
@@ -12,6 +18,8 @@ import (
 	"time"
 )
 
+// 回归用例：testClient。
+// 构造本函数中的固定输入并核验状态与返回结果；不发起真实业务实验。
 func testClient(t *testing.T) (*Client, *[]map[string]any) {
 	t.Helper()
 	var lock sync.Mutex
@@ -54,6 +62,8 @@ func testClient(t *testing.T) (*Client, *[]map[string]any) {
 	return client, &requests
 }
 
+// 回归用例：TestCallExecutesOnceAndExposesReceipts。
+// 构造本函数中的固定输入并核验状态与返回结果；不发起真实业务实验。
 func TestCallExecutesOnceAndExposesReceipts(t *testing.T) {
 	client, _ := testClient(t)
 	calls := 0
@@ -72,6 +82,8 @@ func TestCallExecutesOnceAndExposesReceipts(t *testing.T) {
 	}
 }
 
+// 回归用例：TestCallRejectsWithoutExecutingAndPreservesHostError。
+// 构造本函数中的固定输入并核验状态与返回结果；不发起真实业务实验。
 func TestCallRejectsWithoutExecutingAndPreservesHostError(t *testing.T) {
 	client, _ := testClient(t)
 	calls := 0
@@ -96,6 +108,8 @@ func TestCallRejectsWithoutExecutingAndPreservesHostError(t *testing.T) {
 	}
 }
 
+// 回归用例：TestLoopProtocolsAndExplicitOperations。
+// 构造本函数中的固定输入并核验状态与返回结果；不发起真实业务实验。
 func TestLoopProtocolsAndExplicitOperations(t *testing.T) {
 	client, requests := testClient(t)
 	contextDecision := client.CheckLoop(context.Background(), map[string]any{"state": "stop"}, time.Second)
