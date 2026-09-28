@@ -20,7 +20,7 @@ benchmark/
 │   ├── coldstart.json    #   60 case / 60 轮（单轮任务，无意图 GT，split=train/val/holdout）
 │   ├── product.json      #   1074 case / 1910 轮（多轮多意图，GT 已映射为 skill 集合）
 │   ├── daily-qa.json     #   25 case / 86 轮（多轮对话）
-│   └── hotpotqa.json     # 700 case / 700 轮（HotpotQA 多跳问答，单轮，无意图 GT，split=train/val）
+│   └── hotpotqa.json     # 900 case / 900 轮（HotpotQA 多跳问答，单轮，无意图 GT，split=train/val/holdout）
 ├── reports/              # 评测报告输出
 └── README.md
 ```
@@ -38,7 +38,7 @@ benchmark/
     "constraints": ["..."],                   // 题目约束（进入 judge 上下文）
     "budget": {"max_steps": 128, "max_tool_calls": 96, "timeout_ms": 1800000},  // 可选
     "checks": [{"id": "...", "op": "action_count", "operation": "image-gen", "max": 1}],  // 可选，确定性检查
-    "split": "train|val|holdout",             // 可选（coldstart）
+    "split": "train|val|holdout",             // 可选（coldstart / hotpotqa）
     "case_level": "L1|L2|L3",                 // 可选：业务用例智能等级，非进化能力等级
     "turns": [{                               // 单轮任务 = turns 长度 1
       "user": "...",
@@ -78,7 +78,7 @@ python3 run_eval.py --evalset datasets/product.json --baseline reports/report-ol
 python3 converters.py ../trace_output/v1-l4-coldstart/dataset/{train,val,holdout}.jsonl -o datasets/coldstart.json
 python3 converters.py ../test_cases/product/*.xlsx -o datasets/product.json
 python3 converters.py ../examples/agent/daily-qa-assistant/evals/evalset.json -o datasets/daily-qa.json
-python3 converters.py ../test_cases/opensource/hotpot_train_500.json ../test_cases/opensource/hotpot_dev_200.json -o datasets/hotpotqa.json
+python3 converters.py ../test_cases/opensource/hotpot_train_500.json ../test_cases/opensource/hotpot_dev_200.json ../test_cases/opensource/hotpot_dev_holdout_200.json -o datasets/hotpotqa.json
 ```
 
 ## 离线自进化（GEPA）使用说明
@@ -231,6 +231,9 @@ action_count 等确定性检查记 `error`（未知不当零），意图指标�
   不是负例**；`智能等级 L1-L3`→difficulty + `case_level` 字段，与进化能力 L0–L4 无关；旧用例的 `level` 输入兼容读取，新输出只保留 `case_level`。约 1/3 用例无预期结果列，
   对应轮次由 judge 按通用标准评分（加载时告警统计）。
 - **daily-qa**：原生兼容，`rubric` 自动映射为 `expected_behavior`。
+- **hotpotqa**：原始样本（`context`）按 EvoAgentX 格式平铺成单轮 `Context:…Question:…Answer:` 提示，
+  标准答案入 `expected_behavior`，无意图 GT（`expected_skills=null`）；`split` 由文件名推断
+  （`*train*`→train、`*dev*`→val、`*holdout*`→holdout），id 前缀随之生成，保证三 split 不重叠。
 
 ## 待办
 
