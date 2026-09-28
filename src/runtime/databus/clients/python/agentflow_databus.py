@@ -458,28 +458,37 @@ class DataBusClient:
         """Get the socket path."""
         return self._socket_path
 
+    def _disconnect_unlocked(self):
+        """调用方持有 ``_lock`` 时关闭并作废当前连接。"""
+        if self._socket:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
+        self._socket = None
+        self._connected = False
+
+    def _connect_unlocked(self):
+        """调用方持有 ``_lock`` 时建立连接。"""
+        if self._connected and self._socket is not None:
+            return
+        self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            self._socket.connect(self._socket_path)
+            self._connected = True
+        except Exception as e:
+            self._disconnect_unlocked()
+            raise DataBusError(f"Failed to connect to {self._socket_path}: {e}") from e
+
     def _connect(self):
         """Connect to the Unix Domain Socket."""
         with self._lock:
-            if self._connected:
-                return
-
-            self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            try:
-                self._socket.connect(self._socket_path)
-                self._connected = True
-            except Exception as e:
-                self._socket.close()
-                self._socket = None
-                raise DataBusError(f"Failed to connect to {self._socket_path}: {e}")
+            self._connect_unlocked()
 
     def close(self):
         """Close the connection."""
         with self._lock:
-            if self._socket:
-                self._socket.close()
-                self._socket = None
-            self._connected = False
+            self._disconnect_unlocked()
 
     def __enter__(self):
         return self
@@ -515,6 +524,11 @@ class DataBusClient:
             }
 
             try:
+                # 超时连接中可能残留迟到响应；下次请求前必须重连，
+                # 不能把旧响应错当成新请求的结果。
+                if not self._connected or self._socket is None:
+                    self._connect_unlocked()
+
                 # Set socket timeout
                 self._socket.settimeout(self._timeout_seconds)
 
@@ -534,6 +548,11 @@ class DataBusClient:
 
                 response_str = response_data.decode('utf-8').strip()
                 response = json.loads(response_str)
+                actual_id = response.get("id")
+                if actual_id != request_id:
+                    raise DataBusError(
+                        f"Mismatched response id: expected {request_id}, got {actual_id}"
+                    )
 
                 # Check for error
                 if "error" in response:
@@ -545,13 +564,20 @@ class DataBusClient:
 
                 return response.get("result", {})
 
-            except socket.timeout:
-                raise DataBusError(f"Request timeout after {self._timeout_seconds}s")
+            except JSONRPCError:
+                raise
+            except socket.timeout as e:
+                self._disconnect_unlocked()
+                raise DataBusError(f"Request timeout after {self._timeout_seconds}s") from e
             except socket.error as e:
-                self._connected = False
-                raise DataBusError(f"Socket error: {e}")
+                self._disconnect_unlocked()
+                raise DataBusError(f"Socket error: {e}") from e
             except json.JSONDecodeError as e:
-                raise DataBusError(f"Invalid JSON response: {e}")
+                self._disconnect_unlocked()
+                raise DataBusError(f"Invalid JSON response: {e}") from e
+            except DataBusError:
+                self._disconnect_unlocked()
+                raise
 
     def sys(self, dialogue_id: Optional[str] = None) -> NamespaceClient:
         """

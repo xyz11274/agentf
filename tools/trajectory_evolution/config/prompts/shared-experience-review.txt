@@ -6,3 +6,4 @@ decision 只能为 new、duplicate、conflict、reject、uncertain。duplicate �
 仅凭同一条任务成功不能证明全面提升。存在不确定性时不得放行。
 只返回 JSON：{"decision":"new","match_id":"","privacy_safe":true,"generalizable":true,"supported":true,"non_overriding":true,"confidence":0.95}。
 这些布尔字段必须逐一审查，不是固定填写 true。不要额外字段、Markdown 或解释。
+若有 evidence_context，必须结合其中的本轮输入、业务要求及引用事件核验 source 和 draft，而不是把 source 当作正确答案。agent_report 只是模型声明，execution_status=completed 只代表调用结束；业务成功以工具输出及要求为准。片段标注 preview_only/omitted_evidence 时不能把省略内容判为未发生。实时任务不能用“无法核验”作为凭旧知识回答的许可；测试工具/快照的限制不能泛化成正式环境限制。无法确认充分性时返回 uncertain 或 reject，保留私有来源，不影响其他经验。

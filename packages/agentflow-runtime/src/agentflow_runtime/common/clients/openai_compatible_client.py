@@ -144,8 +144,8 @@ class OpenAiCompatibleClient(LlmClient):
         model: str,
         base_url: str,
         api_key: str,
-        max_retries: int = 0,
-        retry_base_delay: float = 1.0,
+        max_retries: int = 4,
+        retry_base_delay: float = 2.0,
         connect_timeout: int = 5,
         request_timeout: int = 120,
     ):

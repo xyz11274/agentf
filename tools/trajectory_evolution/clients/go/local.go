@@ -1,3 +1,8 @@
+// go 客户端：通过统一协议收集执行事件并接收策略建议。
+// 原生入口复用包内 C ABI；注意句柄生命周期与跨语言内存释放。
+// 打点的输入是建议修改前的请求，执行后必须回传实际输入、输出与状态。
+// 取消、超时和采集缺口需要显式处理，不能把缺失证据当成正常完成。
+
 package evolution
 
 import (
@@ -11,9 +16,9 @@ import (
 	"time"
 )
 
-// LocalOptions configures the in-process runtime. LibraryPath is resolved at
-// startup only; an empty value uses TRAJECTORY_EVOLUTION_LOCAL_LIBRARY and then
-// the operating system's normal libtrajectory_evolution_local.so search path.
+// LocalOptions 配置进程内运行时；LibraryPath 只在启动时解析。
+// 留空时优先读取 TRAJECTORY_EVOLUTION_LOCAL_LIBRARY 环境配置，
+// 其次按操作系统默认规则寻找 libtrajectory_evolution_local.so。
 type LocalOptions struct {
 	LibraryPath        string
 	MaxRequestBytes    int
@@ -24,8 +29,8 @@ type LocalOptions struct {
 	ContentionBudgetUS int
 }
 
-// LocalEvolution is a typed Go binding to the stable te_local_* C ABI. It does
-// no HTTP or process spawning and may be shared by concurrent goroutines.
+// LocalEvolution 是稳定 te_local_* C 接口的类型化 Go 绑定。
+// 它不发 HTTP、不创建子进程，可被多个协程共享。
 type LocalEvolution struct {
 	mu       sync.RWMutex
 	native   localNative
@@ -43,8 +48,8 @@ type localNative interface {
 	close()
 }
 
-// OpenLocal loads the shared library at runtime and creates one reusable local
-// runtime. No library path is embedded into the Go binary at build time.
+// OpenLocal 在运行时加载动态库，并创建一个可复用的本地运行时。
+// Go 编译产物不嵌入开发机的动态库路径。
 func OpenLocal(configPath, bearer string, options LocalOptions) (*LocalEvolution, error) {
 	if configPath == "" || bearer == "" || strings.IndexByte(configPath, 0) >= 0 || strings.IndexByte(bearer, 0) >= 0 {
 		return nil, &Error{Code: "local_configuration_missing"}
@@ -79,6 +84,7 @@ func OpenLocal(configPath, bearer string, options LocalOptions) (*LocalEvolution
 		gaps: &pointGaps{runs: make(map[string]bool)}}, nil
 }
 
+// 序列化本地运行时选项，字段遵守稳定 C 接口契约。
 func localOptionsJSON(options LocalOptions) ([]byte, error) {
 	fields := make(map[string]any, 6)
 	if options.MaxRequestBytes != 0 {
@@ -102,8 +108,9 @@ func localOptionsJSON(options LocalOptions) ([]byte, error) {
 	return json.Marshal(fields)
 }
 
-// Close waits for in-flight native calls, closes the runtime, and unloads the
-// shared library. It is safe to call more than once.
+// Close 等待在途原生调用结束，关闭运行时后卸载动态库。
+// 重复关闭也是安全的。
+// 安全关闭资源，等待在途调用结束并避免重复释放。
 func (c *LocalEvolution) Close() {
 	if c == nil {
 		return
@@ -117,6 +124,7 @@ func (c *LocalEvolution) Close() {
 	}
 }
 
+// 构造标准协议请求，补齐操作名称与幂等身份。
 func (c *LocalEvolution) request(ctx context.Context, operation string, fields map[string]any, requestID string, management bool) (map[string]any, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -179,17 +187,20 @@ func (c *LocalEvolution) request(ctx context.Context, operation string, fields m
 	return envelope.Result, nil
 }
 
-// Invoke calls any L0-L3 hot-path operation through the in-process runtime.
+// Invoke 通过进程内运行时执行 L0–L3 热路径操作。
+// 执行当前客户端协议请求，校验响应并保留请求身份。
 func (c *LocalEvolution) Invoke(ctx context.Context, operation string, fields map[string]any, requestID string) (map[string]any, error) {
 	return c.request(ctx, operation, fields, requestID, false)
 }
 
-// Manage invokes blocking agent_evaluation.* operations. Keep this off Agent
-// request paths; unlike Invoke, it may perform evaluation or storage work.
+// Manage 用于阻塞式 agent_evaluation.* 管理操作，不应放在 Agent 请求路径。
+// 与 Invoke 不同，它可能执行评测或存储工作。
+// 执行后台评测管理操作，不能用于主 Agent 低延迟边界。
 func (c *LocalEvolution) Manage(ctx context.Context, operation string, fields map[string]any, requestID string) (map[string]any, error) {
 	return c.request(ctx, operation, fields, requestID, true)
 }
 
+// 为本地打点故障构造原输入与降级标记，保持业务继续。
 func localPointFallback(fields map[string]any) map[string]any {
 	parent, _ := fields["context"].(map[string]any)
 	pointContext := make(map[string]any, len(parent)+3)
@@ -216,6 +227,7 @@ func localPointFallback(fields map[string]any) map[string]any {
 		"ended": false, "reason": "local_unavailable"}
 }
 
+// 合并已有回执和降级状态，保留先前完整性缺口。
 func mergeLocalFallback(fields, observed map[string]any) map[string]any {
 	result := localPointFallback(fields)
 	for key, value := range observed {
@@ -224,6 +236,7 @@ func mergeLocalFallback(fields, observed map[string]any) map[string]any {
 	return result
 }
 
+// 以最小内容记录缺口，避免失败重试再次暴露原始载荷。
 func (c *LocalEvolution) reportGap(ctx context.Context, fields map[string]any) {
 	gap := map[string]any{"reason": "observer_unavailable"}
 	if reference, ok := fields["ref"].(map[string]any); ok {
@@ -240,8 +253,9 @@ func (c *LocalEvolution) reportGap(ctx context.Context, fields map[string]any) {
 	_, _ = c.request(ctx, "capture.gap", gap, "", false)
 }
 
-// Point is fail-open: observer faults never become Agent faults. budget is kept
-// for source compatibility with Client; local contention has its own bound.
+// Point 在观察失败时保持业务放行；budget 参数保留客户端兼容性，
+// 本地锁竞争使用独立的有界等待设置。
+// 提交单个打点，保持策略准备在业务执行前、结果采集在执行后。
 func (c *LocalEvolution) Point(ctx context.Context, fields map[string]any, budget time.Duration) (result map[string]any) {
 	request := cloneFields(fields)
 	ref, _ := request["ref"].(map[string]any)
@@ -278,8 +292,9 @@ func (c *LocalEvolution) Point(ctx context.Context, fields map[string]any, budge
 	return observed
 }
 
-// Call executes the business function at most once and returns its original
-// error unchanged. Observation failures are visible only in the receipts.
+// Call 最多执行一次业务函数，并原样返回业务错误。
+// 观测失败只体现在回执中。
+// 最多执行一次宿主业务操作，策略拒绝时不调用业务回调。
 func (c *LocalEvolution) Call(ctx context.Context, fields map[string]any, execute func(any) (any, error), budget time.Duration) (CallResult, error) {
 	beforeFields := cloneFields(fields)
 	beforeFields["phase"] = "before"
@@ -322,6 +337,7 @@ func (c *LocalEvolution) Call(ctx context.Context, fields map[string]any, execut
 	return CallResult{Output: output, Before: before, After: after, Executed: true}, nil
 }
 
+// 返回循环守卫与提交回执，保留两种打点协议。
 func (c *LocalEvolution) CheckLoop(ctx context.Context, fields map[string]any, budget time.Duration) LoopDecision {
 	request := cloneFields(fields)
 	request["kind"] = "loop"
@@ -343,14 +359,17 @@ func (c *LocalEvolution) CheckLoop(ctx context.Context, fields map[string]any, b
 	return result
 }
 
+// 取得并提交循环决定，返回是否允许继续。
 func (c *LocalEvolution) AllowLoop(ctx context.Context, fields map[string]any, budget time.Duration) bool {
 	return c.CheckLoop(ctx, fields, budget).Allow
 }
 
+// 显式记录采集缺口，不将缺失轨迹作为完整样本。
 func (c *LocalEvolution) CaptureGap(ctx context.Context, fields map[string]any) (map[string]any, error) {
 	return c.Invoke(ctx, "capture.gap", fields, "")
 }
 
+// 读取组件运行指标，不触发业务执行或模型请求。
 func (c *LocalEvolution) Metrics() (map[string]any, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -368,6 +387,7 @@ func (c *LocalEvolution) Metrics() (map[string]any, error) {
 	return result, nil
 }
 
+// 切换附加进化能力，宿主原执行流程仍可独立运行。
 func (c *LocalEvolution) SetEnabled(enabled bool) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -377,7 +397,8 @@ func (c *LocalEvolution) SetEnabled(enabled bool) error {
 	return c.native.setEnabled(enabled)
 }
 
-// Drain is a blocking maintenance/shutdown operation, not an Agent boundary.
+// Drain 是阻塞式维护或关闭操作，不是 Agent 业务打点。
+// 等待已接受的缓冲工作完成，仅在维护或关闭阶段使用。
 func (c *LocalEvolution) Drain() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -387,5 +408,8 @@ func (c *LocalEvolution) Drain() error {
 	return c.native.drain()
 }
 
-func (c *LocalEvolution) String() string   { return "LocalEvolution" }
+// 返回安全对象描述，而非完整敏感配置。
+func (c *LocalEvolution) String() string { return "LocalEvolution" }
+
+// 生成供调试打印的安全对象表示，不暴露凭据。
 func (c *LocalEvolution) GoString() string { return c.String() }

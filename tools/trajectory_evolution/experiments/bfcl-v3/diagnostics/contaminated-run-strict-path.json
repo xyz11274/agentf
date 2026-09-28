@@ -1,0 +1,92 @@
+{
+  "captured_at": "2026-09-27T14:52:02.843981+00:00",
+  "reason": "BFCL strict check path bug",
+  "config_before_fix": {
+    "check_path": "/output/bfcl_valid",
+    "actual_multirun_path": "/output/final/bfcl_valid"
+  },
+  "completed_tasks": 110,
+  "batches": [
+    {
+      "batch": "001",
+      "trials": 16,
+      "summary_passed": 0.0,
+      "summary_errors": 1.0,
+      "first_error": "evaluation_judge_failed"
+    },
+    {
+      "batch": "002",
+      "trials": 16,
+      "summary_passed": 0.0,
+      "summary_errors": 0.0,
+      "first_error": "evaluation_judge_failed"
+    },
+    {
+      "batch": "003",
+      "trials": 16,
+      "summary_passed": 0.0,
+      "summary_errors": 2.0,
+      "first_error": "evaluation_judge_failed"
+    },
+    {
+      "batch": "004",
+      "trials": 14,
+      "summary_passed": 0.0,
+      "summary_errors": 1.0,
+      "first_error": "evaluation_judge_failed"
+    },
+    {
+      "batch": "005",
+      "trials": 16,
+      "summary_passed": 0.0,
+      "summary_errors": 1.0,
+      "first_error": "evaluation_judge_failed"
+    },
+    {
+      "batch": "006",
+      "trials": 16,
+      "summary_passed": 0.0,
+      "summary_errors": 1.0,
+      "first_error": "evaluation_judge_failed"
+    },
+    {
+      "batch": "007",
+      "trials": 16,
+      "summary_passed": 0.0,
+      "summary_errors": 1.0,
+      "first_error": "evaluation_judge_failed"
+    }
+  ],
+  "disposition": "invalid_for_GEPA; excluded and cleaned before rerun",
+  "second_issue": {
+    "judge_enabled_before_fix": true,
+    "observed": "evaluation_judge_failed despite deterministic strict check passed",
+    "reason": "generic objectives judge contract expects business-style observed iterations; BFCL deterministic host output is authoritative",
+    "fix": "judge.enabled=false for BFCL evaluation configs"
+  },
+  "third_issue": {
+    "observed": "official MathAPI fixture import failed with ModuleNotFoundError: mpmath; mixed GorillaFileSystem+MathAPI calls then produced execution_failed and repeated calls",
+    "fix": "install mpmath and add preflight fixture_dependencies importing every class used by frozen BFCL source split"
+  },
+  "fourth_issue": {
+    "observed": "native capture used /root/miniconda3/envs/agentflow-dev/bin/python3, while preflight used shell sys.executable (/root/miniconda3/bin/python3); mpmath was absent from the capture interpreter",
+    "impact": "official MathAPI calls raised ModuleNotFoundError and were counted as action failures; preflight falsely reported fixture_dependencies=true",
+    "fix": "install mpmath in AGENTFLOW_PYTHON and run all dependency/checker probes with that interpreter"
+  },
+  "fifth_issue": {
+    "observed": "BFCL overlay symlinked nodes and harness; Path(__file__).resolve() routed coordinator to the original business package, so bfcl-functions was absent from the loaded skills and call logs stayed empty",
+    "impact": "coordinator exposed only run_skills and the model attempted direct ls/cd/pwd calls, producing Unknown tool responses and invalid state traces",
+    "fix": "copy node entrypoints, materialize a private harness/skills tree, and sync current-turn generated BFCL scripts before each daemon turn"
+  },
+  "sixth_issue": {
+    "observed": "the first post-fix launch inherited a stale AF_LLM_MODEL from the tmux server; sessionlogs recorded deepseek-v4-flash instead of the requested my-coding-plan",
+    "impact": "the 16 completed tasks and partial next batch were run under the wrong model configuration and are invalid for the requested provider comparison",
+    "fix": "the simple launcher now sources the private .env inside every new tmux shell before starting the experiment"
+  },
+  "seventh_issue": {
+    "observed": "business workflow JSON kept working_dir=examples/agent/business-simulator; agentflowd therefore executed original node entrypoints despite the private package argument",
+    "impact": "BFCL marker/frontmatter was present on disk but coordinator loaded the original 18-skill list and no generated BFCL call log",
+    "fix": "rewrite working_dir in private coordinator, dummy-pre-skill, and skill workflows to the private package directory"
+  },
+  "disposition_after_audit": "invalid_for_GEPA; BFCL output must be cleaned after this compact audit and rerun from fresh train400"
+}

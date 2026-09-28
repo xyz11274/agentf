@@ -1,4 +1,9 @@
-"""Run the Rust typed local client against the real in-process C ABI."""
+# test_rust_local_client 回归验证：检查包内协议、边界条件与失败处理。
+# 本地桩用于重现确定性场景，不代表真实 Agent 或远程模型的业务能力。
+# 测试应同时验证正常路径与拒绝路径，避免错误数据被当成成功结果。
+
+"""让 Rust 类型化本地客户端调用真实进程内 C 接口。"""
+
 import json
 import os
 from pathlib import Path
@@ -16,6 +21,8 @@ TOKEN_B = "fixture-principal-bravo-00000002"
 ENV = dict(os.environ, INTEGRATION_TEST_A=TOKEN_A, INTEGRATION_TEST_B=TOKEN_B)
 
 
+# 回归用例：main。
+# 重点核验字段或诊断：test_integration_service、rust_local_client；异常路径不能被当成成功。
 def main():
     subprocess.run(
         [str(BUILD / "test_integration_service"), "--fixture", str(ROOT)],
@@ -44,7 +51,9 @@ def main():
     for artifact in (ROOT / "data").rglob("*"):
         if artifact.is_file():
             content = artifact.read_bytes()
-            assert TOKEN_A.encode() not in content and TOKEN_B.encode() not in content, artifact
+            assert (
+                TOKEN_A.encode() not in content and TOKEN_B.encode() not in content
+            ), artifact
     print(json.dumps({"rust_local_client": result, "output": str(ROOT)}))
 
 

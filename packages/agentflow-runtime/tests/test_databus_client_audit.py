@@ -12,11 +12,17 @@ coordinator_decide / coordinator_agent_loop / recorder / openai_compatible_clien
 
 from __future__ import annotations
 
+import json
+import socket
+import threading
+
 from unittest.mock import MagicMock
 
 import pytest
 
 from agentflow_runtime.databus_client import DataBusClient
+from agentflow_databus import DataBusClient as OfficialDataBusClient, DataBusError
+import agentflow_databus
 
 
 def _make_bus(client: MagicMock | None = None) -> DataBusClient:
@@ -95,3 +101,82 @@ def test_e2e_response_uses_session_namespace_and_remains_best_effort(capsys, log
     err = capsys.readouterr().err
     assert ("e2e_response put failed" in err) == (state == "failed")
     assert ("[timing] e2e_put=" in err) == (log_timing and state != "disconnected")
+
+
+def test_strict_get_propagates_transport_error(capsys) -> None:
+    """控制面读取不能把 UDS 超时吞成一个不存在的键。"""
+    client = MagicMock()
+    client.sys.return_value.get.side_effect = DataBusError("Request timeout after 30.0s")
+    bus = _make_bus(client)
+
+    with pytest.raises(DataBusError, match="Request timeout"):
+        bus.get_strict("completion_batch:test")
+
+    assert "strict get transport failed" in capsys.readouterr().err
+
+
+class _TimeoutSocket:
+    def __init__(self):
+        self.closed = False
+
+    def settimeout(self, _timeout):
+        pass
+
+    def sendall(self, _payload):
+        pass
+
+    def recv(self, _size):
+        raise socket.timeout()
+
+    def close(self):
+        self.closed = True
+
+
+class _ReplySocket:
+    def __init__(self):
+        self.request_id = None
+        self.sent = False
+
+    def connect(self, _path):
+        pass
+
+    def settimeout(self, _timeout):
+        pass
+
+    def sendall(self, payload):
+        self.request_id = json.loads(payload.decode("utf-8"))["id"]
+
+    def recv(self, _size):
+        if self.sent:
+            return b""
+        self.sent = True
+        return (json.dumps({"jsonrpc": "2.0", "result": {"exists": True},
+                            "id": self.request_id}) + "\n").encode("utf-8")
+
+    def close(self):
+        pass
+
+
+def test_official_client_discards_timed_out_stream_and_reconnects(monkeypatch) -> None:
+    """迟到响应不能被下一次请求消费；超时连接必须先废弃。"""
+    first = _TimeoutSocket()
+    client = OfficialDataBusClient.__new__(OfficialDataBusClient)
+    client._socket_path = "/tmp/test-databus.sock"
+    client._socket = first
+    client._lock = threading.Lock()
+    client._request_id = 0
+    client._connected = True
+    client._timeout_seconds = 0.01
+
+    with pytest.raises(DataBusError, match="Request timeout"):
+        client._call("get", {"session_id": "0", "namespace": "sys", "key": "k"})
+    assert first.closed is True
+    assert client._connected is False
+    assert client._socket is None
+
+    second = _ReplySocket()
+    monkeypatch.setattr(agentflow_databus.socket, "socket", lambda *_args: second)
+    result = client._call("contains", {"session_id": "0", "namespace": "sys", "key": "k"})
+    assert result == {"exists": True}
+    assert client._connected is True
+    assert client._socket is second

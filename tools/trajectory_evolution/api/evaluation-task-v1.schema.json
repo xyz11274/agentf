@@ -37,7 +37,44 @@
     "review_status": {"enum": ["pending", "reviewed"]},
     "split": {"enum": ["train", "val", "holdout"]},
     "task_version": {"type": "string", "pattern": "^task-v1:[0-9a-f]{64}$"},
-    "attributes": {"type": "object"}
+    "attributes": {
+      "type": "object",
+      "properties": {
+        "turn_expectations": {
+          "type": "array", "minItems": 1, "maxItems": 33,
+          "description": "One rubric per input in order. Hidden from the tested Agent; C++ checks exact turn count and numbering.",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["turn", "expected_behavior"],
+            "properties": {
+              "turn": {"type": "integer", "minimum": 1, "maximum": 33},
+              "expected_behavior": {"type": "string", "minLength": 1},
+              "expected_targets": {"$ref": "#/$defs/labels", "uniqueItems": true},
+              "expected_intents": {"$ref": "#/$defs/labels"},
+              "expected_effects": {"$ref": "#/$defs/labels"},
+              "conditional": {"type": "boolean"},
+              "criteria": {
+                "description": "可选的固定验收子目标；缺省时整轮标准为一个目标。不改变原始输入和对话轮次。",
+                "type": "array", "minItems": 1, "maxItems": 32,
+                "items": {
+                  "type": "object", "additionalProperties": false, "required": ["expected_behavior"],
+                  "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "expected_behavior": {"type": "string", "minLength": 1},
+                    "due_turn": {"type": "integer", "minimum": 1, "maximum": 33},
+                    "critical": {"type": "boolean"}, "conditional": {"type": "boolean"},
+                    "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 100}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "labels": {"type": ["array", "null"], "maxItems": 128,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1024}}
   },
   "$comment": "C++ additionally enforces UTF-8 byte limits, privacy gates, group isolation, provenance and content hashes. JSON Schema alone does not attest trial readiness."
 }

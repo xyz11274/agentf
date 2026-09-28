@@ -1,0 +1,5 @@
+daemon:
+  host: 127.0.0.1
+  port: 18821
+sandbox:
+  mode: local

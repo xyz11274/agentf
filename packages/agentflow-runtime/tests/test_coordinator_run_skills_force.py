@@ -69,6 +69,9 @@ class _FakeDataBus:
     def get(self, key):
         return self.sys_puts.get(key)
 
+    def get_strict(self, key):
+        return self.get(key)
+
     def get_global(self, key):
         return self.global_puts.get(key)
 
@@ -828,12 +831,13 @@ def test_completed_batch_is_consumed_before_max_iterations_return(monkeypatch):
     assert "elapsed_s" in dialogue_end_payloads[0]
 
 
-@pytest.mark.parametrize(("skills", "status", "stage"), [
-    ([{"name": "skill-a", "prompt": "A"}], "dispatch_failed", "manifest_write"),
-    ([], "invalid_arguments", "argument_validation"),
+@pytest.mark.parametrize(("skills", "status", "stage", "failures"), [
+    ([{"name": "skill-a", "prompt": "A"}], "dispatch_failed", "manifest_write", 1),
+    ([], "invalid_arguments", "argument_validation", 1),
+    ([], "invalid_arguments", "argument_validation", 2),
 ])
-def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, status, stage):
-    """分发失败同时进入 Hook 和本轮结果打点，不能等下一轮输入才记录。"""
+def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, status, stage, failures):
+    """连续校验拒绝必须逐次观测；有效参数分支沿用原包装，不重复打点或派发。"""
     from agentflow_runtime import coordinator_decide as cd
 
     fake_bus = _FakeDataBus(
@@ -845,9 +849,12 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, statu
     lifecycle_events = []
     retry_payloads = []
     point_events = []
+    action_points = []
     execution_order = []
 
     def capture_point(fields, **kwargs):
+        if fields.get("kind") == "action":
+            action_points.append(fields)
         if fields.get("name") == "tool.result":
             point_events.append(fields)
             execution_order.append("tool.result")
@@ -894,6 +901,7 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, statu
             }],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         },
+    ] * failures + [
         {
             "choices": [{
                 "message": {
@@ -907,7 +915,7 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, statu
     ])
 
     config = MagicMock()
-    config.coordinator_max_iterations.return_value = 3
+    config.coordinator_max_iterations.return_value = 4
     config.max_completion_tokens.return_value = 4000
     config.fold_dir.return_value = ""
     config.protect_last_rounds.return_value = 0
@@ -956,19 +964,19 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, statu
         cd.hook_mounts.AGENT_DIALOGUE_START,
         cd.hook_events.COORDINATOR_TRIGGER,
     ]
-    assert len(dispatch_payloads) == 1
+    assert len(dispatch_payloads) == failures
     assert dispatch_payloads[0]["status"] == status
     assert dispatch_payloads[0]["requested_skill_names"] == [skill["name"] for skill in skills]
     assert dispatch_payloads[0]["skill_names"] == []
     assert dispatch_payloads[0]["rejected"][0]["stage"] == stage
-    assert len(retry_payloads) == 1
+    assert len(retry_payloads) == failures
     assert retry_payloads[0]["action"] == "retry"
     assert retry_payloads[0]["reason"] == "no_skill_dispatched"
     assert retry_payloads[0]["round"] == 1
     assert retry_payloads[0]["tool_loop_round"] == 1
     assert retry_payloads[0]["tool_calls"][0]["function"]["name"] == "run_skills"
-    assert execution_order == ["model", "tool.result", "model"]
-    assert len(point_events) == 1
+    assert execution_order == ["model", "tool.result"] * failures + ["model"]
+    assert len(point_events) == failures
     point = point_events[0]
     assert point["phase"] == "event"
     assert point["kind"] == "custom"
@@ -978,6 +986,25 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, statu
     assert json.loads(point["input"]["arguments"])["skills"] == skills
     assert json.loads(point["input"]["output"])["status"] == status
     assert evolution.allow_loop.call_args_list[0].args[0]["actor_id"] == "coordinator"
+    if status == "invalid_arguments":
+        assert len(action_points) == 2 * failures
+        for index in range(failures):
+            before, after = action_points[2 * index:2 * index + 2]
+            assert before["phase"] == "before" and before["apply_policy"] is False
+            assert before["name"] == "run_skills" and before["actor_id"] == "coordinator"
+            assert before["input"] == {"skills": skills, "reason": "trace failure"}
+            assert before["ref"] == after["ref"] == {
+                "run": "dlg-trace", "key": f"coordinator-dispatch:{index + 1}:0",
+            }
+            assert after["phase"] == "after" and after["status"] == "failed"
+            assert after["executed"] is False and after["actual_input"] == before["input"]
+            assert after["error"]["code"] == "invalid_arguments"
+            assert after["error"]["retryability"] == "unknown"
+        assert evolution.dispatch.call_count == 0
+        assert not any(key.startswith("dispatch:") for key in fake_bus.global_puts)
+    else:
+        assert not action_points
+        assert evolution.dispatch.call_count == 1
 
 @pytest.mark.parametrize(
     ("args", "error_fragment"),

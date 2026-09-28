@@ -1,3 +1,7 @@
+// evaluation_dataset 持久化协议：字段编号用于跨语言序列化兼容。
+// 新增能力优先增加字段，不复用已有编号改变原含义。
+// 身份、执行事实、评分和策略版本分别记录；缺失信息不能等同于零或成功。
+
 syntax = "proto3";
 
 package trajectory.evolution.dataset.v1;
@@ -11,10 +15,10 @@ message TaskBudget {
 }
 
 message TaskProvenance {
-  // golden | synthetic | traces. These are data sources, not quality ratings.
+  // 来源：golden、synthetic、traces；这些是数据来源，不是质量评级。
   string kind = 1;
   repeated string source_fingerprints = 2;
-  // Exposed tasks and their groups are restricted to the training split.
+  // 已经接触过的题目及其同组任务只能进入训练划分。
   bool learning_exposed = 3;
   string model_id = 4;
   string prompt_fingerprint = 5;
@@ -22,21 +26,21 @@ message TaskProvenance {
 
 message EvaluationTask {
   string task_id = 1;
-  // One conversation or related scenario family must stay in one split.
+  // 同一会话或相关场景家族必须保留在同一个数据划分。
   string group_id = 2;
   string task_input = 3;
   repeated string followup_inputs = 4;
   string expected_behavior = 5;
   string category = 6;
   string difficulty = 7;
-  // Declarative fixtures only. The dataset builder never executes their content.
+  // 只保存声明式初态，数据集构建器不会执行其中内容。
   google.protobuf.Struct initial_state = 8;
   repeated string constraints = 9;
   TaskBudget budget = 10;
   TaskProvenance provenance = 11;
-  // pending | reviewed. Only an importing operator can attest review.
+  // 审核状态为 pending 或 reviewed；导入方负责确认审核。
   string review_status = 12;
-  // train | val | holdout
+  // 数据划分：train、val、holdout。
   string split = 13;
   string task_version = 14;
   google.protobuf.Struct attributes = 15;
@@ -64,7 +68,7 @@ message EvaluationDataset {
 
 message TrialCheck {
   string check_id = 1;
-  // passed | failed | uncertain | error
+  // 判定：passed、failed、uncertain、error。
   string status = 2;
   string reason = 3;
   repeated string evidence_paths = 4;
@@ -81,7 +85,7 @@ message EvaluationTrial {
   string variant_id = 7;
   uint32 repetition = 8;
   string execution_status = 9;
-  // passed | failed | uncertain | error; execution success is not task success.
+  // 业务判定：passed、failed、uncertain、error；执行正常不等于任务成功。
   string verdict = 10;
   repeated TrialCheck checks = 11;
   google.protobuf.Struct metrics = 12;
@@ -101,7 +105,7 @@ message TaskEvaluationReport {
   repeated EvaluationTrial trials = 7;
   google.protobuf.Struct summary = 8;
   google.protobuf.Struct comparisons = 9;
-  // All planned trials have terminal records; does not mean all tasks passed.
+  // 所有计划试验已有终态记录，不代表全部业务任务通过。
   bool complete = 10;
   google.protobuf.Struct configuration = 11;
 }

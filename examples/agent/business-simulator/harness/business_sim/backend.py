@@ -106,7 +106,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(413, {"status": "failed", "error": "invalid_body_size"})
             args = json.loads(self.rfile.read(length))
             from .services import dispatch
-            result = dispatch(skill, args, store=self.server.store, scope=scope)
+            from .task_context import task_context
+            task = urllib.parse.unquote(self.headers.get("X-Business-Task", ""))
+            if len(task) > 2048:
+                raise ValueError("Task identity is too long")
+            with task_context(task):
+                result = dispatch(skill, args, store=self.server.store, scope=scope)
             self.reply(200, {**result, "transport": "http"})
         except (ValueError, TypeError) as exc:
             self.reply(400, {"status": "failed", "error": "invalid_request", "UserOutputText": str(exc)})

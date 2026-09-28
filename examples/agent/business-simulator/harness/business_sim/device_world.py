@@ -72,6 +72,19 @@ def ensure(state, now=None):
 
 
 def advance(state, now=None):
+    if state.get('evaluation_world'):
+        from .evaluation_world import clock
+        # 业务日期保持冻结，设备动力学按真实经过的秒数推进。
+        # monotonic 在同一主机的 Python 进程间同源；锚点随 world 持久化，
+        # 不能放在进程全局，否则每次工具子进程启动都会丢失经过时间。
+        ensure(state, clock(state).timestamp())
+        world = state['world']
+        observed = time.monotonic()
+        elapsed = max(0.0, observed - world.get('last_monotonic', observed))
+        world['last_monotonic'] = observed
+        if now is None:
+            # 首次观测或单调时钟回退只重建锚点，不凭空推进设备。
+            now = world['last_tick'] + elapsed
     now = time.time() if now is None else now
     ensure(state, now)
     world = state["world"]
@@ -189,8 +202,9 @@ def habits(state, args):
 
 
 def execute(state, args, now=None):
-    now = time.time() if now is None else now
+    # 显式 now 用于可重复重放；默认时钟只在 advance 中解析一次。
     advance(state, now)
+    now = state['world']['last_tick'] if now is None else now
     action = args["action"]
     if action == "query":
         return output("已读取测试家庭的实时状态。", {"devices": select(state, {**args, "all": True}),
@@ -243,7 +257,7 @@ def set_online(store, scope, device_id, online):
 
 
 def tick(store, now=None):
-    now = time.time() if now is None else now
+    # 保留 None，由各世界选择物理时钟，不能把评测世界强制推进到主机日期。
     updated = 0
     with store.connect() as db:
         db.execute("BEGIN IMMEDIATE")

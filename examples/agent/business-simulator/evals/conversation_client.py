@@ -9,7 +9,11 @@ def send_turn(client, agent_id, user_id, client_id, dialogue_id, content):
     conversations = getattr(client,'_business_conversations',None)
     if conversations is None:
         conversations = client._business_conversations = {}
-    messages = [*conversations.get(identity,[]),{'role':'user','content':content}]
+    previous = conversations.get(identity, [])
+    if not previous and getattr(client, '_business_environment', ''):
+        # 仅传可信环境事实，绝不把预期意图、标准答案或评分规则交给 Agent。
+        previous = [{'role': 'system', 'content': client._business_environment}]
+    messages = [*previous,{'role':'user','content':content}]
     response = _send(client,agent_id,user_id,client_id,dialogue_id,
                      json.dumps({'stream':False,'messages':messages},ensure_ascii=False))
     conversations[identity] = messages

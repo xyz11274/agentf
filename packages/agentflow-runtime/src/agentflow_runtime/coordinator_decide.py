@@ -32,7 +32,7 @@ import uuid
 # ── Add nodes/ to sys.path for local imports (before .venv activation) ──
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agentflow_runtime.databus_client import DataBusClient
+from agentflow_runtime.databus_client import DataBusClient, DataBusError
 from agentflow_runtime.compaction import (
     compress_messages,
     get_compaction_threshold,
@@ -1034,7 +1034,7 @@ def execute():
     completed_skill_names: list[str] = []
     if completed_batch_key:
         try:
-            raw_batch = databus.get(completed_batch_key)
+            raw_batch = databus.get_strict(completed_batch_key)
             if raw_batch in (None, ""):
                 raise ValueError(
                     f"completed batch '{completed_batch_key}' was not found"
@@ -1107,10 +1107,17 @@ def execute():
                 skill_success = ("true" if successful_count == len(completed_batch["results"])
                                  else "partial" if successful_count else "false")
             completed_batch_message = build_skill_batch_completion_message(completed_batch)
-        except (ValueError, TypeError) as exc:
-            error_text = f"内部错误：并行 Skill 批次结果读取失败（{exc}）"
+        except (ValueError, TypeError, DataBusError) as exc:
+            transport_error = isinstance(exc, DataBusError)
+            error_status = (
+                "batch_transport_error" if transport_error else "batch_result_error"
+            )
+            error_label = "传输失败" if transport_error else "读取失败"
+            error_text = f"内部错误：并行 Skill 批次结果{error_label}（{exc}）"
             emit_event(hook_events.COORDINATOR_LLM_ERROR, {
                 "error": str(exc),
+                "status": error_status,
+                "transport_error": transport_error,
                 "completed_batch_key": completed_batch_key,
             }, level="ERROR")
             if databus.is_connected():
@@ -1133,13 +1140,13 @@ def execute():
                         f"{marker_exc}",
                         file=sys.stderr,
                     )
-            _emit_dialogue_end_once("batch_result_error", error_text)
+            _emit_dialogue_end_once(error_status, error_text)
             print(json.dumps({
                 "response": error_text,
-                "status": "batch_result_error",
+                "status": error_status,
             }, ensure_ascii=False))
             put_e2e_response(databus, error_text)
-            print(f"[timing] batch_result_error total={time.time()-_t0:.1f}s",
+            print(f"[timing] {error_status} total={time.time()-_t0:.1f}s",
                   file=sys.stderr)
             return
 
@@ -1698,8 +1705,28 @@ def execute():
                     )
                 _dispatch_ctx = AgentContext(messages=messages)
                 if validation_error:
+                    # 校验拒绝也是本轮真实结果；仅观察，不执行派发或再次应用动作策略。
+                    # 复用当前 Coordinator 的循环引用，不能把未执行的工具记成成功调用。
+                    if _evolution is not None:
+                        _evolution.point({
+                            "phase": "before", "kind": "action", "name": name,
+                            "ref": {"run": dialogue_id,
+                                    "key": f"coordinator-dispatch:{_decision_index}:{tool_index}"},
+                            "actor_id": "coordinator", "input": args, "apply_policy": False,
+                            "extensions": {"metrics": {"tool_call": False}},
+                        }, user_id=_user_id())
                     dispatch_result = _invalid_run_skills_result(validation_error)
                     result_str = json.dumps(dispatch_result, ensure_ascii=False)
+                    if _evolution is not None:
+                        _evolution.point({
+                            "phase": "after", "kind": "action",
+                            "ref": {"run": dialogue_id,
+                                    "key": f"coordinator-dispatch:{_decision_index}:{tool_index}"},
+                            "status": "failed", "executed": False,
+                            "actual_input": args, "output": dispatch_result,
+                            "error": {"code": "invalid_arguments", "message": validation_error,
+                                      "retryability": "unknown"},
+                        }, user_id=_user_id())
                 elif duplicate_completed_skill:
                     dispatch_result = {
                         "status": "duplicate_blocked",

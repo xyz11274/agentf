@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
+# 本目录可独立配置和安装；不需要编译 AgentFlow 的主程序或绑定特定 Agent。
 project(agentflow_trajectory_evolution VERSION 0.1.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
@@ -9,6 +10,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# 网络、摘要和协议序列化属于核心依赖；PNG 可选，用于加强图片产物的本地验收。
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 find_package(Protobuf CONFIG QUIET)
@@ -132,6 +134,7 @@ add_custom_command(
   VERBATIM
 )
 
+# 协议生成物进入构建目录，源码树只保留 .proto，避免交付两套不同步的字段定义。
 add_library(agentflow_hybrid_evaluation_proto STATIC
   ${HYBRID_EVALUATION_GENERATED_DIR}/hybrid_evaluation.pb.cc
   ${HYBRID_EVALUATION_GENERATED_DIR}/trajectory_trace.pb.cc
@@ -148,6 +151,7 @@ target_link_libraries(agentflow_hybrid_evaluation_proto PUBLIC
   protobuf::libprotobuf
 )
 
+# 核心库同时供 CLI、后台服务及进程内接口使用，各语言客户端共享同一套行为。
 add_library(agentflow_trajectory_evolution STATIC
   src/evaluation/agent_evaluation.cpp
   src/evaluation/dataset.cpp
@@ -163,6 +167,7 @@ add_library(agentflow_trajectory_evolution STATIC
   src/analysis/trace_analyzer.cpp
   src/runtime/shadow_runtime.cpp
   src/memory/shared_memory.cpp
+  src/memory/gepa_feedback.cpp
   src/runtime/policy_runtime.cpp
   src/runtime/orchestration.cpp
   src/runtime/request_binding.cpp
@@ -208,6 +213,7 @@ if(NOT MSVC)
   )
 endif()
 
+# 命令行仅负责参数与输出路径，执行、评分和进化实现均链接上面的核心库。
 add_executable(trajectory_evolution
   src/cli/evaluation_supervisor.cpp
   src/cli/learn_cli.cpp
@@ -230,6 +236,7 @@ set_target_properties(agentflow_trajectory_evolution PROPERTIES EXPORT_NAME core
 set_target_properties(agentflow_hybrid_evaluation_proto PROPERTIES EXPORT_NAME proto)
 add_library(TrajectoryEvolution::core ALIAS agentflow_trajectory_evolution)
 target_sources(agentflow_trajectory_evolution PRIVATE clients/c/evolution.c)
+# 稳定 C ABI 是其他语言原生接入的边界，内部 C++ 类型不暴露到跨语言调用中。
 add_library(trajectory_evolution_local SHARED src/service/local_c.cpp src/service/evaluation_entry_client.cpp
     clients/cpp/evolution_points.cpp)
 target_include_directories(trajectory_evolution_local PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
@@ -265,6 +272,7 @@ install(FILES ${HYBRID_EVALUATION_GENERATED_DIR}/hybrid_evaluation.pb.h
     ${HYBRID_EVALUATION_GENERATED_DIR}/runtime_policy.pb.h
     ${HYBRID_EVALUATION_GENERATED_DIR}/evaluation_dataset.pb.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# 配置与提示词随包安装但不编译进二进制，部署时可以独立替换。
 install(DIRECTORY config/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/config)
 install(DIRECTORY proto/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/proto)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples")
@@ -293,6 +301,7 @@ install(EXPORT TrajectoryEvolutionTargets NAMESPACE TrajectoryEvolution::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TrajectoryEvolution)
 
 include(CTest)
+# 下方回归使用本地固定宿主和模型桩，不会自动执行用户的真实数据集实验。
 if(BUILD_TESTING)
   add_executable(test_local_runtime tests/test_local_runtime.cpp)
   target_include_directories(test_local_runtime PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
@@ -403,6 +412,10 @@ if(BUILD_TESTING)
   target_include_directories(test_gepa_evidence PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_link_libraries(test_gepa_evidence PRIVATE agentflow_trajectory_evolution)
   add_test(NAME GepaEvidenceTests COMMAND test_gepa_evidence)
+  add_executable(test_gepa_feedback tests/test_gepa_feedback.cpp)
+  target_include_directories(test_gepa_feedback PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
+  target_link_libraries(test_gepa_feedback PRIVATE agentflow_trajectory_evolution)
+  add_test(NAME GepaFeedbackTests COMMAND test_gepa_feedback ${CMAKE_CURRENT_BINARY_DIR})
   add_executable(test_shared_memory tests/test_shared_memory.cpp)
   target_include_directories(test_shared_memory PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_link_libraries(test_shared_memory PRIVATE agentflow_trajectory_evolution)

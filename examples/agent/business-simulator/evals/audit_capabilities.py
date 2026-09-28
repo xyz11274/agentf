@@ -15,6 +15,7 @@ import sys
 PACKAGE=Path(__file__).resolve().parents[1]; REPO=PACKAGE.parents[2]
 sys.path.insert(0,str(REPO/'benchmark'))
 from converters import read_xlsx_rows, parse_intents, split_steps, convert_product
+from evalset_schema import normalize_evalset
 
 CAPABILITIES={
  'home_control':('家居控制','基础测试系统已实现','16台测试设备、批量事务及时间演化；没有实体家庭连接，不代表全部业务场景验收通过'),
@@ -95,7 +96,7 @@ def analyze_turn(case, turn, number, row):
 
 
 def audit():
-    dataset_path=REPO/'benchmark/datasets/product.json';dataset=json.loads(dataset_path.read_text())
+    dataset_path=REPO/'benchmark/datasets/product.json';dataset=normalize_evalset(json.loads(dataset_path.read_text()))
     mapping=json.loads((REPO/'benchmark/domain_skill_map.json').read_text())
     raw={};fresh={};sources=[];warnings=[]
     for path in sorted((REPO/'test_cases/product').glob('*.xlsx')):
@@ -120,7 +121,7 @@ def audit():
             for number,(a,b) in enumerate(zip(case['turns'],converted['turns']),1):
                 for field in ('user','expected_behavior','expected_skills'):
                     if a.get(field)!=b.get(field):differences.append(f'turn{number}.{field}')
-            for field in ('goal','category','difficulty','level'):
+            for field in ('goal','category','difficulty','case_level'):
                 if case.get(field)!=converted.get(field):differences.append(field)
         if differences:comparisons.append({'id':case['id'],'source':key[0],'differences':differences})
         items.append({'id':case['id'],'category':case['category'],'source':key[0],'excel_row':row.get('excel_row'),

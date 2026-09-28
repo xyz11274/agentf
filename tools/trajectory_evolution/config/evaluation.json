@@ -7,7 +7,7 @@
   "timeout_ms": 1800000,
   "max_output_bytes": 1048576,
   "max_artifact_bytes": 16777216,
-  "require_trace": false,
+  "require_trace": true,
   "variants": [{
     "id": "baseline",
     "version": "replace-with-your-agent-version",
@@ -19,6 +19,13 @@
   "checks": {},
   "judge": {
     "enabled": true,
+    "assessment_mode": "objectives",
+    "goal_prompt": "prompts/task-goals.txt",
+    "batch_input_bytes": 49152,
+    "max_batch_turns": 4,
+    "max_evidence_lookups": 2,
+    "evidence_field_bytes": 2048,
+    "answer_field_bytes": 4096,
     "runtime_config": "standard-runtime.json",
     "prompt": "prompts/task-judge-system.txt",
     "include_model_requests": false,

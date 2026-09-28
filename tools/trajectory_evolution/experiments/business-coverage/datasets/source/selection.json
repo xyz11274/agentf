@@ -1,0 +1,1504 @@
+{
+  "source_cases": 1074,
+  "excluded_cases": [
+    {
+      "case_id": "SYS_DYT_01_011",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_012",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_013",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_014",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_015",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_016",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_017",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_018",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_019",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_020",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_021",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_022",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_023",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_024",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_025",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_026",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_027",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_028",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_029",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_030",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_031",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_032",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_033",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_034",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_035",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_036",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_037",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_038",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_039",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_040",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_041",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_042",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_043",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_044",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_045",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_046",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_047",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_048",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_049",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_050",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_051",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_052",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_053",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_054",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_055",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_056",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_057",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_058",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_059",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_060",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_061",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_062",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_063",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_064",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_065",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_066",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_067",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_068",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_069",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_070",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_071",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_072",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_073",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_074",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_075",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_076",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_077",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_078",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_079",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_080",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_081",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_082",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_083",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_084",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_085",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_086",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_087",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_088",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_089",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_090",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_091",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_092",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_093",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_094",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_095",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_096",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_097",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_098",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_099",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_100",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_121",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_122",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_123",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_124",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_125",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_126",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_127",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_128",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_129",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_01_130",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_121",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_122",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_125",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_128",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_132",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_133",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_134",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_137",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_138",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_140",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_235",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "SYS_DYT_03_237",
+      "missing": [
+        {
+          "turn": 1,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "DH_YT_CYFF_02_023",
+      "missing": [
+        {
+          "turn": 4,
+          "fields": [
+            "expected_behavior"
+          ]
+        },
+        {
+          "turn": 5,
+          "fields": [
+            "expected_behavior"
+          ]
+        }
+      ]
+    }
+  ],
+  "eligible_cases": 961,
+  "unselected_case_ids": [
+    "TGJK_WYD_009",
+    "DH_YT_YTLY_02_022",
+    "TGJJ_YD3_004",
+    "ZJ_JK_CYTX_004",
+    "TGZS_WYYL_008",
+    "SYS_DYT_03_156",
+    "TGJK_WYD_012",
+    "DH_YT_ZZRW_01_009",
+    "SYS_DYT_03_077",
+    "CK_GUI_FHCK_00_018",
+    "SYS_DYT_03_041",
+    "SYS_DYT_03_021",
+    "SYS_DYT_03_202",
+    "SYS_DYT_03_136",
+    "SYS_DYT_02_078",
+    "DH_WD_JCWD_01_032",
+    "SYS_DYT_01_008",
+    "SYS_DYT_03_306",
+    "DH_WD_JCWD_03_007",
+    "SYS_DYT_02_031",
+    "SYS_DYT_03_243",
+    "TGZS_WYYL_007",
+    "SYS_DYT_03_305",
+    "TGZS_YDYL_007",
+    "QA_GY_YDYL_007",
+    "TGJJ_YD2_008",
+    "CK_GUI_FHCK_00_144",
+    "TGJJ_WYD_005",
+    "SYS_DYT_02_073",
+    "DH_YT_ZZRW_01_014",
+    "CK_GUI_FHCK_00_019",
+    "QA_JK_WYYL_013",
+    "TOKEN_TEST_01_031",
+    "SYS_DYT_03_257",
+    "SYS_DYT_03_232",
+    "SYS_DYT_03_300",
+    "SYS_DYT_03_255",
+    "TGZS_YDYL_010",
+    "CK_GUI_FHCK_00_001",
+    "SYS_DYT_03_076",
+    "TGYJ_YD2_010",
+    "SYS_DYT_03_244",
+    "SYS_DYT_03_182",
+    "TGYJ_WYD_003",
+    "SYS_DYT_03_013",
+    "TGYJ_YD2_002",
+    "ZJ_GY_KSP_01_022",
+    "SYS_DYT_03_118",
+    "DH_YT_CYFF_02_033",
+    "SYS_DYT_02_113",
+    "SYS_DYT_03_330",
+    "SYS_DYT_03_161",
+    "DH_YT_CYFF_02_031",
+    "TGJJ_YD2_007",
+    "SYS_DYT_02_064",
+    "SYS_DYT_03_115",
+    "SYS_DYT_03_354",
+    "DH_WD_LYWD_05_003",
+    "DH_WD_LWWD_03_029",
+    "SYS_DYT_03_050",
+    "TGJJ_WYD_004",
+    "SYS_DYT_03_254",
+    "QA_JJ_044",
+    "SYS_DYT_03_201",
+    "SYS_DYT_02_003",
+    "SYS_DYT_03_334",
+    "SYS_DYT_01_102",
+    "TGJJ_WYD_003",
+    "SYS_DYT_03_286",
+    "TGJK_WYD_002",
+    "SYS_DYT_02_051",
+    "SYS_DYT_03_191",
+    "TGJK_YD3_003",
+    "QA_ZS_WYYL_017",
+    "QA_GY_YDYL_001",
+    "ZJ_GY_CYX_01_025",
+    "CK_GUI_FHCK_00_120",
+    "SYS_DYT_03_268",
+    "SYS_DYT_03_321",
+    "SYS_DYT_03_075",
+    "TGJK_YD2_009",
+    "DH_WD_LWWD_03_007",
+    "QA_JJ_035",
+    "TGJK_YD3_001",
+    "TGJJ_WYD_009",
+    "SYS_DYT_03_018",
+    "DH_WD_LWWD_03_019",
+    "QA_GY_YDYL_004",
+    "SYS_DYT_03_223",
+    "DH_WD_JCWD_01_020",
+    "SYS_DYT_03_247",
+    "QA_GUI_YDYL_013",
+    "CK_GUI_FHCK_00_143",
+    "SYS_DYT_03_295",
+    "DH_WD_LWWD_08_018",
+    "TOKEN_TEST_01_039",
+    "SYS_DYT_01_120",
+    "SYS_DYT_02_114",
+    "QA_JJ_018",
+    "DH_YT_SDYY_02_011",
+    "CK_GUI_FHCK_00_007",
+    "QA_GY_YDYL_006",
+    "SYS_DYT_03_119",
+    "TGYJ_YD3_003",
+    "QA_GY_YDYL_013",
+    "TGZS_WYYL_015",
+    "QA_JJ_020",
+    "ZJ_GY_CYX_01_021",
+    "SYS_DYT_02_091",
+    "SYS_DYT_03_357",
+    "SYS_DYT_03_224",
+    "TOKEN_TEST_01_008",
+    "SYS_DYT_01_115",
+    "SYS_DYT_02_097",
+    "DH_DL_DLDH_01_026",
+    "SYS_DYT_03_114",
+    "SYS_DYT_03_277",
+    "SYS_DYT_03_166",
+    "SYS_DYT_03_267",
+    "SYS_DYT_03_153",
+    "TOKEN_TEST_01_162",
+    "SYS_DYT_01_105",
+    "QA_JK_YDYL_012",
+    "SYS_DYT_03_124",
+    "SYS_DYT_03_011",
+    "TGZS_WYYL_001",
+    "SYS_DYT_03_184",
+    "QA_JJ_038",
+    "TGJK_YD2_004",
+    "CK_GUI_FHCK_00_114",
+    "QA_JK_YDYL_010",
+    "SYS_DYT_03_314",
+    "SYS_DYT_03_085",
+    "TGJJ_YD2_004",
+    "SYS_DYT_02_098",
+    "SYS_DYT_02_054",
+    "TGYJ_YD2_006",
+    "SYS_DYT_03_251",
+    "DH_YT_CYFF_01_027",
+    "SYS_DYT_03_154",
+    "SYS_DYT_03_303",
+    "SYS_DYT_03_045",
+    "DH_WD_LWWD_10_001",
+    "TGYJ_WYD_006",
+    "SYS_DYT_03_272",
+    "TGJJ_YD2_012",
+    "SYS_DYT_03_094",
+    "SYS_DYT_03_031",
+    "SYS_DYT_03_358",
+    "SYS_DYT_03_174",
+    "SYS_DYT_02_034",
+    "DH_YT_SDYY_01_013",
+    "SYS_DYT_03_072",
+    "CK_GUI_FHCK_00_013",
+    "SYS_DYT_03_340",
+    "TGJJ_WYD_002",
+    "QA_JK_HHYL_001",
+    "SYS_DYT_03_338",
+    "SYS_DYT_03_151",
+    "DH_YT_YTLY_01_013",
+    "SYS_DYT_03_239"
+  ],
+  "same_input_groups": 5,
+  "seed": 20260921,
+  "selection_unit": "whole_dialogue_group",
+  "profile_sha256": "42b7b5a1645e44aa5790d347941ec57a5bc999fb5261ad349bfb5c7d97426fc0",
+  "sources": {
+    "One_Intent_Hybrid.xlsx": "d0f56a3ba2995d8921ff8df7e431753aa71739469d280cff4d64b201ae8b1293",
+    "Three_Intent_Hybrid.xlsx": "c84c5f7c0f14ba72cb9f80c0d323731e79f5cb631c149934fccde0d88f612c77",
+    "Two_Intent_Hybrid.xlsx": "a2770466207fe250ec872571b79b336680a50df419f225428e8722757606856d"
+  },
+  "splits": {
+    "train": {
+      "cases": 400,
+      "turns": 735,
+      "multi_turn_cases": 117,
+      "intent_labeled_turns": 449,
+      "categories": {
+        "居家操控": 31,
+        "智家服务": 15,
+        "多意图": 119,
+        "健康导诊": 26,
+        "智能对话": 30,
+        "吃药提醒任务生成": 21,
+        "观影意图": 12,
+        "知识库问答": 31,
+        "火山问答": 23,
+        "智能操控": 22,
+        "GUI泛化": 19,
+        "健康档案查询": 3,
+        "居家习惯": 7,
+        "挂号": 18,
+        "健康档案生成": 14,
+        "挂号查询": 4,
+        "吃药提醒任务查询": 5
+      }
+    },
+    "val": {
+      "cases": 200,
+      "turns": 384,
+      "multi_turn_cases": 71,
+      "intent_labeled_turns": 236,
+      "categories": {
+        "智能对话": 20,
+        "挂号查询": 6,
+        "知识库问答": 7,
+        "吃药提醒任务生成": 4,
+        "健康档案生成": 10,
+        "居家操控": 11,
+        "GUI泛化": 15,
+        "多意图": 65,
+        "火山问答": 15,
+        "居家习惯": 3,
+        "健康导诊": 12,
+        "智家服务": 8,
+        "挂号": 8,
+        "吃药提醒任务查询": 4,
+        "智能操控": 5,
+        "观影意图": 4,
+        "健康档案查询": 3
+      }
+    },
+    "holdout": {
+      "cases": 200,
+      "turns": 372,
+      "multi_turn_cases": 61,
+      "intent_labeled_turns": 265,
+      "categories": {
+        "多意图": 68,
+        "智能对话": 15,
+        "GUI泛化": 10,
+        "居家操控": 12,
+        "挂号查询": 6,
+        "健康导诊": 14,
+        "火山问答": 15,
+        "智家服务": 10,
+        "吃药提醒任务生成": 7,
+        "知识库问答": 11,
+        "智能操控": 9,
+        "健康档案生成": 8,
+        "居家习惯": 3,
+        "观影意图": 2,
+        "健康档案查询": 4,
+        "挂号": 5,
+        "吃药提醒任务查询": 1
+      }
+    }
+  }
+}

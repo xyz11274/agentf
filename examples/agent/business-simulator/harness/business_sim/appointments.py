@@ -119,6 +119,8 @@ def search_slots(db, args, now):
                 continue
             h = hospitals[0]
             identity = json.dumps([h["id"], department, doctor, when.isoformat()])
+            if args.get('_inventory_namespace'):
+                identity += ':' + args['_inventory_namespace']
             slot_id = "slot-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
             slot = {"id": slot_id, "hospital": h["name"], "department": department, "doctor": doctor,
                     "appointment_type": kind, "date": day.isoformat(), "time": when.strftime("%H:%M"),
@@ -134,6 +136,9 @@ def search_slots(db, args, now):
 
 
 def execute(state, args, db, scope, now=None):
+    if state.get('evaluation_world'):
+        # 评测用户拥有独立库存；普通业务用户继续共享真实测试库存。
+        args = {**args, '_inventory_namespace': scope}
     now = now or datetime.now(ZONE)
     now = now.astimezone(ZONE)
     action = args["action"]

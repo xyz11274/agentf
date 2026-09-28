@@ -1,4 +1,8 @@
-"""Synchronous standard-trace example; no AgentFlow runtime or hook dependency."""
+# agent_with_trace 接入示例：演示宿主如何在已有执行边界调用公开接口。
+# 示例用于说明接入方式，实际执行和业务工具仍由宿主自身负责。
+# 需要保留真实请求、结果及因果关联，不能用示例常量代替生产运行证据。
+
+"""同步标准轨迹示例，不依赖 AgentFlow 运行时或 hook。"""
 
 import json
 import sys
@@ -7,8 +11,10 @@ import uuid
 from pathlib import Path
 
 
-def run_recorded(agent, task, *, user_id, conversation_id, log_dir,
-                 agent_id="report-agent"):
+# 在示例原有业务执行周围采集标准轨迹，不把测试固定结果当作真实收益。
+def run_recorded(
+    agent, task, *, user_id, conversation_id, log_dir, agent_id="report-agent"
+):
     identity = {
         "run_id": uuid.uuid4().hex,
         "agent_id": agent_id,
@@ -18,19 +24,23 @@ def run_recorded(agent, task, *, user_id, conversation_id, log_dir,
     events = []
     recording_ok = True
 
+    # 将当前事实写为标准事件，保留身份和因果链接，不把建议冒充执行。
     def emit(kind, **fields):
         nonlocal recording_ok
         event = {
             "event_id": f"event-{len(events) + 1}",
-            "producer_id": "main", "actor_id": "assistant",
+            "producer_id": "main",
+            "actor_id": "assistant",
             "sequence": str(len(events) + 1),
             "timestamp_us": str(time.time_ns() // 1000),
-            "kind": kind, **fields,
+            "kind": kind,
+            **fields,
         }
         try:
             # 当场复制内容，避免业务稍后修改同一个字典，污染历史事件。
-            events.append(json.loads(json.dumps(event, ensure_ascii=False,
-                                                 allow_nan=False)))
+            events.append(
+                json.loads(json.dumps(event, ensure_ascii=False, allow_nan=False))
+            )
         except Exception:
             recording_ok = False
 
@@ -46,21 +56,31 @@ def run_recorded(agent, task, *, user_id, conversation_id, log_dir,
     except BaseException as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             execution_status = "cancelled"
-        failure = {"error": {"code": "agent_interrupted_or_failed",
-                             "retryability": "unknown"}}
+        failure = {
+            "error": {"code": "agent_interrupted_or_failed", "retryability": "unknown"}
+        }
         raise  # 记录异常，但不吞掉或改变原来的异常传播。
     finally:
-        emit("run.end", output=result, outcome={
-            "execution_status": execution_status,
-            "business_status": business_status,
-        }, **failure)
+        emit(
+            "run.end",
+            output=result,
+            outcome={
+                "execution_status": execution_status,
+                "business_status": business_status,
+            },
+            **failure,
+        )
         try:
             if not recording_ok:
                 raise ValueError("trace_recording_failed")
             root = Path(log_dir)
             root.mkdir(parents=True, exist_ok=True)
-            trace = {"schema_version": 1, "trace_kind": "trajectory.v1",
-                     "identity": identity, "events": events}
+            trace = {
+                "schema_version": 1,
+                "trace_kind": "trajectory.v1",
+                "identity": identity,
+                "events": events,
+            }
             pending = root / f"{identity['run_id']}.trace.part"
             with pending.open("x", encoding="utf-8") as stream:
                 json.dump(trace, stream, ensure_ascii=False, allow_nan=False)
@@ -71,6 +91,7 @@ def run_recorded(agent, task, *, user_id, conversation_id, log_dir,
             print("WARNING: trajectory_not_saved", file=sys.stderr)
 
 
+# 构造最小独立 Agent 示例，展示打点位置而非实现特定框架调度。
 def demo_agent(task, emit):
     # 在你自己的步骤、工具入口直接记录；没有 Hook 引擎或事件总线。
     context = {"execution_id": "main-execution", "step_id": "sum-step"}
@@ -78,8 +99,13 @@ def demo_agent(task, emit):
     result, status, action_started = None, "failed", False
     try:
         amounts = task["amounts"]
-        emit("action.start", **context, action_id="sum-call",
-             operation="sum_amounts", input={"amounts": amounts})
+        emit(
+            "action.start",
+            **context,
+            action_id="sum-call",
+            operation="sum_amounts",
+            input={"amounts": amounts},
+        )
         action_started = True
         result = {"total": sum(amounts)}  # 这里是实际执行工具的位置。
         status = "completed"
@@ -90,15 +116,24 @@ def demo_agent(task, emit):
         raise
     finally:
         if action_started:
-            emit("action.end", **context, action_id="sum-call",
-                 status=status, output=result)
+            emit(
+                "action.end",
+                **context,
+                action_id="sum-call",
+                status=status,
+                output=result,
+            )
         emit("step.end", **context, status=status, output=result)
 
 
 if __name__ == "__main__":
     for amounts in ([12, 18], [7, 9]):
-        print(run_recorded(
-            demo_agent, {"amounts": amounts}, user_id="demo-user",
-            conversation_id="report-conv",  # 同一会话保持不变，每次生成新 run_id。
-            log_dir="build/trajectory-evolution/logless-demo/input",
-        ))
+        print(
+            run_recorded(
+                demo_agent,
+                {"amounts": amounts},
+                user_id="demo-user",
+                conversation_id="report-conv",  # 同一会话保持不变，每次生成新 run_id。
+                log_dir="build/trajectory-evolution/logless-demo/input",
+            )
+        )

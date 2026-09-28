@@ -1,3 +1,7 @@
+// runtime_policy 持久化协议：字段编号用于跨语言序列化兼容。
+// 新增能力优先增加字段，不复用已有编号改变原含义。
+// 身份、执行事实、评分和策略版本分别记录；缺失信息不能等同于零或成功。
+
 syntax = "proto3";
 package trajectory.evolution.v1;
 
@@ -5,19 +9,19 @@ import "shadow_policy.proto";
 import "trajectory_trace.proto";
 import "google/protobuf/struct.proto";
 
-// Explicit authorization, not automatic promotion of candidate memories.
+// 显式授权，不是候选记忆自动晋升控制权限。
 message ExperienceApproval {
   string memory_id = 1;
   string content_revision = 2;
 }
-// A version-local rewrite; the source memory and its eligibility stay unchanged.
+// 改写仅属于当前策略版本，来源记忆内容与资格保持不变。
 message ExperienceOverride {
   ExperienceApproval source_experience = 1;
   string content = 2;
-  // Empty preserves the source condition; the approved memory stays immutable.
+  // 留空时保留来源条件，已批准记忆保持不可变。
   string trigger_pattern = 3;
-  // Optional any-of guard over executed actions in the current observation batch.
-  // A mention or proposed tool call is not an observation.
+  // 可选守卫：当前观测批中任一指定动作真实执行即可满足。
+  // 提到工具或提出工具调用，不构成执行观测。
   repeated string observed_operations = 4;
 }
 message ActionRule {
@@ -27,41 +31,41 @@ message ActionRule {
   bool deny = 4;
   repeated string required_arguments = 5;
   string reason = 6;
-  // Provenance and authorization are independent of L1 retrieval limits.
+  // 来源和授权独立于 L1 检索数量限制。
   ExperienceApproval source_experience = 7;
-  // predicate: match the executable condition in this scope. Empty retains
-  // legacy experience-retrieval gating for previously exported policies.
+  // predicate 模式匹配本作用域的可执行条件；
+  // 留空则保留既有导出策略的经验检索触发方式。
   string match_mode = 8;
-  // Reject a new operation only after this many settled failures in the run.
+  // 本轮运行中累计确认失败达到该次数后，才拒绝新的操作。
   uint32 max_failed_attempts = 9;
-  // Stable scalar arguments identifying one target within this run. Empty
-  // retains execution-local retry counting used by existing policy bundles.
+  // 用稳定标量参数识别同一运行内的目标；
+  // 留空则保留旧策略按执行实例计数的重试方式。
   repeated string failure_key_arguments = 10;
-  // Exact structured error codes. A matching terminal failure blocks this
-  // operation/configuration in the current run, independent of output paths.
+  // 精确结构化错误码；匹配的终态失败会阻止
+  // 当前运行中该操作及配置，不依赖输出路径。
   repeated string terminal_error_codes = 11;
   repeated string error_scope_arguments = 12;
-  // Explicit per-run operation budget, including successful/no-op delegations.
-  // Parallel initial attempts form one settled round; no semantic completion is inferred.
+  // 显式运行内操作预算，包含成功或空操作委派。
+  // 并行首次尝试形成一次已结束轮次，不推断语义上的任务完成。
   uint32 max_attempts = 13;
   repeated string attempt_key_arguments = 14;
 }
-// L2 orchestration is separate from action validation. Only actions already
-// present in a host batch may be ordered; host dependencies are never removed.
+// L2 编排与动作校验分开，只能排序宿主批次中
+// 已经存在的动作；永远不删除宿主原有依赖。
 message ScheduleRule {
   string rule_id = 1;
   string target_scope = 2;
   string before_operation = 3;
-  // Equal operation names serialize distinct instances in original batch order.
+  // 操作名相同时，按原批次顺序串行不同实例。
   string after_operation = 4;
   bool require_success = 5; // false: wait for completion, including failure
   string reason = 6;
   ExperienceApproval source_experience = 7;
-  // Optional local task guard. Empty retains existing exported policy behavior.
-  repeated string task_terms = 8; // all must occur in the current run task
+  // 可选本地任务守卫，留空保留既有导出策略行为。
+  repeated string task_terms = 8;    // all must occur in the current run task
   repeated string exclude_terms = 9; // none may occur in the current run task
-  // Optional resource identity: equality of non-empty scalar string arguments
-  // pairs producer/consumer instances without relying on task language.
+  // 可选资源身份：非空标量字符串参数相等时，
+  // 可配对生产者与消费者实例，不依赖任务自然语言。
   string before_argument = 10;
   string after_argument = 11;
 }
@@ -83,7 +87,7 @@ message SchedulePlan {
 }
 message ScheduledActionState {
   string action_id = 1;
-  // waiting | running | succeeded | failed | cancelled | unknown | skipped
+  // 状态：waiting、running、succeeded、failed、cancelled、unknown、skipped。
   string status = 2;
 }
 message ScheduleState {
@@ -95,28 +99,28 @@ message LoopRule {
   string target_scope = 2;
   uint32 max_iterations = 3;
   uint32 max_no_progress = 4;
-  // stop | replan; a replan is a bounded, request-only context addition.
+  // 决定为 stop 或 replan；重规划只对当前请求追加有界上下文。
   string no_progress_decision = 5;
   uint32 max_replans = 6;
   string replan_context = 7;
   string reason = 8;
   ExperienceApproval source_experience = 9;
   string match_mode = 10; // predicate | empty (legacy experience retrieval)
-  // Replan after an observed action failure; never stop solely on this signal.
+  // 观测到动作失败后重规划，不能仅因这个信号就停止整个运行。
   bool replan_on_failure = 11;
-  // Empty applies to every actor in the scope; otherwise only this actor.
+  // 留空时适用于作用域全部执行者，否则只适用指定执行者。
   string actor_id = 12;
-  // Optional settled-outcome predicates. Both must match when both are set.
-  // Empty preserves legacy rules; error codes are exact structured values.
+  // 可选终态条件；两个都设置时必须同时满足。
+  // 留空保留旧规则；错误码采用精确结构化值。
   repeated string error_codes = 13;
   bool after_action_rejection = 14;
-  // Apply only when the current host boundary supports an answer-only finish.
-  // False preserves the behavior of existing policies.
+  // 仅当前宿主边界支持纯回答收尾时应用。
+  // false 保留既有策略行为。
   bool require_finalization = 15;
 }
 message RuntimeOptions {
   Level requested_level = 1;
-  // Host declarations are checked here; they are NOT runtime probe evidence.
+  // 这里检查宿主声明，它不是运行中实际探测到的证据。
   repeated string host_capabilities = 2;
   string fallback = 3; // strict | downgrade
   repeated string allowed_users = 4;
@@ -126,16 +130,16 @@ message RuntimeOptions {
   repeated LoopRule loop_rules = 8;
   string experience_template = 9; // exactly one {{experience}} placeholder
   uint32 max_context_bytes = 10;
-  // Optional framework-neutral binding. Empty preserves the original messages
-  // verification contract. These fields are part of the immutable policy hash.
+  // 可选框架无关请求绑定；留空保留原消息验真契约。
+  // 这些字段属于不可变策略摘要的一部分。
   string request_context_pointer = 11; // RFC 6901 pointer, e.g. /system
-  string request_context_mode = 12; // text | system_message
+  string request_context_mode = 12;    // text | system_message
   repeated ExperienceOverride experience_overrides = 13;
   repeated ScheduleRule schedule_rules = 14;
-  // Executable controls bypass legacy L1 retrieval and count repeated failed
-  // operations even when their arguments/error text change. Persisted in bundles.
+  // 可执行控制绕过旧 L1 检索，并统计重复失败操作，
+  // 即使参数或错误正文发生变化；该设置随策略包持久化。
   bool aggressive_controls = 15;
-  // Disable only L1 text injection; source approval still authorizes existing controls.
+  // 只禁用 L1 文本注入；来源批准仍能授权既有控制。
   repeated ExperienceApproval disabled_injections = 16;
 }
 message RuntimePolicy {
@@ -149,15 +153,15 @@ message RuntimeAction {
   string action_id = 1;
   string operation = 2;
   google.protobuf.Struct arguments = 3;
-  // Derived by the boundary from the current model request. This is runtime
-  // schema evidence, not a configured or learned tool allowlist.
+  // 边界从当前真实模型请求中提取，
+  // 属于运行时模式证据，不是人工配置或学习出的工具白名单。
   repeated string schema_required_arguments = 4;
   repeated ActionDependency after = 5;
   uint32 prior_failures = 6;
-  // Package-observed target failure counts, keyed by the matching rule ID.
+  // 组件观测到的目标失败次数，以匹配规则身份为键。
   map<string, uint32> target_failures = 7;
 }
-// The caller persists this per execution instance, never per skill name.
+// 调用方按执行实例持久化，不能按技能名称共享。
 message LoopProgress {
   string execution_id = 1;
   uint64 iteration = 2;
@@ -179,21 +183,21 @@ message RuntimeQuery {
   string state_fingerprint = 6;
   LoopProgress previous = 7;
   bool pending_actions = 8;
-  // Completed failed actions since this execution's previous settled control step.
+  // 自本执行实例上次完成的控制步骤以来，已结束的失败动作数。
   uint32 failed_actions = 9;
-  // Consecutive settled steps containing only previously observed action
-  // input/output pairs in this execution. Complements unchanged-state detection.
+  // 连续已结束步骤只包含本执行中以前见过的动作输入输出对，
+  // 用于补充状态未变化的检测。
   uint32 repeated_action_steps = 10;
-  // Repeated failures of an operation since its last success. Populated only
-  // for a settled step with failures and no successful action, in aggressive mode.
+  // 某操作自上次成功后的重复失败数；
+  // 仅在激进模式下、步骤已结束且没有成功动作时填充。
   uint32 repeated_failure_steps = 11;
   repeated string observed_operations = 12;
   string actor_id = 13;
-  // Package-observed facts from this execution only. Useful successful actions
-  // suppress stale failure/rejection conditions in the current settled step.
+  // 只保存本执行实例中组件观测的事实；
+  // 当前步骤的有效成功动作会抑制过期失败或拒绝条件。
   repeated string error_codes = 14;
   uint32 rejected_actions = 15;
-  // Derived from this boundary's explicit opt-in and a loaded finish template.
+  // 根据本边界显式授权和已载入的收尾模板生成。
   bool can_finalize = 16;
 }
 message ActionDecision {
@@ -213,14 +217,14 @@ message RuntimeDecision {
   SchedulePlan schedule = 8;
 }
 message RuntimeObservation {
-  // The final serialized request, not the mutable prompt history.
+  // 最终序列化请求，而非仍会变化的提示词历史。
   google.protobuf.Struct request = 1;
   bool transport_allowed = 2;
   string call_id = 3;
   repeated string executed_action_ids = 4;
   repeated string skipped_action_ids = 5;
   string loop_decision = 6;
-  // Ordered observations from actual starts/completions, not dispatch ACKs.
+  // 按真实开始/完成排序的观测，不是派发确认。
   repeated ScheduledActionState schedule_events = 7;
 }
 message RuntimeReceipt {

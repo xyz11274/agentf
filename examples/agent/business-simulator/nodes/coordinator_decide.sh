@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # 加载 .env（如果存在），使 API_KEY 等环境变量在 Python 启动前就就位
-if [ -f "$PACKAGE_DIR/.env" ]; then
+if [ "${AF_SKIP_DOTENV:-0}" != "1" ] && [ -f "$PACKAGE_DIR/.env" ]; then
   set -a
   source "$PACKAGE_DIR/.env"
   set +a

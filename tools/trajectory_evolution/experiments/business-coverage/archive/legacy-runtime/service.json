@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "application_id": "business-simulator",
+  "data_dir": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/evolution",
+  "port": 0,
+  "http_timeout_ms": 5000,
+  "workers": 4,
+  "http_persistence": {
+    "mode": "buffered",
+    "max_buffer_bytes": 67108864
+  },
+  "run_lease_ms": 86400000,
+  "instrumentation": {
+    "level": "L3",
+    "capabilities": [
+      "model",
+      "actions",
+      "loop",
+      "schedule"
+    ]
+  },
+  "max_request_bytes": 1048576,
+  "max_run_bytes": 16777216,
+  "max_events": 10000,
+  "max_active_runs": 128,
+  "max_stored_runs": 10000,
+  "learning": {
+    "min_new_runs": 4,
+    "max_wait_ms": 600000,
+    "min_interval_ms": 60000,
+    "max_batch_runs": 16,
+    "max_batch_bytes": 33554432,
+    "retry_backoff_ms": 60000
+  },
+  "max_level": "L3",
+  "principals": [
+    {
+      "user_id": "business-training",
+      "token_env": "EVOLUTION_BUSINESS_TOKEN"
+    }
+  ],
+  "policy_scopes": [
+    "default"
+  ],
+  "activity_types": {},
+  "runtime_config": "runtime.json",
+  "experience_template_file": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/config/prompts/runtime-experience.txt",
+  "auto_evaluate": true,
+  "auto_approve_experiences": false,
+  "sharing": {
+    "enabled": true,
+    "min_supporting_users": 2,
+    "min_interval_ms": 60000,
+    "max_model_calls_per_cycle": 8,
+    "distill_prompt_file": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/config/prompts/shared-experience-distill.txt",
+    "review_prompt_file": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/config/prompts/shared-experience-review.txt",
+    "relation_prompt_file": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/config/prompts/cross-memory-relation.txt"
+  },
+  "shadow_options": {
+    "max_policy_entries": 128,
+    "max_advice_items": 3,
+    "max_advice_bytes": 4096,
+    "max_query_bytes": 32768,
+    "max_memory_bytes": 16777216,
+    "max_snapshot_bytes": 262144,
+    "max_match_terms": 128,
+    "min_matched_terms": 2,
+    "stop_terms": [
+      "任务",
+      "用户",
+      "工具",
+      "执行"
+    ]
+  },
+  "runtime_options": {
+    "max_context_bytes": 4096,
+    "approved_experiences": [],
+    "action_rules": [],
+    "loop_rules": [
+      {
+        "rule_id": "bounded-progress",
+        "scope_id": "default",
+        "max_iterations": 12,
+        "max_no_progress": 3,
+        "no_progress_decision": "replan",
+        "max_replans": 1,
+        "replan_context": "当前执行没有产生新进展。停止重复相同调用，优先检查前置条件、改变方案或说明阻塞原因。",
+        "reason": "连续无进展或达到本循环的授权轮次上限"
+      }
+    ]
+  },
+  "policy_evaluation_file": "agent-evaluation.json",
+  "evaluation_levels": [
+    "L3"
+  ],
+  "control_learning": {
+    "enabled": true,
+    "prompt_file": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/config/prompts/control-candidates.txt"
+  }
+}

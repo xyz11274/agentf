@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "dataset": "bfcl-v3-multi-turn",
+  "source_url": "http://106.55.172.74:8080/tmp/bfcl_v3_splits.zip",
+  "source_zip_sha256": "bf772c48cee98950f00937b72b27d8a265f4c7e3037455a3ff7a71f6f992aba1",
+  "source_members": {
+    "train": {
+      "member": "splits/multi_turn_train.jsonl",
+      "sha256": "c8d3c3700d38d7a505cce7a4417ccf15cc24ce697ccea8782274f32790aa7393",
+      "count": 400
+    },
+    "val": {
+      "member": "splits/multi_turn_val.jsonl",
+      "sha256": "de2a2190bc4687c100b91e8d8f6146265a308366a24a5e88462e330a4e502b14",
+      "count": 400
+    }
+  },
+  "split_protocol": "train400; val400 -> holdout50_scenarios(200), search37_scenarios+2_rows(150), selection12_scenarios+2_rows(50)",
+  "counts": {
+    "train": 400,
+    "search": 150,
+    "selection": 50,
+    "holdout": 200
+  },
+  "scenario_counts": {
+    "search": 38,
+    "selection": 13,
+    "holdout": 50
+  },
+  "search_selection_scenario_overlap": [
+    "74"
+  ],
+  "variant_counts": {
+    "train": {
+      "multi_turn_base": 100,
+      "multi_turn_long_context": 100,
+      "multi_turn_miss_func": 100,
+      "multi_turn_miss_param": 100
+    },
+    "search": {
+      "multi_turn_base": 38,
+      "multi_turn_long_context": 38,
+      "multi_turn_miss_func": 37,
+      "multi_turn_miss_param": 37
+    },
+    "selection": {
+      "multi_turn_base": 12,
+      "multi_turn_long_context": 12,
+      "multi_turn_miss_func": 13,
+      "multi_turn_miss_param": 13
+    },
+    "holdout": {
+      "multi_turn_base": 50,
+      "multi_turn_long_context": 50,
+      "multi_turn_miss_func": 50,
+      "multi_turn_miss_param": 50
+    }
+  },
+  "ids": {
+    "train": "train_ids.txt",
+    "search": "search_ids.txt",
+    "selection": "selection_ids.txt",
+    "holdout": "holdout_ids.txt"
+  },
+  "security": {
+    "raw_fixture_contains_synthetic_password_fields": true,
+    "native_adapter_must_not_copy_initial_config_or_credentials_to_task_attributes": true
+  }
+}

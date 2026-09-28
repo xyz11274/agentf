@@ -1,3 +1,8 @@
+// rust 客户端：通过统一协议收集执行事件并接收策略建议。
+// 原生入口复用包内 C ABI；注意句柄生命周期与跨语言内存释放。
+// 打点的输入是建议修改前的请求，执行后必须回传实际输入、输出与状态。
+// 取消、超时和采集缺口需要显式处理，不能把缺失证据当成正常完成。
+
 use crate::{CallError, Error, LoopDecision, PointCallResult};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
@@ -31,6 +36,7 @@ struct NativeApi {
 }
 
 impl NativeApi {
+    // 载入并验证持久化内容，拒绝版本、摘要或约束不匹配的结果。
     fn load(path: &Path) -> Result<Self, Error> {
         let library = platform::Library::open(path)?;
         unsafe {
@@ -49,10 +55,10 @@ impl NativeApi {
     }
 }
 
-/// In-process binding for `libtrajectory_evolution_local`.
+/// libtrajectory_evolution_local 的进程内绑定。
 ///
-/// Construct this once at application startup. Agent boundaries never use
-/// HTTP or spawn a subprocess; the stable C ABI exchanges bounded UTF-8 JSON.
+/// 应用启动时创建一次，Agent 边界不发 HTTP，
+/// 也不创建子进程；稳定 C 接口交换有界 UTF-8 JSON。
 pub struct LocalEvolution {
     api: NativeApi,
     handle: *mut c_void,
@@ -61,12 +67,14 @@ pub struct LocalEvolution {
     point_gaps: Mutex<(HashSet<String>, bool)>,
 }
 
-// LocalRuntime's C ABI is concurrent. The handle is closed only after Rust has
-// exclusive ownership in Drop, and the loaded function table is immutable.
+// 本地运行时 C 接口支持并发；只有 Rust 获得独占所有权后，
+// 才在 Drop 中关闭句柄，已加载的函数表保持不可变。
 unsafe impl Send for LocalEvolution {}
 unsafe impl Sync for LocalEvolution {}
 
 impl LocalEvolution {
+    // 初始化 new 的状态和资源；输入参数的校验与所有权在构造阶段确定。
+    // 对象创建后复用既有配置，实际执行与收尾分别由后续接口负责。
     pub fn new(
         library: impl AsRef<Path>,
         config: impl AsRef<Path>,
@@ -113,10 +121,12 @@ impl LocalEvolution {
         })
     }
 
+    // 执行一次组件协议调用，检查响应信封并保持请求身份一致。
     pub fn invoke(&self, operation: &str, fields: Value) -> Value {
         self.invoke_id(operation, fields, &uuid::Uuid::new_v4().to_string())
     }
 
+    // 使用调用方稳定请求身份执行协议操作，支持不确定传输后的幂等恢复。
     pub fn invoke_id(&self, operation: &str, fields: Value, request_id: &str) -> Value {
         let fallback = fallback(operation, &fields, request_id);
         match self.invoke_checked(self.api.invoke, operation, &fields, request_id) {
@@ -131,8 +141,9 @@ impl LocalEvolution {
         }
     }
 
-    /// Blocking administration entry point. Only `agent_evaluation.*`
-    /// operations belong here; keep this outside Agent boundaries.
+    /// 阻塞式管理入口只接受 agent_evaluation.* 操作。
+    /// 不要在 Agent 业务边界调用该入口。
+    // 执行评测等阻塞式管理操作，与主 Agent 热路径分离。
     pub fn manage(&self, operation: &str, fields: Value) -> Result<Value, Error> {
         self.invoke_checked(
             self.api.manage,
@@ -142,6 +153,7 @@ impl LocalEvolution {
         )
     }
 
+    // 提交框架无关打点，必要时在同一边界先取得策略决定，再记录实际执行结果。
     pub fn point(&self, fields: Value) -> Value {
         let mut request = fields.clone();
         if let Some(object) = request.as_object_mut() {
@@ -156,8 +168,9 @@ impl LocalEvolution {
         self.point_observed(&fields, result)
     }
 
-    /// Wrap one existing JSON-in/JSON-out operation. The business closure is
-    /// executed at most once and is skipped when policy rejects the boundary.
+    /// 包装一次现有 JSON 输入输出业务操作。
+    /// 业务闭包最多执行一次；策略拒绝边界时跳过业务执行。
+    // 包装宿主业务调用：先查询策略，再最多执行一次原业务函数，最后记录结果。
     pub fn call<F, E>(&self, mut fields: Value, execute: F) -> Result<PointCallResult, CallError<E>>
     where
         F: FnOnce(Value) -> Result<Value, E>,
@@ -226,6 +239,7 @@ impl LocalEvolution {
         }
     }
 
+    // 返回循环守卫决定和完整回执，区分仅守卫与前后提交两种协议。
     pub fn check_loop(&self, mut fields: Value) -> Result<LoopDecision, Error> {
         let referenced = fields.get("ref").is_some();
         let object = fields
@@ -263,10 +277,12 @@ impl LocalEvolution {
         })
     }
 
+    // 在原循环条件处取得并提交实际控制决定；返回是否允许继续，而不是另起一套循环。
     pub fn allow_loop(&self, fields: Value) -> Result<bool, Error> {
         Ok(self.check_loop(fields)?.allow)
     }
 
+    // 显式报告采集缺口，防止不完整轨迹进入后续学习与评测。
     pub fn capture_gap(&self, mut fields: Value, reason: &str) -> Result<Value, Error> {
         if fields.get("ref").is_some() {
             let object = fields
@@ -286,6 +302,7 @@ impl LocalEvolution {
         Ok(self.invoke("capture.gap", fields))
     }
 
+    // 读取组件自身的采集和排队指标，不把观测指标当作业务任务得分。
     pub fn metrics(&self) -> Value {
         if !self.available() {
             return json!({});
@@ -294,23 +311,27 @@ impl LocalEvolution {
         self.decode_owned(raw).unwrap_or_else(|_| json!({}))
     }
 
+    // 切换运行时是否启用采集或注入；关闭时仍按协议保持安全降级。
     pub fn set_enabled(&self, enabled: bool) {
         if self.available() {
             unsafe { (self.api.set_enabled)(self.handle, i32::from(enabled)) };
         }
     }
 
-    /// Maintenance/shutdown only; this may wait for persistence.
+    /// 仅供维护或关闭使用，可能等待持久化完成。
+    // 等待当前待持久化工作完成，用于维护或关闭；不要放在主 Agent 每个调用的热路径。
     pub fn drain(&self) {
         if self.available() {
             unsafe { (self.api.drain)(self.handle) };
         }
     }
 
+    // 检查本地库和句柄是否可调用，不借此推断后台评测已经完成。
     fn available(&self) -> bool {
         !self.handle.is_null() && self.process_id == std::process::id()
     }
 
+    // 在句柄和参数验证后调用原生接口，确保关闭状态和所有权安全。
     fn invoke_checked(
         &self,
         call: InvokeFn,
@@ -347,6 +368,7 @@ impl LocalEvolution {
             .ok_or_else(|| Error::new("response_invalid"))
     }
 
+    // 复制并解析由原生库拥有的响应，再使用匹配释放函数回收缓冲区。
     fn decode_owned(&self, raw: *mut c_char) -> Result<Value, Error> {
         if raw.is_null() {
             return Err(Error::new("local_unavailable"));
@@ -356,6 +378,7 @@ impl LocalEvolution {
         result.map_err(|_| Error::new("response_invalid"))
     }
 
+    // 以不包含敏感正文的最小标记报告丢失观测。
     fn report_gap(&self, operation: &str, fields: &Value) {
         if !self.available() {
             return;
@@ -379,6 +402,7 @@ impl LocalEvolution {
         );
     }
 
+    // 更新本地观测完整性记录，运行关闭后清理对应跟踪项。
     fn point_observed(&self, fields: &Value, result: Value) -> Value {
         if let Some(run) = point_run(fields).filter(|run| run.len() <= 1024) {
             let mut gaps = self.point_gaps.lock().unwrap_or_else(|e| e.into_inner());
@@ -399,6 +423,7 @@ impl LocalEvolution {
 }
 
 impl Drop for LocalEvolution {
+    // 在对象生命周期结束时释放原生资源，避免悬空句柄与重复释放。
     fn drop(&mut self) {
         let handle = self.handle;
         self.handle = ptr::null_mut();
@@ -408,6 +433,7 @@ impl Drop for LocalEvolution {
     }
 }
 
+// 从准备回执提取结束打点所需身份，不能把新上下文当作原调用的终点。
 fn finish_identity(fields: &Value, prepared: &Value) -> Map<String, Value> {
     let mut identity = Map::new();
     if let Some(reference) = fields.get("ref") {
@@ -418,10 +444,12 @@ fn finish_identity(fields: &Value, prepared: &Value) -> Map<String, Value> {
     identity
 }
 
+// 提取引用式或上下文式打点的运行身份。
 fn point_run(fields: &Value) -> Option<&str> {
     fields.get("ref")?.get("run")?.as_str()
 }
 
+// 只允许固定格式的错误码穿过接口，避免任意异常正文泄露。
 fn valid_error_code(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
@@ -430,6 +458,7 @@ fn valid_error_code(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
+// 把降级标记合入已有结果，保留原业务值和先前采集缺口。
 fn merge_fallback(mut fallback: Value, result: Value) -> Value {
     if let (Some(base), Some(observed)) = (fallback.as_object_mut(), result.as_object()) {
         base.extend(observed.clone());
@@ -437,6 +466,7 @@ fn merge_fallback(mut fallback: Value, result: Value) -> Value {
     fallback
 }
 
+// 构造保持原业务继续执行的降级响应，并记录采集不完整。
 fn fallback(operation: &str, fields: &Value, request_id: &str) -> Value {
     let mut result = json!({
         "degraded": true,
@@ -492,6 +522,7 @@ fn fallback(operation: &str, fields: &Value, request_id: &str) -> Value {
     result
 }
 
+// 把路径转换为原生接口要求的字符串，检查嵌入空字节和平台编码。
 fn path_cstring(path: &Path) -> Result<CString, Error> {
     platform::path_cstring(path.as_os_str())
 }
@@ -513,6 +544,7 @@ mod platform {
     unsafe impl Sync for Library {}
 
     impl Library {
+        // 创建当前接口需要的资源，失败路径释放已成功创建的部分。
         pub fn open(path: &Path) -> Result<Self, Error> {
             let path = CString::new(path.as_os_str().as_bytes())
                 .map_err(|_| Error::new("local_library_path_invalid"))?;
@@ -524,6 +556,7 @@ mod platform {
             }
         }
 
+        // 从已加载动态库读取所需符号，缺失时报告初始化失败。
         pub unsafe fn symbol<T: Copy>(&self, name: &[u8]) -> Result<T, Error> {
             let value = dlsym(self.0, name.as_ptr().cast());
             if value.is_null() {
@@ -534,6 +567,7 @@ mod platform {
     }
 
     impl Drop for Library {
+        // 在对象生命周期结束时释放原生资源，避免悬空句柄与重复释放。
         fn drop(&mut self) {
             if !self.0.is_null() {
                 unsafe { dlclose(self.0) };
@@ -541,6 +575,7 @@ mod platform {
         }
     }
 
+    // 把路径转换为原生接口要求的字符串，检查嵌入空字节和平台编码。
     pub fn path_cstring(path: &OsStr) -> Result<CString, Error> {
         CString::new(path.as_bytes()).map_err(|_| Error::new("local_configuration_invalid"))
     }
@@ -563,6 +598,7 @@ mod platform {
     unsafe impl Sync for Library {}
 
     impl Library {
+        // 创建当前接口需要的资源，失败路径释放已成功创建的部分。
         pub fn open(path: &Path) -> Result<Self, Error> {
             let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
             if path.contains(&0) {
@@ -577,6 +613,7 @@ mod platform {
             }
         }
 
+        // 从已加载动态库读取所需符号，缺失时报告初始化失败。
         pub unsafe fn symbol<T: Copy>(&self, name: &[u8]) -> Result<T, Error> {
             let value = GetProcAddress(self.0, name.as_ptr().cast());
             if value.is_null() {
@@ -587,6 +624,7 @@ mod platform {
     }
 
     impl Drop for Library {
+        // 在对象生命周期结束时释放原生资源，避免悬空句柄与重复释放。
         fn drop(&mut self) {
             if !self.0.is_null() {
                 unsafe { FreeLibrary(self.0) };
@@ -594,6 +632,7 @@ mod platform {
         }
     }
 
+    // 把路径转换为原生接口要求的字符串，检查嵌入空字节和平台编码。
     pub fn path_cstring(path: &OsStr) -> Result<CString, Error> {
         CString::new(path.to_string_lossy().as_bytes())
             .map_err(|_| Error::new("local_configuration_invalid"))

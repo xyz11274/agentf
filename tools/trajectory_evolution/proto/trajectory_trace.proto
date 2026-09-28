@@ -1,10 +1,14 @@
+// trajectory_trace 持久化协议：字段编号用于跨语言序列化兼容。
+// 新增能力优先增加字段，不复用已有编号改变原含义。
+// 身份、执行事实、评分和策略版本分别记录；缺失信息不能等同于零或成功。
+
 syntax = "proto3";
 
 package trajectory.evolution.v1;
 
 import "google/protobuf/struct.proto";
 
-// Levels describe this component's contract, not a claim of policy effectiveness.
+// 等级描述组件接入契约，不表示策略已证明有效。
 enum Level {
   LEVEL_NONE = 0;
   L0 = 1;
@@ -29,16 +33,16 @@ message Identity {
 }
 
 message RunOutcome {
-  // completed | failed | cancelled | unknown; separate from task success.
+  // 执行状态：completed、failed、cancelled、unknown，与任务业务成功分开。
   string execution_status = 1;
-  // succeeded | failed | partial | unknown
+  // 业务结果：succeeded、failed、partial、unknown。
   string business_status = 2;
 }
 
 message ErrorInfo {
   string code = 1;
   string message = 2;
-  // retryable | non_retryable | unknown
+  // 可重试性：retryable、non_retryable、unknown。
   string retryability = 3;
 }
 
@@ -47,7 +51,7 @@ message Application {
   string policy_id = 2;
   string policy_revision = 3;
   string decision_id = 4;
-  // applied | rejected | failed; an injection receipt is not proof of compliance.
+  // 应用状态：applied、rejected、failed；注入回执不等于业务遵循证明。
   string status = 5;
   string reason = 6;
   string experiment_id = 7;
@@ -56,8 +60,8 @@ message Application {
 
 message TraceEvent {
   string event_id = 1;
-  // run.start/end, step.start/end, action.start/end, loop.decision,
-  // advice.applied, state.changed, evaluation, custom
+  // 生命周期事件包括运行、步骤和动作的开始/结束，以及循环决定；
+  // 还包括建议应用、状态变化、评测和自定义事件。
   string kind = 2;
   string producer_id = 3;
   uint64 sequence = 4;
@@ -70,14 +74,14 @@ message TraceEvent {
   uint64 iteration = 11;
   repeated string caused_by = 12;
   string operation = 13;
-  // completed | failed | cancelled | unknown, required on step/action end.
+  // 步骤或动作结束时必须有终态：completed、failed、cancelled、unknown。
   string status = 14;
   google.protobuf.Value input = 15;
   google.protobuf.Value output = 16;
   ErrorInfo error = 17;
   string state_before = 18;
   string state_after = 19;
-  // continue | replan | stop
+  // 循环决定：continue、replan、stop。
   string decision = 20;
   string reason = 21;
   RunOutcome outcome = 22;
@@ -87,7 +91,7 @@ message TraceEvent {
 
 message TraceRun {
   uint32 schema_version = 1;
-  // Must equal trajectory.v1; prevents misidentifying legacy analysis JSON.
+  // 必须等于 trajectory.v1，避免误把旧分析 JSON 当成标准轨迹。
   string trace_kind = 2;
   Identity identity = 3;
   repeated TraceEvent events = 4;
@@ -99,13 +103,13 @@ message CapabilityManifest {
   Level requested_level = 2;
   repeated string declared_capabilities = 3;
   repeated string not_applicable = 4;
-  // downgrade | strict
+  // 接入失败处理：downgrade 表示降级，strict 表示严格拒绝。
   string fallback = 5;
 }
 
 message TraceIssue {
   string code = 1;
-  // error | warning. No raw event content is copied to validation output.
+  // 诊断等级为 error 或 warning；验证输出不复制原始事件正文。
   string severity = 2;
   uint64 event_index = 3;
 }

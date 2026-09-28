@@ -1,10 +1,14 @@
+// shadow_policy 持久化协议：字段编号用于跨语言序列化兼容。
+// 新增能力优先增加字段，不复用已有编号改变原含义。
+// 身份、执行事实、评分和策略版本分别记录；缺失信息不能等同于零或成功。
+
 syntax = "proto3";
 
 package trajectory.evolution.v1;
 
 import "trajectory_trace.proto";
 
-// All limits are supplied by configuration. This protocol cannot enable Active.
+// 所有限制来自配置；该只读协议不会自行启用主动控制。
 message ShadowOptions {
   repeated string target_scopes = 1;
   uint32 max_policy_entries = 2;
@@ -16,6 +20,9 @@ message ShadowOptions {
   uint32 max_match_terms = 8;
   uint32 min_matched_terms = 9;
   repeated string stop_terms = 10;
+  // Offline evolution may require at least one semantic verdict before a
+  // private candidate can reach the agent prompt/control boundary.
+  bool require_validated_evidence = 11;
 }
 
 message ShadowExperience {
@@ -27,15 +34,15 @@ message ShadowExperience {
   string content = 6;
   repeated string source_candidate_ids = 7;
   repeated string match_terms = 8;
-  // Set only by the trusted application publication path, never by a trace.
+  // 只能由可信应用发布路径设置，不能由轨迹自行声明。
   bool application_shared = 9;
-  // Empty means an L1-injectable experience (including legacy snapshots).
-  // Other values are immutable evidence sources for executable L2/L3 rules
-  // and must never be returned by ShadowRuntime as prompt advice.
+  // 留空表示可供 L1 注入的经验，兼容旧快照。
+  // 其他值表示可执行 L2/L3 规则的不可变来源证据，
+  // 不能由只读检索器作为提示词建议返回。
   string control_target_type = 10;
 }
 
-// Public projection only: no source user, conversation, evidence or review data.
+// 只含公共投影，不带来源用户、会话、原始证据或审查数据。
 message PublishedExperience {
   string memory_id = 1;
   string target_scope = 2;
@@ -47,7 +54,7 @@ message SharedExperienceStore {
   string application_id = 1;
   uint64 revision = 2;
   repeated PublishedExperience experiences = 3;
-  // Present only in a user-specific runtime view, never in the public store.
+  // 仅存在于用户专属运行视图，不写入公共存储。
   string user_id = 4;
   repeated CrossMemoryRelation relations = 5;
 }
@@ -57,7 +64,7 @@ message CrossMemoryRelation {
   string private_content_revision = 2;
   string shared_memory_id = 3;
   string shared_content_revision = 4;
-  // duplicate | related | conflict | independent; missing means unreviewed.
+  // 关系：duplicate、related、conflict、independent；缺失表示未经审查。
   string relation = 5;
 }
 
@@ -68,7 +75,7 @@ message ShadowPolicySnapshot {
   uint64 memory_revision = 4;
   ShadowOptions options = 5;
   repeated ShadowExperience experiences = 6;
-  // Aggregate counts only; excluded users' IDs/content never leave the compiler.
+  // 只输出聚合计数，被排除用户的身份和内容不离开编译器。
   map<string, uint64> excluded_counts = 7;
   uint64 shared_revision = 8;
   repeated CrossMemoryRelation cross_relations = 9;
@@ -96,16 +103,16 @@ message AdviceResult {
   string decision_id = 4;
   string snapshot_id = 5;
   string input_fingerprint = 6;
-  // matched | no_match | error; this is NOT the task/business outcome.
+  // 查询状态：matched、no_match、error；不是任务业务结果。
   string status = 7;
   string reason = 8;
   string mode = 9;
-  // Always not_applied. A query cannot manufacture an injection receipt.
+  // 始终为 not_applied；查询不能伪造注入应用回执。
   string application_status = 10;
   repeated ShadowAdvice advice = 11;
 }
 
-// CLI transport within the existing executable; content goes over stdin, not argv.
+// 复用现有可执行文件的命令行传输；内容通过标准输入传递，不放入参数。
 message ShadowCommand {
   string memory_path = 1;
   Identity identity = 2;

@@ -9,7 +9,7 @@
 - [能力缺口及受影响用例](docs/capability-gaps.md)：对照三份原始 Excel 和 `benchmark/datasets/product.json`。
 - [逐用例、逐轮明细](evals/capability-audit.json)：原表行号、原操作码、输入/预期、能力缺口和判定依据。
 
-原始表和转换集共 **1,074 个用例、1,910 轮**。能力清单是静态影响分析，**不是通过率**；尚未执行全量模型验收。
+原始表当前转换结果共 **1,074 个用例、1,936 轮**。能力清单是静态影响分析，**不是通过率**；尚未执行全量模型验收。
 
 ## 启动
 
@@ -61,6 +61,46 @@ bash examples/agent/business-simulator/run.sh
 
 ## 数据集验收
 
+### 正式三阶段入口
+
+完整命令、自动生成的目录和数据流见 [业务离线进化流程](../../../tools/trajectory_evolution/experiments/business-coverage/README.md)。这里的正式流程分为训练积累、GEPA 搜索和版本发布，不靠每次手工改配置切换阶段。
+
+冻结源数据集由 `prepare_dataset.py` 生成到 `tools/trajectory_evolution/experiments/business-coverage/datasets/source/`，位于运行产物目录之外。它从原始业务表选择 400 条 train、200 条 val、200 条 holdout；整段会话和同输入场景组不会跨集合。原表的“智能等级”写入 `attributes.product_source.case_level`，不是进化等级 L0–L4。缺失的意图标签保持 null，不由模型补写。
+
+第一阶段使用原 train 生成训练轨迹、分析/元反思及公私 memory。第二阶段直接引用这份 memory，并只从原 val 的 200 题中划分 GEPA 搜索/候选选择子集；原 holdout 200 题用于最终验收。原 train 不被复制到第二阶段，也不重新执行入库。第三阶段只导出通过门禁的 L3 策略版本。
+
+```bash
+# 第一阶段已经完成时不要重跑；新实验首次使用才执行这两条。
+python3 tools/trajectory_evolution/experiments/business-coverage/coldstart.py --prepare
+python3 tools/trajectory_evolution/experiments/business-coverage/coldstart.py
+
+# 第二阶段先做无模型准备，确认输入后再运行。
+python3 tools/trajectory_evolution/experiments/business-coverage/offline_gepa.py --prepare
+python3 tools/trajectory_evolution/experiments/business-coverage/offline_gepa.py --status
+python3 tools/trajectory_evolution/experiments/business-coverage/offline_gepa.py --run
+
+# 仅在 GEPA 通过最终留出门禁后执行。
+python3 tools/trajectory_evolution/experiments/business-coverage/offline_publish.py
+```
+
+真实执行链为：原生任务入口 → `run_product_eval.py --evolution-entry` → 原 `agentflowd`/JSON-RPC → v1 coordinator/skills。
+该模式只启动正常业务服务和 daemon、转交消息，不另实现 Agent 或调度循环，不读取 Excel、标签或预期答案。
+每轮等待真实采集终态后才能推进；真实历史由组件传入，固定时钟等环境事实另行前置。
+业务初态只从通用 `TRAJECTORY_EVOLUTION_TRIAL_INITIAL_STATE` 文件读取；每个 trial 独立 SQLite、端口和产物目录，结束清理。
+业务内容、前置条件和设备映射均留在本 Agent，进化包没有导入 business_sim、AgentFlow 或具体 skill。
+试次 worker 不重载包内 `.env`；普通启动行为不变。离线采集确认默认最多等 5 秒，可通过
+`BUSINESS_EVALUATION_POINT_TIMEOUT_MS=1..5000` 调整，成功请求立即返回，不改变线上打点默认 20ms 预算。
+入口同时声明 `AF_EXEC_SKILL_KEY`、`AF_COMPLETED_BATCH_KEY` 是公开的 DataBus 关联标识，
+避免隐私过滤器因变量名含 KEY 而拦下并发分支的采集。API key、认证令牌等仍照常检查，不关闭脱敏。
+生成的裁判配置启用完整重复载荷共享（`judge.share_repeated_inputs=true`）：相同内容引用一次，
+不裁掉实际工具结果、执行身份或因果关系；固定业务时钟也用于核验相对日期。
+
+原生报告中，`trials[].evidence.turn_evaluation` 是逐轮判定，`intent_observations` 是去重专业目标观察；
+`summary.turn_acceptance` 与 `summary.multi_intent_observation` 为汇总。业务评分、耗时、模型次数、token、无效 loop 等原指标保留。
+多意图只观察，不成为进化奖励。逐轮标签和整题结果在训练导入时分开归因，后轮失败不会把前轮成功经验变成反证。
+
+### 业务侧独立诊断（不替代原生学习入口）
+
 ```bash
 # 读取原始表，逐例对照转换集，更新能力缺口报告；不调用模型
 python3 examples/agent/business-simulator/evals/audit_capabilities.py
@@ -74,11 +114,82 @@ python3 examples/agent/business-simulator/evals/run_product_eval.py \
   --max-cases 5 --output examples/agent/business-simulator/outputs/product-smoke.json
 ```
 
-适配器复用原 `benchmark/run_eval.py` 的评分、judge 和意图规则，不改标准答案。每例使用独立身份；只准备原表明确的前置条件，证据写入报告 `business_execution`。
+适配器复用 `benchmark/run_eval.py` 的执行器与 judge，每例使用独立身份。业务入口启用逐轮工具证据评分；意图识别默认仅观察，不影响任务成绩。其他 Agent 使用公共 runner 时保持原有默认规则。
+
+默认从 `test_cases/product/*.xlsx` 重新转换，写入 `outputs/product-current.json`，避免复用旧版多轮拆分结果。当前转换结果为 1,074 条、1,936 轮。显式传入 `--evalset` 时使用指定文件；旧 JSON 请先用 `benchmark/converters.py` 重新生成。
 
 原始 RPC 评测调用只发送本轮字符串，而 v1 的首次触发从输入消息数组读取跨轮历史。本包的 `evals/conversation_client.py` 按 Bridge 的输入格式回传**真实用户消息和真实历史答复**，不把预期答案、前置评分标签或 case-id 发送给 Agent。该适配仅作用于本包评测，不修改公共运行时。
 
-严格意图评分和任务完成度应分别看：如果实际天气使条件不成立，正确行为可能是不派发后续提醒，而静态标签仍列出 `health-advice`。另外，GUI 的很多原始用例只要求操作步骤，步骤达标不证明手机实际执行。
+如果天气条件不成立，正确行为可能是不派发后续提醒，而静态标签仍列出 `health-advice`。此时由带本轮工具证据的裁判判断业务结果，静态 skill 集合不再作为业务入口的硬性失败条件。GUI 原表要求操作步骤时，以步骤和参数验收，不要求真实手机执行。
+
+### 固定业务世界与实时环境
+
+`run_product_eval.py` 默认使用 `data/evaluation-profile.json`：
+
+- 固定业务时钟，并把时钟事实随对话传给 Agent，使“明天/下周一”的模型解释与后端一致。
+- 用家居状态机生成 35 天测试历史，随后每个用例复制独立初态。历史模板按时间和天数缓存；一个用户的动作不会修改其他用户的模板。
+- 载入 `data/fixtures.json` 的测试片库、样例产品资料和固定信息。支持推荐→选第二部→播放→暂停→继续，以及用户知识资料查询。样例资料不是已核实的生产产品规范；真实业务验收应由业务方提供资料版本。
+- 天气来自 profile 的显式参数；号源在评测用户之间隔离，普通运行仍保留共享库存。需要验证条件真假两条路径时，分别使用 rain=true/false 的 profile。
+- 实时时钟不会推进评测设备和提醒；提醒随 `evaluation_world.clock` 推进。普通用户的实时后台不受影响。
+- 未配置的外部操作返回 `snapshot_miss`，不自动请求网络或提交真实邮件、支付、设备操作。可在 `external_responses` 增加固定服务回执，每项包含 `skill`、`arguments`、`result`；参数精确匹配，忽略幂等 `request_id`。这些是外部服务测试资料，不应包含用例 ID 或标准答案。
+- 报告和工具结果保存 `snapshot_sha256`。比较基线和候选时使用同一 profile 和资料版本，不跨快照直接比较成绩。
+- 资料检索只匹配标题、正文、关键词等业务文本，不用日期、ID、来源 URL 或 JSON 字段名作为命中依据；冻结查询也遵守传入的 `topic`、`location`。查询无匹配返回 `not_found` 和空列表，与操作不可用的 `unsupported/snapshot_miss` 区分。仅要求查询并如实展示结果时，正常空结果可以完成查询目标；明确要求价格、非空条目或创建成功时仍须满足相应结果。
+- 本例离线 GEPA 的启动检查还会比较当前宿主源码、模型身份与冻结部署。返回 `gepa_host_changed` 时须重新准备匹配当前代码的部署和对照上下文；不会自动覆盖旧实验或把旧基线与新宿主直接比较。
+
+只验证真实联网能力时加 `--live-world`，不载入上述初始历史和资料。普通聊天默认依然是原来的实时模式，评测 profile 只作用于本次评测身份。
+
+```bash
+# 不调用模型：重新转换并校验原表
+python3 examples/agent/business-simulator/evals/run_product_eval.py --validate-only
+
+# 已启动本 Agent 的 daemon/backend 后，使用固定环境评测 5 条（调用配置模型）
+python3 examples/agent/business-simulator/evals/run_product_eval.py \
+  --env-file examples/agent/business-simulator/.env --judge --max-cases 5 \
+  --output examples/agent/business-simulator/outputs/product-evaluation.json
+
+# 使用另一份业务环境定义
+python3 examples/agent/business-simulator/evals/run_product_eval.py \
+  --world-profile path/to/profile.json --judge --max-cases 5
+```
+
+评测进程和 backend 必须使用同一 `BUSINESS_SIM_DB` 文件；推荐复用 `evals/run_representative.py --label 自定名称 --judge`，它启动隔离的 daemon/backend 并统一数据库。`--no-judge` 可检查执行链路，但内容未评分的轮次标为 `needs_judge`，不作为业务成功。
+
+### 多意图识别观察指标
+
+每个 skill 对应一个专业子 Agent，因此以实际调用的 skill 集合近似意图识别结果，不增加模型调用。
+
+数据集每轮保留：
+
+| 字段 | 含义 |
+|---|---|
+| `expected_intents` | 原表意图，例如 `["QA", "居家"]`；缺标保持 null |
+| `expected_skills` | 按映射表转换的专业子 Agent 集合 |
+| `expected_operation_types` | 原表要求的操作码，例如 `["100051"]`；区别于 skill 标签 |
+| `expected_behavior` | 该轮业务结果标准；不传给被测 Agent |
+
+每轮报告的 `intent_observation` 保存预期/实际 skill、matched、missing、extra、complete 和 exact。同轮同名 skill 的多次调用只计一次。缺少轨迹时标记 `missing_trace`，不伪造为空调用。
+
+汇总位于报告根部 `multi_intent_observation`：
+
+| 字段 | 定义 |
+|---|---|
+| `multi_intent_turns` | 预期包含至少两个不同专业 skill 的轮数 |
+| `measured_turns` | 有实际轨迹、非条件待核对的可计算轮数 |
+| `precision` / `recall` / `f1` | 按各轮去重集合累计的准确率、覆盖率与 F1 |
+| `complete_rate` | 实际调用包含全部预期 skill 的轮次比例，额外调用另计 |
+| `exact_rate` | 实际集合与预期集合完全相等的比例 |
+| `missing_skill_count` / `extra_skill_count` | 漏派与额外派发的累计数量 |
+| `conditional_turns` | 静态标签需结合条件核对的轮数，单列，不混入上述分母 |
+| `missing_trace_turns` | 不能取得真实派发轨迹的多意图轮数 |
+| `observation_only` | 固定 true；不纳入进化目标、业务评分或发布门槛 |
+
+`summary` 中原有的严格意图统计保留，便于与旧报告对照；遇到条件任务，应优先看新增的分组观察结果。此指标不能区分同一 skill 内两个不同业务动作，动作完成度由操作码、参数和业务证据判定。
+
+### 业务评分证据与并发隔离
+
+裁判只接收当前轮新增的业务事件，包括 skill、action、status、操作码、错误和结构化输出；不会每轮重复发送整个状态库。递归限长后总证据约束在 12,000 字符内，保留截断标记，并使用现有隐私脱敏函数。裁判同时看到真实对话和业务标准，失败后成功恢复与条件跳过分开判定。独立业务检查器不再把所有 `CK_GUI` 用例当作充值。
+
+HTTP 工具自动携带 worker 的 `AF_EXEC_SKILL_KEY`（无此值时使用 `AF_SELF_TASK_ID`），浏览器页面和幂等回执按任务分支隔离，用户无需填写参数。播放器是明确共享的会话资源，播放、暂停、继续按该资源串行，保留跨轮控制能力。页面默认空闲 1,800 秒后在下次访问时回收，最多保留 128 个分支页面，可用 `BUSINESS_BROWSER_IDLE_SECONDS` / `BUSINESS_BROWSER_MAX_PAGES` 调整；达到上限时拒绝新增页面，不抢占活跃分支。Chromium 操作仍通过其专有线程执行；本次修复保证分支正确性，没有把浏览器改成并行执行引擎。
 
 ## 验证
 

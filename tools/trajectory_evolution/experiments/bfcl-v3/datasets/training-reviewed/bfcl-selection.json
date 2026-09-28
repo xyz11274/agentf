@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "source_zip_sha256": "bf772c48cee98950f00937b72b27d8a265f4c7e3037455a3ff7a71f6f992aba1",
+  "source_manifest_sha256": "ab664e95782649e9eb0edf1a1d15b3d489658872e57a1f59a11659342337621e",
+  "requested_counts": {
+    "train": 400,
+    "search": 150,
+    "selection": 50,
+    "holdout": 200
+  },
+  "native_counts": {
+    "train": 550,
+    "val": 50,
+    "holdout": 200
+  },
+  "mapping": {
+    "train": "train",
+    "search": "train",
+    "selection": "val",
+    "holdout": "holdout"
+  },
+  "raw_fixture_persisted_in_tasks": false
+}

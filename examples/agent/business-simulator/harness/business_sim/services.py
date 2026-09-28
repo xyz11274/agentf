@@ -225,13 +225,36 @@ def memory(state: dict, a: dict) -> dict:
 
 
 def lookup(query: str, items: list) -> list:
-    # Token and Chinese-bigram matching; no case ids, expected outputs or eval files.
-    chars = re.sub(r"[^\w\u4e00-\u9fff]", "", query.lower())
-    grams = {chars[i:i + 2] for i in range(max(0, len(chars) - 1))}
+    # 只检索资料正文，不对序列化后的 JSON 做匹配。否则日期中的“2026”、
+    # ID、来源 URL 甚至字段名都会把天气资料误当作机票查询结果。
+    # 这里仍是本地词法检索，不读取题号、标准答案或评测标签。
+    query = query.casefold()
+    grams = {part[i:i + 2] for part in re.findall(r"[\u4e00-\u9fff]+", query)
+             for i in range(len(part) - 1)}
+    words = set(re.findall(r"[a-z][a-z0-9]*", query))
+    content_fields = ("title", "name", "text", "content", "description", "keywords",
+                      "topic", "location", "type", "actors", "aliases", "highlight")
     scored = []
     for item in items:
-        haystack = json_text(item).lower()
-        score = sum(g in haystack for g in grams) + 5 * sum(k in query for k in item.get("keywords", []))
+        # 字段之间保留分隔，不能把“天，气”或相邻字段拼成新的“天气”词。
+        parts = []
+        for field in content_fields:
+            value = item.get(field, "")
+            if isinstance(value, str):
+                parts.append(value)
+            elif isinstance(value, list):
+                parts.extend(v for v in value if isinstance(v, str))
+        haystack = "\n".join(parts).casefold()
+        content_words = set(re.findall(r"[a-z][a-z0-9]*", haystack))
+        score = sum(g in haystack for g in grams) + len(words & content_words)
+        # 声明的关键词优先；空白词不能命中一切，英文不能以任意子串冒充完整单词。
+        for keyword in item.get("keywords", []):
+            if not isinstance(keyword, str):
+                continue
+            keyword = keyword.strip().casefold()
+            if keyword and any(c.isalpha() for c in keyword) and re.search(
+                    r"(?<![a-z0-9])" + re.escape(keyword) + r"(?![a-z0-9])", query):
+                score += 5
         if score:
             scored.append((score, item))
     return [item for _, item in sorted(scored, key=lambda x: -x[0])[:5]]
@@ -336,7 +359,10 @@ def dispatch(skill: str, args: dict, *, store: Store | None = None, scope: str |
         if execution_mode == "real":
             from .real_services import execute
             try:
-                return execute(skill, args, local_store, resolved_scope)
+                from .task_context import current_task, task_context, worker_task
+                # HTTP 使用请求上下文；直接工具调用使用 worker 环境。
+                with task_context(current_task() or (worker_task() if store is None else "")):
+                    return execute(skill, args, local_store, resolved_scope)
             except Exception as exc:
                 # External failures do not become fixture answers or leak request credentials.
                 from .live_information import result

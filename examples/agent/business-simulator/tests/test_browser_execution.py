@@ -130,3 +130,35 @@ def test_arbitrary_local_services_and_file_urls_are_not_websites(env):
         outcome=dispatch('third-party',{'action':'browser_open','url':url},store=env[0],scope=env[1])
         assert outcome['status']=='failed' and outcome['error']=='url_not_allowed'
 
+
+def test_same_skill_parallel_branches_keep_pages_refs_and_receipts_separate(env):
+    from business_sim.task_context import task_context
+    with task_context('dispatch-a'):
+        first=call(env,'office-work',action='browser_open',url=env[2])
+    with task_context('dispatch-b'):
+        second=call(env,'office-work',action='browser_open',url=env[2])
+        call(env,'office-work',action='browser_fill',ref=ref(second,'Document title'),text='branch-b',request_id='fill-1')
+    with task_context('dispatch-a'):
+        result=call(env,'office-work',action='browser_fill',ref=ref(first,'Document title'),text='branch-a',request_id='fill-1')
+        assert next(e['value'] for e in result['UserOutputObject']['browser']['elements'] if e['label']=='Document title')=='branch-a'
+    with task_context('dispatch-b'):
+        result=call(env,'office-work',action='browser_observe')
+        assert next(e['value'] for e in result['UserOutputObject']['browser']['elements'] if e['label']=='Document title')=='branch-b'
+
+
+def test_idle_branch_pages_are_reclaimed_without_evicting_active_branch(env,monkeypatch):
+    from business_sim.task_context import task_context
+    with task_context('idle'):
+        call(env,action='browser_open',url=env[2])
+    engine=browser._ENGINES[str(env[0].path.resolve())]
+    idle_key=(str(env[1]),'shopping','idle')
+    engine.pages[idle_key]['last_used']-=3600
+    monkeypatch.setenv('BUSINESS_BROWSER_MAX_PAGES','1')
+    with task_context('active'):
+        call(env,action='browser_open',url=env[2])
+    assert idle_key not in engine.pages and len(engine.pages)==1
+    with task_context('overflow'):
+        answer=dispatch('shopping',{'action':'browser_open','url':env[2]},store=env[0],scope=env[1])
+        assert answer['status']=='failed'
+    with task_context('active'):
+        call(env,action='browser_observe')

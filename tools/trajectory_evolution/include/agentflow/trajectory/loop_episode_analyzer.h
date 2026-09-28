@@ -1,3 +1,8 @@
+// 循环分析：按执行身份、循环编号与迭代号组织轨迹，识别重复和收敛情况。
+// 并行分支的迭代分别归属，不能仅按日志先后顺序拼成同一个循环。
+// 规则能够确定的浪费是下界；缺少观测不代表无效循环为零。
+// 此处是对外声明，具体实现位于 src；修改接口时需考虑现有调用方与持久化版本。
+
 #pragma once
 
 #include <cstddef>
@@ -110,7 +115,7 @@ struct LoopEpisode {
   std::vector<std::string> source_event_ids;
   std::vector<EvaluationSummary> evaluations;
   std::vector<std::string> diagnostic_ids;
-  // Only standard traces use actor_id; legacy serialized fields stay unchanged.
+  // 只有标准轨迹使用 actor_id，既有序列化字段保持不变。
   std::string actor_id;
 };
 
@@ -191,21 +196,24 @@ struct AnalysisReport {
 };
 
 class AnalysisError : public std::runtime_error {
- public:
-  explicit AnalysisError(const std::string& message)
-      : std::runtime_error(message) {}
+public:
+  // 创建分析异常，供调用方区分格式错误和业务诊断。
+  explicit AnalysisError(const std::string &message) : std::runtime_error(message) {}
 };
 
 class LoopEpisodeAnalyzer {
- public:
-  AnalysisReport analyze_file(
-      const std::filesystem::path& path,
-      const AnalyzerOptions& options = AnalyzerOptions()) const;
+public:
+  // 从文件读取轨迹并执行规则分析，保留解析和完整性问题。
+  AnalysisReport analyze_file(const std::filesystem::path &path,
+                              const AnalyzerOptions &options = AnalyzerOptions()) const;
 
-  static std::string to_json(const AnalysisReport& report, bool pretty = true);
+  // 将当前结果转换为公开 JSON 表示，内部临时状态不随意暴露。
+  static std::string to_json(const AnalysisReport &report, bool pretty = true);
 };
 
+// 将内部枚举映射为稳定的协议名称，保证日志和序列化使用统一表示。
 std::string to_string(LoopScope scope);
+// 将内部枚举映射为稳定的协议名称，保证日志和序列化使用统一表示。
 std::string to_string(InvalidLoopCategory category);
 
-}  // namespace agentflow::trajectory
+} // 命名空间结束：agentflow::trajectory

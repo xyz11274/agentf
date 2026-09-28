@@ -1,0 +1,44 @@
+{
+  "server": {
+    "listen": "127.0.0.1:18821",
+    "uds_biz_path": "daemon-biz.sock",
+    "uds_ctrl_path": "daemon-ctrl.sock",
+    "max_connections": 256
+  },
+  "runtime": {
+    "role": "master",
+    "worker_threads": 4,
+    "local_worker_id": "policy-transfer-worker",
+    "worker_default_workflow_threads": 2,
+    "worker_control_threads": 1,
+    "worker_business_threads": 2,
+    "worker_queue_size": 1024
+  },
+  "dataref_bridge": {
+    "capacity_mb": 256,
+    "redis_url": ""
+  },
+  "logging": {
+    "level": "info",
+    "file": ""
+  },
+  "trace": {
+    "output_dir": "native-trace"
+  },
+  "daemon": {
+    "pid_file": "agentflowd.pid",
+    "drain_timeout_ms": 30000
+  },
+  "sandbox": {
+    "mode": "local",
+    "workdir_root": "sandbox",
+    "snapshot_root": "snapshots",
+    "sandbox_http_port": 8080,
+    "sandbox_max_active": 8,
+    "output_max_bytes": 1048576,
+    "gc_destroy_ttl_ms": 3600000,
+    "gc_recycle_snapshot_ttl_ms": 86400000,
+    "allow_fallback": false
+  },
+  "agents": []
+}

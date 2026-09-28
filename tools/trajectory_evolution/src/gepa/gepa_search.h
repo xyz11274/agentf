@@ -1,3 +1,8 @@
+// GEPA 搜索主流程：生成候选、选择父节点、融合分支并调度训练和验证。
+// 候选是持久化策略版本，不直接修改宿主代码；实际效果由统一评测器测量。
+// 缓存身份必须包含数据集、运行版本和评分语义，不能把旧评分与新评分直接混用。
+// 留出数据用于最终比较，不作为反思输入或下一代候选的训练证据。
+
 #pragma once
 
 // 搜索与评测共用执行、隐私和资源约束；不要在此绕过标准评测器。
@@ -24,19 +29,37 @@ struct GepaResult {
   Json artifact;
   dataset::v1::TaskEvaluationReport holdout;
   Json summary;
+  Json memory_feedback;
   std::vector<GepaFinalist> finalists;
 };
 
-Json load_gepa_config(const std::filesystem::path& path);
-std::string gepa_config_fingerprint(const Json& config);
-GepaResult run_gepa_search(const Json& seed, const Json& baseline,
-    const std::filesystem::path& dataset, const std::filesystem::path& evaluation_path,
-    const Json& evaluation, const Json& config, const Json& gate, const Json& control_learning,
-    const std::filesystem::path& output, const std::string& context, const std::string& evaluation_context,
-    const std::string& candidate_evaluation_context,
-    const std::function<bool()>& cancelled,
-    std::shared_ptr<agentflow::trajectory::ModelAdapter> reflection_model = nullptr,
-    std::size_t final_holdout_top_k_override = 0,
-    bool final_holdout_replay = false);
+// 从唯一记忆库读取已获得训练支持的修订，作为下一次评测的种子。
+// 只应用仍匹配来源修订和父组件的修改，并重新执行完整策略编译校验。
+// 返回的种子仍需真实评测；此入口不会发布策略或调用远程模型。
+Json apply_gepa_memory_feedback(const Json &artifact, const Json &feedback,
+                                const Json &control_learning);
 
-}  // namespace trajectory::evolution::integration
+// 反证只作为反思的历史输入，不成为运行时规则或原经验的全局否定。
+// 只选相同来源、背景及评分口径，去掉任务正文、报告路径、时间戳等非必要信息。
+Json gepa_reflection_rejections(const Json &artifact, const Json &feedback,
+                                const Json &control_learning,
+                                const std::string &evaluation_context);
+
+// 读取外部搜索参数并检查范围与能力依赖，配置变化不需要改写搜索代码。
+Json load_gepa_config(const std::filesystem::path &path);
+// 为影响搜索行为的配置生成稳定身份，供断点续跑校验。
+std::string gepa_config_fingerprint(const Json &config);
+// 驱动多轮候选生成、训练反馈、验证选择和冻结留出评测。
+// 所有阶段受同一预算和取消信号约束，缓存必须匹配数据、宿主与评分版本。
+GepaResult run_gepa_search(
+    const Json &seed, const Json &baseline, const std::filesystem::path &dataset,
+    const std::filesystem::path &evaluation_path, const Json &evaluation, const Json &config,
+    const Json &gate, const Json &control_learning, const std::filesystem::path &output,
+    const std::string &context, const std::string &evaluation_context,
+    const std::string &candidate_evaluation_context, const std::function<bool()> &cancelled,
+    std::shared_ptr<agentflow::trajectory::ModelAdapter> reflection_model = nullptr,
+    std::size_t final_holdout_top_k_override = 0, bool final_holdout_replay = false,
+    const Json &reflection_history = {},
+    const std::string &final_holdout_execution_context = {});
+
+} // 命名空间结束：trajectory::evolution::integration

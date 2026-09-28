@@ -14,7 +14,7 @@ PACKAGE = Path(__file__).resolve().parents[2]
 
 SHARED_KEYS = {'devices', 'world', 'home_history', 'home_energy', 'home_intervals',
                'preferences', 'records', 'reminders', 'appointments', 'knowledge_documents',
-               'virtual_device_world'}
+               'virtual_device_world', 'evaluation_world'}
 
 
 class IdentityScope(str):
@@ -35,6 +35,10 @@ def scope_key(user: str | None = None, client: str | None = None) -> str:
 
 
 def database_path() -> Path:
+    # 每个原生评测试次有独立工作区；即使宿主使用同一学习用户，也不能共享业务状态。
+    initial = os.environ.get('TRAJECTORY_EVOLUTION_TRIAL_INITIAL_STATE')
+    if initial and os.environ.get('TRAJECTORY_EVOLUTION_TRIAL_CONFIG'):
+        return Path(initial).resolve().parent / 'business.sqlite3'
     return Path(os.environ.get("BUSINESS_SIM_DB", str(PACKAGE / "outputs/business.sqlite3"))).resolve()
 
 
@@ -51,6 +55,9 @@ def fresh_state() -> dict:
     if os.environ.get("BUSINESS_EXECUTION_MODE", "real") == "real":
         from .device_world import ensure
         ensure(state)
+    if os.environ.get('TRAJECTORY_EVOLUTION_TRIAL_INITIAL_STATE') and os.environ.get('TRAJECTORY_EVOLUTION_TRIAL_CONFIG'):
+        from .evaluation_world import seed_trial_state
+        seed_trial_state(state)
     return state
 
 
@@ -139,13 +146,15 @@ class Store:
             self._persist(db,scope,state if state is not None else fresh_state())
 
     def run(self, scope: str, skill: str, args: dict, handler, *, transactional=False) -> dict:
+        from .task_context import receipt_key
+        request_skill = receipt_key(skill)
         fingerprint = hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         request_id = args.get("request_id", "")
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if request_id:
                 old = db.execute("SELECT fingerprint,result FROM requests WHERE scope=? AND skill=? AND request_id=?",
-                                 (scope, skill, request_id)).fetchone()
+                                 (scope, request_skill, request_id)).fetchone()
                 if old:
                     if old[0] != fingerprint:
                         raise ValueError("request_id was already used with different arguments")
@@ -158,7 +167,7 @@ class Store:
                 self._persist(db, scope, state)
                 if request_id:
                     db.execute("INSERT INTO requests VALUES (?, ?, ?, ?, ?)",
-                               (scope, skill, request_id, fingerprint, json.dumps(result, ensure_ascii=False)))
+                               (scope, request_skill, request_id, fingerprint, json.dumps(result, ensure_ascii=False)))
             else:
                 # Roll back inventory alongside its owner state on incomplete operations.
                 db.execute("ROLLBACK TO business_operation")

@@ -12,6 +12,7 @@
 #include <poll.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <chrono>
 #include <cstring>
@@ -31,6 +32,44 @@ namespace {
 using agentflow::DataVariant;
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+// 客户端连接为非阻塞模式，单次 send() 允许只写入部分字节。JSON-RPC
+// 使用换行分帧，因此必须完整写到末尾；否则客户端会一直等待缺失的换行。
+bool send_all_with_timeout(int fd, const std::string& data, int timeout_ms) {
+  size_t offset = 0;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(timeout_ms);
+  while (offset < data.size()) {
+    ssize_t sent = send(fd, data.data() + offset, data.size() - offset, MSG_NOSIGNAL);
+    if (sent > 0) {
+      offset += static_cast<size_t>(sent);
+      continue;
+    }
+    if (sent < 0 && errno == EINTR) continue;
+    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        errno = ETIMEDOUT;
+        return false;
+      }
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - now).count();
+      pollfd descriptor{fd, POLLOUT, 0};
+      int ready;
+      do {
+        ready = poll(&descriptor, 1, static_cast<int>(remaining));
+      } while (ready < 0 && errno == EINTR);
+      if (ready == 0) errno = ETIMEDOUT;
+      if (ready <= 0 || (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        if (ready > 0) errno = EPIPE;
+        return false;
+      }
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
 static std::string rj_stringify(const rapidjson::Value& val) {
   rapidjson::StringBuffer buf;
@@ -362,7 +401,7 @@ void UDSServer::server_loop() {
 void UDSServer::send_error_and_close(int client_fd, int code, const std::string& message) {
   std::string error_response = build_error_response(code, message, -1);
   error_response += "\n";
-  send(client_fd, error_response.c_str(), error_response.size(), MSG_NOSIGNAL);
+  (void)send_all_with_timeout(client_fd, error_response, 1000);
   usleep(1000);  // Brief delay to ensure data is sent
   close(client_fd);
 }
@@ -417,9 +456,9 @@ void UDSServer::handle_client(int client_fd) {
       // Send response (if not a notification-only request)
       if (!response.empty()) {
         response += "\n";
-        ssize_t sent = send(client_fd, response.c_str(), response.size(), 0);
-        if (sent < 0) {
-          Logger::instance().error_f("[UDS_SERVER] Send failed: %s", strerror(errno));
+        if (!send_all_with_timeout(client_fd, response, 30000)) {
+          Logger::instance().error_f("[UDS_SERVER] Complete send failed: %s", strerror(errno));
+          break;
         }
       }
     }
@@ -620,8 +659,7 @@ std::string UDSServer::handle_subscribe(int client_fd, const std::string& params
       // Send to client
       int fd = it->second.client_fd;
       notification += "\n";
-      ssize_t sent = send(fd, notification.c_str(), notification.size(), MSG_NOSIGNAL);
-      if (sent < 0) {
+      if (!send_all_with_timeout(fd, notification, 1000)) {
         Logger::instance().error_f("[UDS_SERVER] Notification send failed: %s", strerror(errno));
       }
     }
@@ -795,7 +833,9 @@ void UDSServer::notify_subscribers(const std::string& key, const DataVariant& va
 
       int fd = sub_it->second.client_fd;
       notification += "\n";
-      send(fd, notification.c_str(), notification.size(), MSG_NOSIGNAL);
+      if (!send_all_with_timeout(fd, notification, 1000)) {
+        Logger::instance().error_f("[UDS_SERVER] Notification send failed: %s", strerror(errno));
+      }
     }
   }
 }

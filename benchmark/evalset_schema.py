@@ -50,6 +50,10 @@ def normalize_turn(turn: dict) -> dict:
         "must_include": list(turn.get("must_include") or []),
         "must_not_include": list(turn.get("must_not_include") or []),
     }
+    for key in ("expected_operation_types", "expected_intents"):
+        if key in turn:
+            values = turn[key]
+            out[key] = list(values) if values is not None else None
     return out
 
 
@@ -74,8 +78,9 @@ def normalize_case(case: dict) -> dict:
         out["final_rubric"] = case["final_rubric"]
     if case.get("split"):
         out["split"] = case["split"]
-    if case.get("level"):
-        out["level"] = case["level"]
+    # 仅迁移用例元数据；显式新字段优先，不影响进化等级或难度。
+    if "case_level" in case or "level" in case:
+        out["case_level"] = case.get("case_level", case.get("level"))
     if case.get("provenance"):
         out["provenance"] = dict(case["provenance"])
     return out

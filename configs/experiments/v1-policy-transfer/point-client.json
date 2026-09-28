@@ -1,0 +1,9 @@
+{
+  "point_timeout_ms": 1000,
+  "privacy": {
+    "public_env_names": [
+      "AF_EXEC_SKILL_KEY",
+      "AF_COMPLETED_BATCH_KEY"
+    ]
+  }
+}
