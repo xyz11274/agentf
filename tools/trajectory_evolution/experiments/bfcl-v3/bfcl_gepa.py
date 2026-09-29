@@ -450,7 +450,7 @@ def _prepare_gepa_config(source: Path, dataset: dict, env: dict[str, str],
     evaluation["variants"][0]["command"] = _host_command()
     evaluation["variants"][0].setdefault("pass_env", [])
     for key in ("AF_LLM_API_KEY", "AF_LLM_BASE_URL", "AF_LLM_MODEL", "AF_LLM_TIMEOUT",
-                "AF_LLM_MAX_RETRIES", "AF_LLM_RETRY_BASE_DELAY", "AF_NODE_EXECUTION_TIMEOUT",
+                "AF_LLM_MAX_RETRIES", "AF_LLM_RETRY_BASE_DELAY", "AF_LLM_RETRY_JITTER", "AF_NODE_EXECUTION_TIMEOUT",
                 "AF_MAX_SKILL_TASK_ITERATIONS", "AGENTFLOW_DAEMON", "EVOLUTION_BFCL_TOKEN",
                 "BFCL_BASELINE_PATH", "PYTHONPATH", "LD_LIBRARY_PATH"):
         if key not in evaluation["variants"][0]["pass_env"]:

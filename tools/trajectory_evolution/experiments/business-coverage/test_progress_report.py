@@ -1,8 +1,10 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 MODULE = Path(__file__).with_name("progress_report.py")
@@ -24,13 +26,148 @@ def _trial(task, split, variant, quality, verdict="failed"):
             "assessment": {"quality": quality},
             "loop_review": {"wasted_iterations": [{"id": "w"}]},
             "intent_observations": [{
-                "status": "measured", "matched": ["x"], "extra": [], "missing": []
+                "status": "measured", "complete": True, "conditional": False,
+                "turn": 1, "expected_targets": ["x"], "actual_targets": ["x"],
+                "matched": ["x"], "extra": [], "missing": []
             }],
         },
     }
 
 
 class ProgressReportTest(unittest.TestCase):
+    def test_live_checkpoints_prefer_requested_attempt_over_stale_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            search = Path(directory) / "search"
+            eval_id = "evaluation"
+            old = search / "evaluations" / eval_id / "attempt-1"
+            current = search / "evaluations" / eval_id / "attempt-2" / "trials"
+            old.mkdir(parents=True)
+            current.mkdir(parents=True)
+            (old / "report.json").write_text(json.dumps({"trials": []}))
+            for task in ("a", "b"):
+                (current / f"{task}.json").write_text(json.dumps(
+                    _trial(task, "train", "parent", .7, "passed")))
+            tree_path = search / "tree.json"
+            entry = {"attempt": 2, "report": f"evaluations/{eval_id}/attempt-1/report.json",
+                     "split": "train", "task_ids": ["a", "b", "c"]}
+
+            rows, planned, attempt_dir = progress_report._live_checkpoint_rows(
+                tree_path, eval_id, entry)
+
+            self.assertEqual({row["task_id"] for row in rows}, {"a", "b"})
+            self.assertEqual(planned, 3)
+            self.assertEqual(attempt_dir.name, "attempt-2")
+
+    def test_gepa_only_snapshot_skips_training_and_holdout_scans(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            active = output / "gepa" / "workspace" / "agent-evaluation" / "job" / "search"
+            active.mkdir(parents=True)
+            (output / "gepa" / "status.json").write_text(json.dumps(
+                {"progress": {"job_id": "job"}}))
+            (active / "tree.json").write_text(json.dumps({
+                "active": 0,
+                "nodes": [{"status": "accepted", "version": "v0"}],
+                "evaluations": {},
+            }))
+
+            with mock.patch.object(progress_report, "_training_snapshot",
+                                   side_effect=AssertionError("training scan invoked")), \
+                    mock.patch.object(progress_report, "_holdout_snapshot",
+                                       side_effect=AssertionError("holdout scan invoked")):
+                data = progress_report.snapshot(output, gepa_only=True)
+
+            self.assertEqual(data["training"]["status"], "skipped")
+            self.assertTrue(data["holdout"]["skipped"])
+            self.assertEqual(data["comparison_scope"], data["selection"]["scope"])
+            self.assertIn("训练全量扫描：已跳过", progress_report.markdown(data))
+
+    def test_selection_snapshot_prefers_status_job_over_stale_trees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            gepa = output / "gepa"
+            active = gepa / "workspace" / "agent-evaluation" / "a-active" / "search"
+            stale = gepa / "workspace" / "agent-evaluation" / "z-stale" / "search"
+            active.mkdir(parents=True)
+            stale.mkdir(parents=True)
+            def write_tree(path, current_count, current_bytes):
+                path.write_text(json.dumps({
+                    "active": 1,
+                    "nodes": [
+                        {"status": "accepted", "version": "parent"},
+                        {"status": "running", "parent": 0, "version": "current",
+                         "reflection_feedback_count": current_count,
+                         "reflection_input_bytes": current_bytes},
+                    ],
+                    "evaluations": {},
+                }))
+            write_tree(active / "tree.json", 9, 2400)
+            write_tree(stale / "tree.json", 99, 99000)
+            (gepa / "status.json").write_text(json.dumps({"progress": {"job_id": "a-active"}}))
+
+            snapshot = progress_report._selection_snapshot(output)
+
+            self.assertEqual(snapshot["current_reflection_feedback_count"], 9)
+            self.assertEqual(snapshot["current_reflection_input_bytes"], 2400)
+
+    def test_selection_snapshot_without_status_uses_most_recent_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            trees = [
+                output / "gepa" / "workspace" / "agent-evaluation" / name / "search" / "tree.json"
+                for name in ("newest", "older")
+            ]
+            for tree, count in zip(trees, (7, 70)):
+                tree.parent.mkdir(parents=True)
+                tree.write_text(json.dumps({
+                    "active": 1,
+                    "nodes": [{"status": "accepted"},
+                              {"status": "running", "parent": 0,
+                               "reflection_feedback_count": count}],
+                    "evaluations": {},
+                }))
+            os.utime(trees[0], ns=(2_000_000_000, 2_000_000_000))
+            os.utime(trees[1], ns=(1_000_000_000, 1_000_000_000))
+
+            snapshot = progress_report._selection_snapshot(output)
+
+            self.assertEqual(snapshot["current_reflection_feedback_count"], 7)
+
+    def test_reflection_evidence_metrics_use_only_node_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            root = output / "gepa" / "workspace" / "agent-evaluation" / "job" / "search"
+            root.mkdir(parents=True)
+            tree = {
+                "active": 1,
+                "nodes": [
+                    {"status": "accepted", "reflection_feedback_count": 5,
+                     "reflection_input_bytes": 1200},
+                    {"status": "running", "parent": 0,
+                     "reflection_feedback_count": 3, "reflection_input_bytes": 800},
+                ],
+                "evaluations": {},
+            }
+            (root / "tree.json").write_text(json.dumps(tree))
+            rendered = progress_report.markdown(progress_report.snapshot(output))
+            self.assertIn("| 反思详细证据题数 | 暂无 | 暂无 | 5 | 3 |", rendered)
+            self.assertIn("| 反思输入字节数 | 暂无 | 暂无 | 1200 | 800 |", rendered)
+
+    def test_missing_reflection_evidence_fields_render_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            root = output / "gepa" / "workspace" / "agent-evaluation" / "job" / "search"
+            root.mkdir(parents=True)
+            tree = {
+                "active": 1,
+                "nodes": [{"status": "accepted"}, {"status": "running", "parent": 0}],
+                "evaluations": {},
+            }
+            (root / "tree.json").write_text(json.dumps(tree))
+            rendered = progress_report.markdown(progress_report.snapshot(output))
+            self.assertIn("| 反思详细证据题数 | 暂无 | 暂无 | 暂无 | 暂无 |", rendered)
+            self.assertIn("| 反思输入字节数 | 暂无 | 暂无 | 暂无 | 暂无 |", rendered)
+
     def test_level_counts_use_applied_boundary_receipts_only(self):
         trial = _trial("r", "val", "candidate", .5)
         trial["evidence"]["traces"] = [{"events": [
@@ -51,7 +188,9 @@ class ProgressReportTest(unittest.TestCase):
              "application": {"status": "rejected"}},
         ]}]
         result = progress_report._aggregate([trial])
-        self.assertEqual(result["level_counts"], {"L1": 1, "L2": 2, "L3": 1})
+        self.assertEqual(result["level_counts"], {
+            "L1": 1, "L2": 2, "L2_action": 1, "L2_schedule": 1, "L3": 1
+        })
 
     def test_judge_and_contract_errors_are_unscored_but_keep_costs(self):
         """错误 judge/contract 的诊断分值不能变成 quality=0 或 loop=0。"""
@@ -113,6 +252,26 @@ class ProgressReportTest(unittest.TestCase):
         })
         self.assertIn("partial / 缺失", rendered)
         self.assertIn("错误数", rendered)
+
+    def test_quality_matches_native_hard_check_and_preserves_partial_business_score(self):
+        budget_failure = _trial("TOKEN_TEST_01_084", "train", "candidate", 1.0, "failed")
+        budget_failure["evidence"]["assessment"].update(
+            quality_upper=1.0, coverage=1.0, critical_failures=0
+        )
+        budget_failure["checks"] = [{
+            "check_id": "budget.steps", "status": "failed"
+        }]
+        self.assertEqual(progress_report._quality(budget_failure), 0.0)
+
+        partial_business_failure = _trial("business", "train", "candidate", .5, "failed")
+        partial_business_failure["checks"] = [{
+            "check_id": "model", "status": "failed"
+        }]
+        self.assertEqual(progress_report._quality(partial_business_failure), .5)
+
+        errored = _trial("error", "train", "candidate", 1.0, "error")
+        errored["error_code"] = "evaluation_judge_failed"
+        self.assertIsNone(progress_report._quality(errored))
 
     def test_training_uses_canonical_batches_and_keeps_denominators(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -223,6 +382,123 @@ class ProgressReportTest(unittest.TestCase):
             self.assertEqual(data["comparison"]["current"]["strict_passed"], 1)
             self.assertEqual(data["comparison"]["current"]["planned"], 200)
             self.assertEqual(data["comparison"]["current"]["completed"], 1)
+
+    def test_live_checkpoint_trials_are_counted_by_unique_task(self):
+        """Before report.json exists, show real task checkpoints (not 0/100)."""
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            root = output / "gepa" / "workspace" / "agent-evaluation" / "job" / "search"
+            evaluation = root / "evaluations" / "eval-live" / "attempt-1" / "trials"
+            evaluation.mkdir(parents=True)
+            for index, task in enumerate(("task-a", "task-b", "task-c")):
+                (evaluation / f"{index}.json").write_text(json.dumps(
+                    _trial(task, "train", "seed", .5, "failed")))
+            # A duplicate checkpoint for task-b must not inflate completed count.
+            (evaluation / "retry.json").write_text(json.dumps(
+                _trial("task-b", "train", "seed", .6, "passed")))
+            tree = {
+                "active": 1,
+                "baseline_version": "l0-v",
+                "nodes": [
+                    {"version": "seed-v", "status": "accepted", "parent": None},
+                    {"version": None, "status": "running", "parent": 0},
+                ],
+                "evaluations": {
+                    "eval-live": {
+                        "split": "train", "status": "running", "version": "seed-v",
+                        "attempt": 1, "task_ids": [f"task-{x}" for x in "abcdef"],
+                    },
+                },
+            }
+            (root / "tree.json").write_text(json.dumps(tree))
+            data = progress_report.snapshot(output)
+            live = data["selection"]["live_evaluation"]
+            self.assertIsNotNone(live)
+            self.assertEqual(live["completed"], 3)
+            self.assertEqual(live["planned"], 6)
+            self.assertEqual(data["comparison"]["current"], None)
+            rendered = progress_report.markdown(data)
+            self.assertIn("当前评测 checkpoint完成题数（train）", rendered)
+            self.assertIn("3/6题", rendered)
+
+    def test_selection_uses_baseline_validation_cache_for_l0(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            root = output / "gepa" / "workspace" / "agent-evaluation" / "job" / "search"
+            root.mkdir(parents=True)
+            tree = {
+                "active": 0,
+                "baseline_version": "l0-v",
+                "baseline_validation": {
+                    "task-a": {"quality": .4, "strict_pass_rate": 0.,
+                               "invalid_loops": 2., "duration_ms": 10.,
+                               "tokens": 100., "llm_calls": 2.},
+                    "task-b": {"quality": .8, "strict_pass_rate": 1.,
+                               "invalid_loops": 0., "duration_ms": 20.,
+                               "tokens": 200., "llm_calls": 4.},
+                },
+                "nodes": [{"version": "l0-v", "status": "accepted", "parent": None}],
+                "evaluations": {},
+            }
+            (root / "tree.json").write_text(json.dumps(tree))
+            data = progress_report.snapshot(output)
+            l0 = data["selection"]["rows"]["L0"]
+            self.assertEqual(l0["completed"], 2)
+            self.assertEqual(l0["planned"], 2)
+            self.assertAlmostEqual(l0["quality"], .6)
+            self.assertEqual(l0["strict_passed"], 1)
+            self.assertAlmostEqual(l0["invalid_loop"], 1.)
+            self.assertIsNone(l0["intent_f1"])
+
+    def test_intent_f1_shows_measured_task_denominator(self):
+        measured = _trial("measured", "val", "candidate", .5)
+        unmeasured = _trial("unmeasured", "val", "candidate", .5)
+        unmeasured["evidence"]["intent_observations"] = [{
+            "status": "unlabeled", "matched": None, "extra": None, "missing": None
+        }]
+        result = progress_report._aggregate([measured, unmeasured], planned=2)
+        rendered = progress_report._intent_cell(result)
+        self.assertIn("可测 1/2 题", rendered)
+        self.assertIn("样本不足", rendered)
+
+    def test_intent_f1_excludes_conditional_partial_and_unobserved_rows(self):
+        trial = _trial("a", "val", "candidate", .5)
+        rows = trial["evidence"]["intent_observations"]
+        rows.extend([
+            {"status": "conditional_review", "complete": False, "conditional": True,
+             "turn": 2, "expected_targets": ["missing"], "actual_targets": [],
+             "matched": [], "extra": [], "missing": ["missing"]},
+            {"status": "partial", "complete": False, "conditional": False,
+             "turn": 3, "expected_targets": ["missing"], "actual_targets": [],
+             "matched": [], "extra": [], "missing": ["missing"]},
+            {"status": "dispatch_unobserved", "turn": 4,
+             "expected_targets": ["missing"], "actual_targets": [],
+             "matched": [], "extra": [], "missing": ["missing"]},
+        ])
+        result = progress_report._aggregate([trial], planned=1)
+        self.assertEqual(result["intent_f1"], 1.0)
+        self.assertEqual(result["intent_turn_keys"], ["a#1"])
+        self.assertEqual(result["intent_measured"], 1)
+
+    def test_intent_f1_requires_definite_gold_and_matching_turn_coverage(self):
+        parent = _trial("a", "val", "parent", .5)
+        child = _trial("a", "val", "child", .5)
+        child["evidence"]["intent_observations"].append({
+            "status": "measured", "complete": True, "conditional": False,
+            "turn": 2, "expected_targets": ["y"], "actual_targets": ["y"],
+            "matched": ["y"], "extra": [], "missing": [],
+        })
+        old = progress_report._aggregate([parent], planned=1)
+        new = progress_report._aggregate([child], planned=1)
+        self.assertEqual(old["intent_turn_keys"], ["a#1"])
+        self.assertEqual(new["intent_turn_keys"], ["a#1", "a#2"])
+        self.assertIn("不可比较", progress_report._intent_cell(new, old))
+        self.assertIn("不可比较", progress_report._intent_cell(old, new))
+        no_gold = _trial("b", "val", "child", .5)
+        no_gold["evidence"]["intent_observations"][0].pop("expected_targets")
+        missing = progress_report._aggregate([no_gold], planned=1)
+        self.assertIsNone(missing["intent_f1"])
+        self.assertEqual(missing["intent_task_measured"], 0)
 
 
 if __name__ == "__main__":

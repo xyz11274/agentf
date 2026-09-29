@@ -82,6 +82,12 @@ def representatives(rows):
 def environment():
     from run_eval import load_env
     load_env(PACKAGE/'.env')
+    # 只清理本实验进程及其子进程环境；pass_env 按变量名转发时也无法重新注入代理。
+    for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+                'http_proxy', 'https_proxy', 'all_proxy', 'BUSINESS_BROWSER_PROXY'):
+        os.environ.pop(key, None)
+    os.environ['NO_PROXY'] = '*'
+    os.environ['no_proxy'] = '*'
     # 凭据只在进程环境中流转，不复制到配置、命令行或报告。
     provider_base = os.environ['AF_LLM_BASE_URL'].rstrip('/')
     assert provider_base in {
@@ -100,7 +106,10 @@ def environment():
     os.environ['TRAJECTORY_MODEL_ENDPOINT_OVERRIDE'] = provider_base + '/chat/completions'
     os.environ['OPENAI_MODEL'] = os.environ['AF_LLM_MODEL']
     os.environ['AF_LLM_THINKING_MODE'] = 'disabled'
-    os.environ['AF_LLM_TIMEOUT'] = '120'
+    # Keep the client boundary long enough for the largest business turn;
+    # successful-request latency is measured from the actual response and is
+    # not padded by this timeout.
+    os.environ['AF_LLM_TIMEOUT'] = '300'
     # 主 Agent 与裁判共享供应商额度；瞬时 429 在总超时内指数退避，不能直接
     # 记成业务失败。
     os.environ['AF_LLM_MAX_RETRIES'] = '4'

@@ -44,7 +44,8 @@ class Provider(http.server.BaseHTTPRequestHandler):
             "reason": "实际输出与给定标准一致。",
             "evidence_paths": ["/state"],
         }
-        if Provider.behavior.startswith("loops"):
+        if Provider.behavior.startswith("loops") and "loop_inventory" in json.loads(
+                body["messages"][1]["content"]):
             packet = json.loads(body["messages"][1]["content"])
             inventory = packet["loop_inventory"]
             wasted = []
@@ -155,6 +156,24 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     review["status"] = "uncertain"
                 if Provider.behavior == "loops_detailed_both":
                     review["wasted_iterations"] = wasted
+            if Provider.behavior.startswith("loops_consistency_") and inventory:
+                reviews = [
+                    dict(iteration_id=k, decision="keep",
+                         reason="本轮首次交付独立结果，省去会丢失交付。",
+                         evidence_event_ids=[v["event_ids"][0]])
+                    for k, v in inventory.items()
+                ]
+                if reviews and Provider.behavior == "loops_consistency_safe":
+                    reviews[0]["reason"] = "首次合理探索取得新的数据源信息，即使调用失败也有独立贡献。"
+                elif reviews and Provider.behavior in ("loops_consistency_repair",
+                                                       "loops_consistency_exhausted",
+                                                       "loops_consistency_missing"):
+                    reviews[0]["reason"] = "已知参数不合法，空调度没有派发或答复，也没有新信息，但仍保留。"
+                    if (Provider.behavior == "loops_consistency_repair"
+                            and packet.get("validation_feedback", {}).get("reason_conflicts")):
+                        reviews[0]["decision"] = "waste"
+                        reviews[0]["reason"] = "已知空调度只返回参数错误，没有独立贡献，整轮可省。"
+                review = dict(status="complete", iteration_reviews=reviews)
             judgment.update(verdict="passed", loop_review=review)
         if Provider.behavior == "reference":
             judgment.update(verdict="passed", evidence_paths=["/not-present"])
@@ -316,7 +335,8 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     ]
                 )
         if packet.get("kind") == "task-judge-consistency.v1":
-            conflict = dict(id=packet["goals"][0]["id"], issue="missing_requirement_waived")
+            conflict = (dict(id=packet["goals"][0]["id"], issue="missing_requirement_waived")
+                        if packet["goals"] else None)
             conflicts = []
             if Provider.behavior == "goal_consistency_exhausted" or (
                     Provider.behavior == "goal_consistency_repair"
@@ -331,6 +351,19 @@ class Provider(http.server.BaseHTTPRequestHandler):
             if Provider.behavior == "goal_consistency_mixed":
                 conflicts = [conflict, dict(conflict, id=packet["goals"][1]["id"])]
             judgment = dict(conflicts=conflicts)
+        if packet.get("kind") == "task-loop-consistency.v1":
+            loop_rows = packet["loop_reviews"]
+            judgment = {}
+            if Provider.behavior != "loops_consistency_missing":
+                loop_conflicts = []
+                if Provider.behavior in ("loops_consistency_repair",
+                                         "loops_consistency_exhausted") and (
+                        Provider.behavior == "loops_consistency_exhausted"
+                        or loop_rows[0]["decision"] == "keep"):
+                    loop_conflicts.append(dict(
+                        iteration_id=loop_rows[0]["iteration_id"],
+                        issue="unsupported_retention"))
+                judgment["loop_conflicts"] = loop_conflicts
         content = json.dumps(judgment)
         if Provider.behavior == "fence":
             content = "```json\n" + content + "\n```"
@@ -2417,6 +2450,134 @@ class TrialTests(unittest.TestCase):
         prompt.write_text((SOURCE / "config/prompts/task-consistency.txt").read_text())
         self.config["judge"]["consistency_prompt"] = "prompts/task-consistency.txt"
         self.config["judge"]["max_repair_attempts"] = 1
+
+    def loop_consistency_mode(self, objectives=True):
+        """用四轮真实格式轨迹检验独立目标与 loop 复核，不调用外部模型。"""
+        if objectives:
+            self.objective_mode(turns=1)
+        else:
+            self.model()
+            self.config["checks"] = {}
+        variant = self.config["variants"][0]
+        variant.pop("entry", None)
+        variant.pop("instrumentation_config", None)
+        variant["command"] = [sys.executable, "-B",
+                              str(SOURCE / "tests/evaluation_host.py"), "loop_trace"]
+        self.config["judge"].update(
+            loop_review_prompt="prompts/task-loop-review.txt",
+            consistency_prompt="prompts/task-consistency.txt",
+            max_repair_attempts=1,
+            max_model_calls=12,
+        )
+
+    def test_loop_consistency_repairs_unsupported_keep_with_same_execution(self):
+        """已知空调度被误保留时，原裁判修正；不修改原执行。"""
+        self.loop_consistency_mode()
+        Provider.behavior = "loops_consistency_repair"
+        report = self.evaluate()
+        trial = report["trials"][0]
+        self.assertEqual(trial["execution_status"], "completed")
+        self.assertEqual(trial["evidence"]["loop_review"]["status"], "complete")
+        self.assertEqual(trial["evidence"]["loop_review"]["count"], 1)
+        packets = [json.loads(r["messages"][1]["content"])
+                   for r in REQUESTS[self.start_requests:]]
+        self.assertEqual(len(packets), 6)
+        self.assertEqual(packets[1]["kind"], "task-judge-consistency.v1")
+        self.assertNotIn("loop_reviews", packets[1])
+        self.assertNotIn("evidence", packets[1])
+        self.assertEqual(packets[2]["kind"], "task-loop-consistency.v1")
+        self.assertNotIn("goals", packets[2])
+        self.assertNotIn("inputs", packets[2])
+        self.assertNotIn("reported", packets[2])
+        self.assertEqual(len(packets[2]["loop_reviews"]), 4)
+        self.assertEqual(packets[2]["goal_requirements"][0]["user_input"],
+                         "计算已知数据的总量。")
+        self.assertNotIn("reported", packets[2]["goal_requirements"][0])
+        row = packets[2]["loop_reviews"][0]
+        self.assertEqual(row["decision"], "keep")
+        self.assertIn("iteration_id", row)
+        self.assertIn("evidence", row)
+        self.assertIn("evidence", packets[2])
+        visible = packets[2]["evidence"]
+        traces = visible.get("traces", [visible.get("trace", {})])
+        self.assertTrue(any(event.get("kind") == "action.end" and "output" in event
+                            for trace in traces for event in trace.get("events", [])))
+        self.assertEqual(packets[3]["validation_feedback"]["reason_conflicts"], [
+            dict(iteration_id=row["iteration_id"], issue="unsupported_retention")])
+        instruction = packets[3]["validation_feedback"]["instruction"]
+        self.assertIn("iteration_id", instruction)
+        self.assertIn("loop_inventory", instruction)
+        self.assertIn("unsupported_retention", instruction)
+        self.assertIn("整轮无新贡献", instruction)
+        self.assertEqual(
+            packets[3]["validation_feedback"]["previous_response"]
+            ["loop_review"]["iteration_reviews"][0]["decision"], "keep")
+        self.assertEqual(packets[5]["loop_reviews"][0]["decision"], "waste")
+        self.assertEqual(trial["evidence"]["judge_batches"][0]
+                         ["consistency_review"]["reviewed_iterations"], 4)
+
+    def test_loop_consistency_keeps_first_exploration_and_delivery(self):
+        """失败的首次合理探索及首次交付不应被复核器误判为浪费。"""
+        self.loop_consistency_mode()
+        Provider.behavior = "loops_consistency_safe"
+        report = self.evaluate()
+        review = report["trials"][0]["evidence"]["loop_review"]
+        self.assertEqual(review["status"], "complete")
+        self.assertEqual(review["count"], 0)
+        self.assertTrue(all(row["decision"] == "keep"
+                            for row in review["iteration_reviews"]))
+        packets = [json.loads(r["messages"][1]["content"])
+                   for r in REQUESTS[self.start_requests:]]
+        self.assertEqual(len(packets), 3)
+        self.assertEqual(packets[1]["kind"], "task-judge-consistency.v1")
+        self.assertEqual(packets[2]["kind"], "task-loop-consistency.v1")
+        self.assertEqual(packets[2]["loop_reviews"][0]["decision"], "keep")
+
+    def test_loop_consistency_without_goals_still_reviews_iterations(self):
+        """没有目标评分行时，逐轮一致性不能因空 goals 早退。"""
+        self.loop_consistency_mode(objectives=False)
+        Provider.behavior = "loops_consistency_safe"
+        report = self.evaluate()
+        packets = [json.loads(r["messages"][1]["content"])
+                   for r in REQUESTS[self.start_requests:]]
+        consistency = [row for row in packets
+                       if row.get("kind") == "task-loop-consistency.v1"]
+        self.assertEqual(len(consistency), 1)
+        self.assertEqual(consistency[0]["goal_requirements"], [])
+        self.assertEqual(len(consistency[0]["loop_reviews"]), 4)
+        self.assertEqual(report["trials"][0]["evidence"]["loop_review"]["count"], 0)
+
+    def test_loop_consistency_missing_conflicts_cannot_publish_zero(self):
+        """模型省略必需 loop_conflicts 时，单题判分错误而不是记零浪费。"""
+        self.loop_consistency_mode()
+        Provider.behavior = "loops_consistency_missing"
+        report = self.evaluate(code=3)
+        self.assertEqual(report["trials"][0]["verdict"], "error")
+        self.assertIsNone(report["summary"]["invalid_loop_assessment"]["mean"])
+
+    def test_loop_consistency_unresolved_conflict_is_not_zero_waste(self):
+        """持续无根据保留整轮时，耗尽有界修复后隔离该题。"""
+        self.loop_consistency_mode()
+        Provider.behavior = "loops_consistency_exhausted"
+        report = self.evaluate(code=3)
+        trial = report["trials"][0]
+        self.assertEqual(trial["execution_status"], "completed")
+        self.assertEqual(trial["verdict"], "error")
+        self.assertIsNone(report["summary"]["invalid_loop_assessment"]["mean"])
+
+    def test_loop_consistency_error_isolated_from_other_variant(self):
+        """一条轨迹的复核冲突不能让同批另一策略评测失效。"""
+        self.loop_consistency_mode()
+        other = json.loads(json.dumps(self.config["variants"][0]))
+        other.update(id="independent", version="test-v2")
+        other["command"][-1] = "trace"
+        self.config["variants"].append(other)
+        Provider.behavior = "loops_consistency_exhausted"
+        report = self.evaluate(code=3)
+        self.assertEqual(len(report["trials"]), 2)
+        verdicts = {row["variant_id"]: row["verdict"] for row in report["trials"]}
+        self.assertEqual(verdicts["baseline"], "error")
+        self.assertNotEqual(verdicts["independent"], "error")
 
     def test_reason_consistency_repairs_without_reexecuting_or_changing_standards(self):
         """依据与结论冲突时原裁判重核；第二次仍失败，核验器不直接改分。"""

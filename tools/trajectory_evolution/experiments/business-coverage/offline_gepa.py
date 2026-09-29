@@ -44,15 +44,15 @@ _lifecycle_handle = None
 _lifecycle_depth = 0
 
 # 正式 fresh 入口一次性冻结这组容量；通用校验仍允许最多 256 轮，且已有
-# 原生 100 轮状态机回归。patience=0 禁止在 50 轮预算前因连续无改善提前停树。
+# 原生 100 轮状态机回归。patience=0 禁止在 30 轮预算前因连续无改善提前停树。
 FRESH_SEARCH_LIMITS = {
     "timeout_hours": 50,
-    "max_rounds": 50,
-    "max_model_calls": 128,
-    # Keep the full run below the 5 GB workspace budget.  Each validation
-    # trial retains its compact, replayable JSON report; intermediate PB and
-    # trial copies are removed after scoring.
-    "max_trials": 2400,
+    "max_rounds": 30,
+    "max_model_calls": 1024,
+    # Full-pool grouped diagnosis, synthesis and review share this offline ceiling.
+    # Reserve 30 rounds, three final holdouts and retry headroom.
+    # This is a ceiling, not a requirement to consume additional API calls.
+    "max_trials": 6500,
     "patience": 0,
 }
 FRESH_MAX_RECOVERIES = 16
@@ -332,8 +332,14 @@ def prepare(seed_report: Path | None = None, baseline_report: Path | None = None
     dataset = check_dataset()
     memory = memory_hashes(source)
     private = coverage.read(source / f"by-user/{USER}/memory/evolution-memory.json")["entries"]
-    if not any(item["candidate"].get("status") == "EVOLUTION_CANDIDATE_STATUS_PROPOSED"
-               for item in private):
+    # PROPOSED 只是候选草稿；INSUFFICIENT_SUPPORT 或单条对话证据不能作为
+    # 离线进化输入的质量证明。这里仅检查是否存在达到最低支持量的候选，
+    # 真正可注入的集合仍由 validated/published snapshot 决定。
+    if not any(
+            item.get("candidate", {}).get("status") == "EVOLUTION_CANDIDATE_STATUS_PROPOSED"
+            and int(item.get("candidate", {}).get("support_dialogue_count", "0")) >= 2
+            and int(item.get("candidate", {}).get("support_episode_count", "0")) >= 2
+            for item in private):
         raise RuntimeError("training_has_no_proposed_experience")
 
     prepare_configuration(CONFIG, DATASET)
@@ -342,6 +348,11 @@ def prepare(seed_report: Path | None = None, baseline_report: Path | None = None
     runtime_file = CONFIG / "runtime.json"
     runtime = coverage.read(runtime_file)
     runtime["model"]["json_object_output"] = True
+    # Long business trajectories can legitimately take more than two minutes
+    # at the judge boundary.  A short client timeout turns a recoverable model
+    # delay into an inconclusive seed and wastes the whole evaluation wave.
+    runtime["model"]["timeout_ms"] = max(
+        300000, int(runtime["model"].get("timeout_ms", 0)))
     runtime["model"]["max_retries"] = 4
     # Freeze the model actually selected for this run.  The provider switch
     # may change both endpoint and model; leaving an old plan-only model in
@@ -359,10 +370,14 @@ def prepare(seed_report: Path | None = None, baseline_report: Path | None = None
     service.update(data_dir=str(WORKSPACE.relative_to(ROOT)),
                    memory_source_dir=str(source.relative_to(ROOT)),
                    max_level="L3", auto_evaluate=True,
+                   # 经验必须沿用已经 validated/published 的批准集合；离线评测不应
+                   # 把 snapshot 中的未验证候选自动升级成可注入经验。
                    auto_approve_experiences=True, evaluation_levels=["L3"])
     service["instrumentation"]["level"] = "L3"
-    # Only semantically validated memories may reach the agent boundary; the
-    # training store still keeps unvalidated reflections for later review.
+    service["workers"] = 16
+    # Only the validated/published snapshot is auto-approved. Disabling
+    # auto-approval without explicit approvals prevents evaluation-only jobs
+    # from starting; unvalidated training candidates remain excluded below.
     service.setdefault("shadow_options", {})["require_validated_evidence"] = True
     service["shadow_options"]["max_policy_entries"] = min(
         int(service["shadow_options"].get("max_policy_entries", 128)), 64)
@@ -386,6 +401,7 @@ def prepare(seed_report: Path | None = None, baseline_report: Path | None = None
     assessment["dataset"] = os.path.relpath(DATASET, CONFIG)
     assessment["training"]["enabled"] = False
     assessment["min_interval_ms"] = 0
+    assessment["max_jobs_per_hour"] = 32
     # 业务基线本身可能低于固定绝对分数；这里只保留相对 L0 不退化约束。
     # 旧模板中的绝对门槛也显式删除，避免重新 prepare 后悄悄恢复 0.8。
     assessment["gate"].pop("min_quality", None)
@@ -399,9 +415,9 @@ def prepare(seed_report: Path | None = None, baseline_report: Path | None = None
 
     evaluation_file = CONFIG / "evaluation.json"
     evaluation = coverage.read(evaluation_file)
-    # 一个 trial 同时消耗业务模型和裁判额度；16 路会把瞬时请求进一步放大，
-    # 在当前火山套餐上整批触发 429。四路并发配合两侧指数退避稳定推进。
-    evaluation["parallelism"] = 4
+    # 业务约定要求训练和 GEPA evaluator 均保持 16 路并发；请求超时由
+    # runtime 的 300 秒边界和已有重试处理，不能用降低并发改变实验口径。
+    evaluation["parallelism"] = 16
     # 最小测试/用户配置可能省略 pass_env；把其缺省视为空列表，避免启动前
     # 因配置形状差异直接崩溃。
     evaluation["variants"][0].setdefault("pass_env", [])
@@ -437,6 +453,14 @@ def prepare(seed_report: Path | None = None, baseline_report: Path | None = None
     gepa = coverage.read(gepa_file)
     if gepa["minibatch_size"] != 32 or gepa["merge_minibatch_size"] != 16:
         raise RuntimeError("gepa_search_profile_mismatch")
+    # 每个模型请求仍保持有界；COMBEE 从完整父批次分组覆盖所有题，
+    # 8 是单个请求的行数上限，不再是整个节点能看到的题数上限。
+    gepa["max_feedback_trials"] = 8
+    gepa["reflection_strategy"] = "combee"
+    gepa["duplication_factor"] = 1
+    gepa["screening_max_quality_drop"] = 0.03
+    gepa["proposal_selection"] = "top_k"
+    gepa["proposal_top_k"] = 2
     # 中间节点保留真实局部收益，供后续改写和多父融合；
     # 最终质量、循环和留出门槛仍由独立发布验收约束。
     gepa["acceptance"] = "pareto"
@@ -592,6 +616,37 @@ def _best_effort_terminal(job_id: str, current: dict) -> bool:
     )
 
 
+def _rejected_completed_showcase(job_id: str, current: dict) -> bool:
+    """Expose a completed, holdout-scored tree after formal gate rejection.
+
+    This is a read-only terminal path for the architect showcase. It never
+    retries search, replays holdout, or upgrades the formal publication state.
+    """
+    if (not job_id or current.get("job_id") != job_id or
+            current.get("job_status") != "rejected"):
+        return False
+    state_file = WORKSPACE / "agent-evaluation/state.json"
+    tree_file = WORKSPACE / "agent-evaluation" / job_id / "search/tree.json"
+    if not state_file.is_file() or not tree_file.is_file():
+        return False
+    try:
+        state = coverage.read(state_file)
+        tree = coverage.read(tree_file)
+    except (OSError, ValueError, TypeError):
+        return False
+    job = (state.get("jobs") or {}).get(job_id, {})
+    final = tree.get("final_holdout") or {}
+    final_candidates = final.get("candidates") or []
+    return (
+        job.get("status") == "rejected" and tree.get("status") == "completed" and
+        tree.get("active") is None and tree.get("batch") is None and
+        final.get("status") == "completed" and bool(final_candidates) and
+        all(candidate.get("status") == "complete" for candidate in final_candidates
+            if isinstance(candidate, dict)) and
+        all(isinstance(candidate, dict) for candidate in final_candidates)
+    )
+
+
 def can_retry_initial_launch() -> bool:
     """仅在能够证明尚未创建本用户 L3 树时，允许重启初始入口。
 
@@ -740,7 +795,7 @@ def extend_retry_budget(job_id: str, current: dict | None = None) -> bool:
         config["max_rounds"] = (old_rounds if old_rounds > used_rounds else
                                 min(256, used_rounds + 4))
         config["max_model_calls"] = (old_calls if old_calls > used_calls else
-                                     min(256, used_calls + 8))
+                                     min(1024, used_calls + 8))
         elapsed_ms = max(0, now_ms - int(tree.get("started_ms", now_ms))
                          - int(tree.get("paused_ms", 0)))
         config["timeout_ms"] = min(604800000, max(
@@ -750,11 +805,11 @@ def extend_retry_budget(job_id: str, current: dict | None = None) -> bool:
         config["max_rounds"] = (old_rounds if old_rounds > used_rounds else
                                 min(256, used_rounds + 4))
         config["max_model_calls"] = (old_calls if old_calls > used_calls else
-                                     min(256, used_calls + 8))
+                                     min(1024, used_calls + 8))
         config["patience"] = min(256, max(old_patience + 4, used_stagnation + 4))
     else:
         config["max_rounds"] = min(256, max(old_rounds + 4, used_rounds + 4))
-        config["max_model_calls"] = min(256, max(old_calls + 8, used_calls + 8))
+        config["max_model_calls"] = min(1024, max(old_calls + 8, used_calls + 8))
     new_timeout = int(config.get("timeout_ms", old_timeout))
     new_patience = int(config.get("patience", old_patience))
     if (config["max_rounds"] <= old_rounds
@@ -789,7 +844,7 @@ def search_limits(timeout_hours: float | None = None,
     if timeout_hours is not None and not 0 < timeout_hours <= 168:
         raise RuntimeError("gepa_timeout_hours_invalid")
     limits = {"max_rounds": (max_rounds, 1, 256),
-              "max_model_calls": (max_model_calls, 1, 256),
+              "max_model_calls": (max_model_calls, 1, 1024),
               "max_trials": (max_trials, 4, 20000),
               "patience": (patience, 0, 256)}
     result: dict[str, int] = {}
@@ -1026,7 +1081,7 @@ def run(retry_job: str = "", timeout_hours: float | None = None,
             plan, env = readiness()
         if retry_job:
             allowed = ("error", "interrupted", "inconclusive", "cancelled", "superseded",
-                       "pending", "running")
+                       "pending", "running", "paused")
             if (current.get("job_id") != retry_job or (
                     current.get("job_status") not in allowed and not holdout_only and not (
                         extended_search and current.get("job_status") == "rejected"))):
@@ -1183,6 +1238,11 @@ def run_to_publication(publisher=None,
             from best_strategy import build_best
             best = build_best(job_id, run_full_comparison=True)
             return {"status": "best_observed", "best_strategy": best}
+        if _rejected_completed_showcase(job_id, current):
+            from best_strategy import build_best
+            best = build_best(job_id, run_full_comparison=True)
+            return {"status": "best_available", "best_strategy": best,
+                    "formal_release": False, "publication_skipped": True}
         if exit_code == 0:
             break
         runner = coverage.read(STATUS) if STATUS.is_file() else {}
@@ -1227,7 +1287,11 @@ def run_to_publication(publisher=None,
     runner.update(status="published", publication=publication,
                   published_at=datetime.now(timezone.utc).isoformat())
     coverage.save(STATUS, runner)
-    return publication
+    from best_strategy import build_best
+    best = build_best(job_id, run_full_comparison=True)
+    runner["architect_strategy"] = best
+    coverage.save(STATUS, runner)
+    return {**publication, "architect_strategy": best}
 
 
 def fresh(seed_report: Path | None = None, baseline_report: Path | None = None,
@@ -1276,7 +1340,7 @@ def main() -> int:
     parser.add_argument("--max-rounds", type=int,
                         help="prepare/retry：搜索树的候选轮数上限（最大256）")
     parser.add_argument("--max-model-calls", type=int,
-                        help="prepare/retry：搜索树的模型调用上限（最大256）")
+                        help="prepare/retry：搜索树的模型调用上限（最大1024）")
     parser.add_argument("--max-trials", type=int,
                         help="prepare/retry：搜索树的评测 trial 总上限（最大20000）")
     parser.add_argument("--patience", type=int,

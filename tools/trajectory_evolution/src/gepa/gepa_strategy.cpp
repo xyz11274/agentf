@@ -151,6 +151,48 @@ bool exploration_parent(const Json &node) {
          node.flag("exploration_eligible", false);
 }
 
+// 搜索父节点可以保留专长分支，但不能把一个已在 Val 上整体退化的节点当作
+// 通用父版本。这里以 L0 的完整验证为锚点，给单批测量噪声留 10% 资源余量；
+// 这不是发布门禁，仍允许后续从质量/loop 专长继续探索。
+bool safe_exploration_candidate(const Json &nodes, std::size_t index, const Json &config) {
+  if (!nodes.array() || index >= nodes.items().size() || index == 0)
+    return index == 0;
+  const auto &node = nodes.items()[index], &root = nodes.items().front();
+  if (!node["validation"].object() || node["validation"].fields().empty() ||
+      !root["validation"].object() || root["validation"].fields().empty())
+    return false;
+  if (node.str("status") == "unobserved_changes" &&
+      !node.flag("validation_gain_attributed", false)) {
+    // 未归因节点可以作为少量专长探索，但必须先证明没有相对 L0 的整体灾难退化。
+    if (!node.flag("exploration_eligible", false))
+      return false;
+  } else if (node.str("status") != "accepted") {
+    return false;
+  }
+  // 未命中的新增规则仍需披露；只要筛选阶段有本次改动的真实应用，
+  // 它不阻断非发布探索。完整覆盖仍由最终门禁决定。
+  if (node.str("status") == "unobserved_changes" &&
+      !node["screening"].flag("controls_observed", false))
+    return false;
+  const auto quality = mean(node["validation"], "quality");
+  const auto root_quality = mean(root["validation"], "quality");
+  const auto allowed_drop =
+      std::clamp(number(config["exploration_max_quality_drop"], 0.15), 0.0, 0.15);
+  if (quality + allowed_drop < root_quality - 1e-12)
+    return false;
+  const auto loops = mean(node["validation"], "invalid_loops");
+  const auto root_loops = mean(root["validation"], "invalid_loops");
+  if (loops > -1e8 && root_loops > -1e8 && loops > root_loops * 1.10 + 1e-9)
+    return false;
+  for (const auto *field : {"duration_ms", "tokens"}) {
+    const auto value = mean(node["validation"], field);
+    const auto baseline = mean(root["validation"], field);
+    if (value > -1e8 && baseline > -1e8 && value > baseline * 1.10 + 1e-9)
+      return false;
+  }
+  return true;
+}
+
 Json exploration_eligibility(const Json &nodes, std::size_t index, const Json &config) {
   auto result = [](bool eligible, const char *reason) {
     return Json{{"eligible", eligible}, {"reason", reason}};
@@ -162,8 +204,8 @@ Json exploration_eligibility(const Json &nodes, std::size_t index, const Json &c
       (!index || !node.has("validation_gain_attributed") ||
        node.flag("validation_gain_attributed", false)))
     return result(true, "accepted");
-  // 只有完成了可归因筛选和完整验证的节点可作为非发布探索父节点。
-  // 错误、未命中控制、仅有验证随机波动或未完成节点均不能进入该池。
+  // Pool 可以带着归因疑点进入独立 Val；探索父节点必须在 Val 中看到
+  // 本次改动实际应用并产生局部收益，不能把批次整体随机改善当成策略效果。
   if (node.str("status") != "unobserved_changes")
     return result(false, "status_not_explorable");
   const auto ids = parents(node);
@@ -190,17 +232,21 @@ Json exploration_eligibility(const Json &nodes, std::size_t index, const Json &c
   if (ids.size() == 1) {
     const auto &screening = node["screening"];
     if (node.str("kind") != "reflection" || screening.str("split", "train") != "train" ||
-        !screening.flag("controls_observed", false) ||
-        !attributed_gain(screening["candidate"], screening["parent"],
-                         screening["causal_changes"]))
-      return result(false, "training_control_gain_missing");
+        !screening.flag("controls_observed", false))
+      return result(false, "training_control_not_applied");
+    if (!attributed_gain(node["validation"], nodes.items()[ids.front()]["validation"],
+                         node["validation_applied_changes"][std::to_string(ids.front())]))
+      return result(false, "validation_control_gain_missing");
   } else {
     if (node.str("kind") != "merge" || !node["validation_applied_changes"].object())
       return result(false, "merge_contribution_missing");
+    bool validation_gain = false;
     for (const auto parent : ids)
-      if (!attributed_gain(node["validation"], nodes.items()[parent]["validation"],
-                           node["validation_applied_changes"][std::to_string(parent)]))
-        return result(false, "merge_contribution_missing");
+      validation_gain |= attributed_gain(
+          node["validation"], nodes.items()[parent]["validation"],
+          node["validation_applied_changes"][std::to_string(parent)]);
+    if (!validation_gain)
+      return result(false, "validation_merge_gain_missing");
   }
   const auto &validation = node["validation"];
   const auto &seed_validation = nodes.items().front()["validation"];
@@ -212,7 +258,8 @@ Json exploration_eligibility(const Json &nodes, std::size_t index, const Json &c
         !task.second.has("quality"))
       return result(false, "validation_incomplete");
   const auto quality = mean(validation, "quality");
-  const auto allowed_drop = number(config["exploration_max_quality_drop"], 0.15);
+  const auto allowed_drop =
+      std::clamp(number(config["exploration_max_quality_drop"], 0.15), 0.0, 0.15);
   double reference_quality = mean(seed_validation, "quality");
   for (const auto parent : ids) {
     const auto &parent_validation = nodes.items()[parent]["validation"];
@@ -224,8 +271,8 @@ Json exploration_eligibility(const Json &nodes, std::size_t index, const Json &c
   if (quality <= -1e9 || reference_quality <= -1e9 ||
       quality + allowed_drop < reference_quality - 1e-12)
     return result(false, "validation_quality_disaster");
-  auto eligible = result(true, ids.size() == 1 ? "training_local_gain_with_validation_guard"
-                                               : "merge_contributions_with_validation_guard");
+  auto eligible = result(true, ids.size() == 1 ? "validation_control_gain_with_safety_guard"
+                                               : "validation_merge_gain_with_safety_guard");
   eligible["quality"] = quality;
   eligible["reference_quality"] = reference_quality;
   eligible["maximum_quality_drop"] = allowed_drop;
@@ -355,10 +402,15 @@ Json exploration_frontier_map(const Json &nodes, const std::vector<std::string> 
   auto eligible = nodes;
   for (std::size_t i = 0; i < eligible.items().size(); ++i) {
     auto &node = eligible.items()[i];
-    if (exploration_parent(node)) {
-      node["status"] = "accepted";
-      node["validation_gain_attributed"] = true;
+    if (!exploration_parent(node))
+      continue;
+    if (!safe_exploration_candidate(eligible, i, config)) {
+      if (i)
+        node["status"] = "exploration_ineligible";
+      continue;
     }
+    node["status"] = "accepted";
+    node["validation_gain_attributed"] = true;
   }
   auto mapping = frontier_map(eligible, tasks, config);
   if (!eligible.items().empty())
@@ -393,8 +445,8 @@ std::size_t select_parent(const Json &nodes, const Json &mapping, const Json &co
   require(!ids.empty(), "gepa_frontier_empty");
   const auto strategy = config.str("candidate_selection_strategy", "pareto");
   std::vector<std::size_t> accepted;
-  for (std::size_t i = 0; i < nodes.items().size(); ++i)
-    if (exploration_parent(nodes.items()[i]))
+  for (const auto i : ids)
+    if (i < nodes.items().size() && exploration_parent(nodes.items()[i]))
       accepted.push_back(i);
   require(!accepted.empty(), "gepa_frontier_empty");
   auto ranking = [&](auto a, auto b) {
@@ -420,8 +472,24 @@ std::size_t select_parent(const Json &nodes, const Json &mapping, const Json &co
       for (const auto &candidate : item.second.items())
         if (candidate.integer() == id)
           ++weight;
-    weights.push_back(strategy == "fair" ? 1.0 / (1.0 + nodes.items()[id].num("selections", 0))
-                                         : weight);
+    if (strategy == "fair") {
+      weights.push_back(1.0 / (1.0 + nodes.items()[id].num("selections", 0)));
+      continue;
+    }
+    // Pareto 前沿保留局部专长，但不能让已经反复失败的根/弱分支持续吞掉
+    // 反思预算。质量因子和新鲜度因子只改变抽样概率，不改变前沿成员资格。
+    const auto quality = mean(nodes.items()[id]["validation"], "quality");
+    const auto quality_factor = quality <= -1e8
+                                    ? 0.25
+                                    : std::max(0.25, std::min(1.25, 0.5 + quality));
+    const auto loop_factor = mean(nodes.items()[id]["validation"], "invalid_loops") <= -1e8
+                                 ? 1.0
+                                 : 1.0 / (1.0 +
+                                          0.10 * std::max(0.0, mean(
+                                                           nodes.items()[id]["validation"],
+                                                           "invalid_loops")));
+    const auto freshness = 1.0 / (1.0 + 0.35 * nodes.items()[id].num("selections", 0));
+    weights.push_back(std::max(1e-6, weight * quality_factor * loop_factor * freshness));
   }
   return ids[std::discrete_distribution<std::size_t>(weights.begin(), weights.end())(random)];
 }

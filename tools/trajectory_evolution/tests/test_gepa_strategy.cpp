@@ -11,10 +11,11 @@ namespace gepa = trajectory::evolution::integration::gepa;
 
 // 测试辅助函数：check。
 // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
-void check(bool value) {
+void check_impl(bool value, int line) {
   if (!value)
-    throw std::runtime_error("GEPA strategy assertion failed");
+    throw std::runtime_error("GEPA strategy assertion failed at line " + std::to_string(line));
 }
+#define check(...) check_impl((__VA_ARGS__), __LINE__)
 
 template <class F> void rejects(F fn) {
   try {
@@ -80,6 +81,8 @@ int main() {
              {"candidate", scores(1, .8)},
              {"controls_observed", true},
              {"causal_changes", Json{{"a", Json{{"loop", 1}}}}}};
+    specialist["validation_applied_changes"] =
+        Json{{"0", Json{{"a", Json{{"loop", 1}}}, {"b", Json{{"loop", 1}}}}}};
     exploration_nodes.push(specialist);
     gepa::validate_nodes(exploration_nodes);
     const auto eligibility = gepa::exploration_eligibility(exploration_nodes, 7, config);
@@ -105,6 +108,34 @@ int main() {
     auto no_control = exploration_nodes;
     no_control.items()[7]["screening"]["controls_observed"] = false;
     check(!gepa::exploration_eligibility(no_control, 7, config).flag("eligible", true));
+    auto unconfirmed = exploration_nodes;
+    unconfirmed.items()[7]["validation_applied_changes"] = Json::Object{};
+    check(!gepa::exploration_eligibility(unconfirmed, 7, config).flag("eligible", true));
+    auto measured_tradeoff = exploration_nodes;
+    measured_tradeoff.items()[7]["validation"] = scores(.77, .82);
+    const auto tradeoff_eligibility = gepa::exploration_eligibility(measured_tradeoff, 7, config);
+    check(tradeoff_eligibility.flag("eligible", false));
+    measured_tradeoff.items()[7]["exploration_eligible"] = true;
+    const auto tradeoff_pool = gepa::pool(
+        gepa::exploration_frontier_map(measured_tradeoff, {"a", "b"}, config));
+    check(std::find(tradeoff_pool.begin(), tradeoff_pool.end(), 7) != tradeoff_pool.end());
+    auto too_costly = measured_tradeoff;
+    for (auto &row : too_costly.items()[7]["validation"].fields()) {
+      row.second["duration_ms"] = 120;
+      row.second["tokens"] = 120;
+    }
+    for (auto &row : too_costly.items()[0]["validation"].fields()) {
+      row.second["duration_ms"] = 100;
+      row.second["tokens"] = 100;
+    }
+    const auto costly_pool = gepa::pool(
+        gepa::exploration_frontier_map(too_costly, {"a", "b"}, config));
+    check(std::find(costly_pool.begin(), costly_pool.end(), 7) == costly_pool.end());
+    const auto costly_mapping = gepa::exploration_frontier_map(too_costly, {"a", "b"}, config);
+    const auto costly_selected = gepa::select_parent(too_costly, costly_mapping,
+                                                       exploration_best, 0);
+    check(costly_selected != 7 &&
+          std::find(costly_pool.begin(), costly_pool.end(), costly_selected) != costly_pool.end());
     auto disaster = exploration_nodes;
     disaster.items()[7]["validation"] = scores(.5, .5);
     check(!gepa::exploration_eligibility(disaster, 7, config).flag("eligible", true));
@@ -159,8 +190,14 @@ int main() {
     check(gepa::pool(gepa::frontier_map(nodes, {"a", "b"}, config)) == std::vector<std::size_t>{4});
     auto strategies = config;
     strategies["candidate_selection_strategy"] = "current_best";
-    check(gepa::select_parent(nodes, mapping, strategies, 0) == 4);
-    auto constrained = nodes;
+    const auto selected_from_old_mapping = gepa::select_parent(nodes, mapping, strategies, 0);
+    check(selected_from_old_mapping == 1 || selected_from_old_mapping == 2);
+    check(gepa::select_parent(nodes, gepa::frontier_map(nodes, {"a", "b"}, config), strategies,
+                              0) == 4);
+    // This fixture tests ranking among the two original frontier specialists;
+    // the later merge child (node 4) dominates both task frontiers.
+    Json constrained = Json::Array{nodes.items()[0], nodes.items()[1],
+                                   nodes.items()[2], nodes.items()[3]};
     for (auto &n : constrained.items())
       for (auto &score : n["validation"].fields()) {
         score.second["feasible_score"] = 0;
@@ -177,7 +214,8 @@ int main() {
     std::set<std::size_t> selected;
     for (unsigned i = 0; i < 200; ++i)
       selected.insert(gepa::select_parent(nodes, mapping, strategies, i));
-    check(selected.size() == nodes.items().size());
+    const auto eligible_ids = gepa::pool(mapping);
+    check(selected == std::set<std::size_t>(eligible_ids.begin(), eligible_ids.end()));
     strategies["candidate_selection_strategy"] = "top_k_pareto";
     strategies["top_k"] = 1;
     check(gepa::select_parent(nodes, gepa::frontier_map(nodes, {"a", "b"}, config), strategies,

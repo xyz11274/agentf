@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "dataset": "bfcl-v3-multi-turn-seen-scenarios-v1",
+  "source_url": "http://106.55.172.74:8080/tmp/bfcl_v3_splits.zip",
+  "source_zip_sha256": "bf772c48cee98950f00937b72b27d8a265f4c7e3037455a3ff7a71f6f992aba1",
+  "source_members": {
+    "train": {
+      "member": "splits/multi_turn_train.jsonl",
+      "sha256": "c8d3c3700d38d7a505cce7a4417ccf15cc24ce697ccea8782274f32790aa7393",
+      "count": 400
+    },
+    "val": {
+      "member": "splits/multi_turn_val.jsonl",
+      "sha256": "de2a2190bc4687c100b91e8d8f6146265a308366a24a5e88462e330a4e502b14",
+      "count": 400
+    }
+  },
+  "split_protocol": "seen-scenarios-v1: each of 200 scenarios has train2+eval2; eval scenarios search75/selection25/holdout100",
+  "split_seed": "bfcl-v3-seen-scenarios-v1",
+  "counts": {
+    "train": 400,
+    "search": 150,
+    "selection": 50,
+    "holdout": 200
+  },
+  "scenario_counts": {
+    "train": 200,
+    "search": 75,
+    "selection": 25,
+    "holdout": 100
+  },
+  "variant_counts": {
+    "train": {
+      "multi_turn_base": 100,
+      "multi_turn_long_context": 100,
+      "multi_turn_miss_func": 100,
+      "multi_turn_miss_param": 100
+    },
+    "search": {
+      "multi_turn_base": 38,
+      "multi_turn_long_context": 37,
+      "multi_turn_miss_func": 38,
+      "multi_turn_miss_param": 37
+    },
+    "selection": {
+      "multi_turn_base": 12,
+      "multi_turn_long_context": 13,
+      "multi_turn_miss_func": 12,
+      "multi_turn_miss_param": 13
+    },
+    "holdout": {
+      "multi_turn_base": 50,
+      "multi_turn_long_context": 50,
+      "multi_turn_miss_func": 50,
+      "multi_turn_miss_param": 50
+    }
+  },
+  "tool_combo_scenario_counts": {
+    "train": {
+      "GorillaFileSystem": 13,
+      "GorillaFileSystem+MathAPI": 12,
+      "GorillaFileSystem+MessageAPI": 8,
+      "GorillaFileSystem+TicketAPI": 5,
+      "GorillaFileSystem+TwitterAPI": 12,
+      "MathAPI+TradingBot": 5,
+      "MathAPI+TravelAPI": 2,
+      "MathAPI+VehicleControlAPI": 6,
+      "MessageAPI+TradingBot": 13,
+      "MessageAPI+TravelAPI": 10,
+      "MessageAPI+VehicleControlAPI": 9,
+      "TicketAPI+TradingBot": 9,
+      "TicketAPI+TravelAPI": 15,
+      "TicketAPI+VehicleControlAPI": 2,
+      "TradingBot": 20,
+      "TradingBot+TwitterAPI": 3,
+      "TravelAPI": 13,
+      "TravelAPI+TwitterAPI": 10,
+      "TwitterAPI+VehicleControlAPI": 14,
+      "VehicleControlAPI": 19
+    },
+    "search": {
+      "GorillaFileSystem": 5,
+      "GorillaFileSystem+MathAPI": 4,
+      "GorillaFileSystem+MessageAPI": 3,
+      "GorillaFileSystem+TicketAPI": 2,
+      "GorillaFileSystem+TwitterAPI": 5,
+      "MathAPI+TradingBot": 2,
+      "MathAPI+TravelAPI": 1,
+      "MathAPI+VehicleControlAPI": 2,
+      "MessageAPI+TradingBot": 5,
+      "MessageAPI+TravelAPI": 4,
+      "MessageAPI+VehicleControlAPI": 3,
+      "TicketAPI+TradingBot": 3,
+      "TicketAPI+TravelAPI": 6,
+      "TicketAPI+VehicleControlAPI": 1,
+      "TradingBot": 7,
+      "TradingBot+TwitterAPI": 1,
+      "TravelAPI": 5,
+      "TravelAPI+TwitterAPI": 4,
+      "TwitterAPI+VehicleControlAPI": 5,
+      "VehicleControlAPI": 7
+    },
+    "selection": {
+      "GorillaFileSystem": 2,
+      "GorillaFileSystem+MathAPI": 2,
+      "GorillaFileSystem+MessageAPI": 1,
+      "GorillaFileSystem+TicketAPI": 1,
+      "GorillaFileSystem+TwitterAPI": 1,
+      "MathAPI+TradingBot": 1,
+      "MathAPI+VehicleControlAPI": 1,
+      "MessageAPI+TradingBot": 2,
+      "MessageAPI+TravelAPI": 1,
+      "MessageAPI+VehicleControlAPI": 1,
+      "TicketAPI+TradingBot": 1,
+      "TicketAPI+TravelAPI": 2,
+      "TradingBot": 2,
+      "TravelAPI": 2,
+      "TravelAPI+TwitterAPI": 1,
+      "TwitterAPI+VehicleControlAPI": 2,
+      "VehicleControlAPI": 2
+    },
+    "holdout": {
+      "GorillaFileSystem": 6,
+      "GorillaFileSystem+MathAPI": 6,
+      "GorillaFileSystem+MessageAPI": 4,
+      "GorillaFileSystem+TicketAPI": 2,
+      "GorillaFileSystem+TwitterAPI": 6,
+      "MathAPI+TradingBot": 2,
+      "MathAPI+TravelAPI": 1,
+      "MathAPI+VehicleControlAPI": 3,
+      "MessageAPI+TradingBot": 6,
+      "MessageAPI+TravelAPI": 5,
+      "MessageAPI+VehicleControlAPI": 5,
+      "TicketAPI+TradingBot": 5,
+      "TicketAPI+TravelAPI": 7,
+      "TicketAPI+VehicleControlAPI": 1,
+      "TradingBot": 11,
+      "TradingBot+TwitterAPI": 2,
+      "TravelAPI": 6,
+      "TravelAPI+TwitterAPI": 5,
+      "TwitterAPI+VehicleControlAPI": 7,
+      "VehicleControlAPI": 10
+    }
+  },
+  "ids": {
+    "train": "train_ids.txt",
+    "search": "search_ids.txt",
+    "selection": "selection_ids.txt",
+    "holdout": "holdout_ids.txt"
+  },
+  "search_selection_scenario_overlap": [],
+  "protocol_semantics": "Seen scenario, held-out condition variant. Exact task IDs are disjoint. Evaluation pools have disjoint scenarios; all are exposed through two training variants.",
+  "stratification": "Exact available backend-set strata; proportional floors plus deterministic squared-error rounding; complementary normal/context + missing-function/parameter pairs; metadata only, no scores or target calls.",
+  "old_memory_reuse": {
+    "allowed": false,
+    "reason": "Old training contains exact tasks in the new evaluation pools; rebuild memory from the new train IDs.",
+    "old_train_tasks_in_new_eval": {
+      "search": 66,
+      "selection": 16,
+      "holdout": 118
+    },
+    "old_train_tasks_retained_in_new_train": 200
+  },
+  "security": {
+    "raw_fixture_contains_synthetic_password_fields": true,
+    "native_adapter_must_not_copy_initial_config_or_credentials_to_task_attributes": true
+  }
+}

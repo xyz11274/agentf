@@ -22,6 +22,7 @@
 #include "trajectory_evolution/agent_evaluation.h"
 
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -166,6 +167,55 @@ std::string clip(std::string value, std::size_t limit) {
     --limit;
   value.resize(limit);
   return value + " [truncated]";
+}
+
+// 裁判常先列已满足项、最后指出缺失项；只保留前缀会把失败原因截掉。
+// 固定字节预算内保留两端，并标记中间省略，不把片段伪装成完整评审。
+std::string diagnostic_excerpt(const std::string &value, std::size_t limit) {
+  if (value.size() <= limit)
+    return value;
+  const std::string omitted = " ...[middle omitted]... ";
+  if (limit <= omitted.size()) {
+    auto end = limit;
+    while (end && (static_cast<unsigned char>(value[end]) & 0xc0) == 0x80)
+      --end;
+    return value.substr(0, end);
+  }
+  auto head = (limit - omitted.size()) / 3;
+  auto tail = value.size() - (limit - omitted.size() - head);
+  while (head && (static_cast<unsigned char>(value[head]) & 0xc0) == 0x80)
+    --head;
+  while (tail < value.size() && (static_cast<unsigned char>(value[tail]) & 0xc0) == 0x80)
+    ++tail;
+  return value.substr(0, head) + omitted + value.substr(tail);
+}
+
+// 明确提出经验更新却未改变任何行为时，仅提供一次有界纠正机会。
+// 合法空提案保持弃权，不为了凑节点强行制造修改。
+Json noop_experience_repair_packet(const Json &input, const Json &draft, std::size_t limit) {
+  const auto &selected = input["selected_components"];
+  if (!selected.array() || selected.items().size() != 1 ||
+      selected.items().front().text().rfind("experience:", 0) != 0)
+    return Json();
+  const bool attempted = draft["experience"].object() ||
+                         (draft["experiences"].array() && !draft["experiences"].items().empty());
+  if (!attempted)
+    return Json();
+  auto repair = input;
+  repair.fields().erase("parent_version");
+  repair["phase"] = "repair_experience_no_behavior_change";
+  repair["error"] = "experience_update_matches_parent";
+  repair["attempted_experiences"] = draft.has("experiences")
+                                       ? draft["experiences"]
+                                       : Json(Json::Array{draft["experience"]});
+  // 当前正文、实际条件和应用点已经在原包内；不复制整份父策略或理由文字。
+  while (repair.dump().size() > limit && repair["feedback"].items().size() > 2)
+    repair["feedback"].items().pop_back();
+  if (repair.dump().size() > limit)
+    repair.fields().erase("training_batch_summary");
+  if (repair.dump().size() > limit)
+    return Json();
+  return repair;
 }
 
 // 有界反思保留实际失败、策略作用轮次及其前一轮，同时保留最新用户修订。
@@ -467,6 +517,50 @@ Json observed_target_options(const std::string &scope, const std::string &operat
   return observed;
 }
 
+// 仅从本次真实动作结束回执提取工具动作失败。参数校验可能在工具执行前
+// 拒绝动作，因此明确保留 executed=false；模型输入/输出转述的旧错误不计数。
+Json observed_tool_failures(const Json &runs) {
+  Json result{{"status", runs.array() && !runs.items().empty() ? "scanned" : "unavailable"},
+              {"count", 0}, {"executed_count", 0}, {"examples", Json::Array{}}};
+  if (!runs.array())
+    return result;
+  for (const auto &run : runs.items()) {
+    if (!run["actions"].array())
+      continue;
+    for (const auto &action : run["actions"].items()) {
+      if (action.str("kind") != "action.end" || action.str("semantic") == "model" ||
+          action.str("operation").empty() || action.str("operation") == "model_call" ||
+          !action.flag("observed_failure", false))
+        continue;
+      auto code = action["error"].str("code");
+      if (code.empty())
+        code = action.str("terminal_error_code_candidate");
+      if (code.empty())
+        continue;
+      result["count"] = result.num("count", 0) + 1;
+      result["executed_count"] =
+          result.num("executed_count", 0) + action.flag("executed", false);
+      if (result["examples"].items().size() >= 4)
+        continue;
+      Json example{{"run_id", clip(run.str("run_id"), 80)},
+                   {"event_id", clip(action.str("event_id"), 48)},
+                   {"operation", clip(action.str("operation"), 64)},
+                   {"error_code", clip(code, 64)},
+                   {"executed", action.flag("executed", false)}};
+      if (action.str("operation") == "run_skills") {
+        const auto &input = action["input"];
+        example["skills_argument"] =
+            !input.object() || !input.has("skills") ? "missing"
+            : input["skills"].array() && input["skills"].items().empty() ? "empty_array"
+                                                                           : "other";
+      }
+      result["examples"].push(std::move(example));
+    }
+  }
+  result["omitted"] = result.num("count", 0) - result["examples"].items().size();
+  return result;
+}
+
 // 整理单题的真实执行反馈，保留可归因的失败和策略应用证据。
 Json feedback_trial(const dataset::v1::EvaluationTrial &trial, const Json &controls) {
   // 只转换需要的检查项，避免为取得 checks 再序列化一遍整条长轨迹。
@@ -497,7 +591,7 @@ Json feedback_trial(const dataset::v1::EvaluationTrial &trial, const Json &contr
       for (const auto *field : {"id", "turn", "due_turn", "status", "critical_failure"})
         if (goal.has(field))
           row[field] = goal[field];
-      row["reason"] = clip(goal.str("reason"), 512);
+      row["reason"] = diagnostic_excerpt(goal.str("reason"), 512);
       summary["issues"].push(row);
     }
     summary["omitted_issues"] = omitted;
@@ -812,6 +906,7 @@ Json feedback_trial(const dataset::v1::EvaluationTrial &trial, const Json &contr
     }
     view["runs"].push(run);
   }
+  result["observed_tool_failures"] = observed_tool_failures(view["runs"]);
   return result;
 }
 
@@ -832,6 +927,9 @@ Json selected_experience_applications(const dataset::v1::EvaluationTrial &trial,
       evidence["traces"].array() ? evidence["traces"] : Json(Json::Array{evidence["trace"]});
   std::size_t count = 0;
   for (const auto &trace : traces.items()) {
+    // 单题采集/模型失败可能没有 events；保留未观测状态，不让该题阻断整轮反思。
+    if (!trace["events"].array())
+      continue;
     // 同一条经验在下一次真实执行中是否仍能命中，取决于查询当时真正可见的任务、
     // 状态和已执行操作。只给反思模型一个 receipt_event_id，会迫使它凭自然语言猜测
     // trigger_pattern，生成“多次返回”“已经完成”等运行时无法直接观测的条件。
@@ -917,6 +1015,7 @@ Json compact_experience_feedback_trial(const dataset::v1::EvaluationTrial &trial
                {"checks", compact_excerpt(full["checks"])},
                {"output", compact_excerpt(json(trial.evidence())["output"])},
                {"metrics", full["metrics"]},
+               {"observed_tool_failures", full["observed_tool_failures"]},
                {"evidence_truncated", true}};
   const auto evidence = json(trial.evidence());
   const auto traces = evidence.has("traces")  ? evidence["traces"]
@@ -991,6 +1090,7 @@ Json compact_experience_feedback_trial(const dataset::v1::EvaluationTrial &trial
   Json base{{"verdict", full["verdict"]},
             {"metrics", full["metrics"]},
             {"execution_status", full["execution_status"]},
+            {"observed_tool_failures", full["observed_tool_failures"]},
             {"evidence_truncated", true}};
   std::map<std::size_t, std::map<std::size_t, Json>> kept;
   auto render = [&] {
@@ -1729,6 +1829,7 @@ Json control_feedback_trial(const dataset::v1::EvaluationTrial &trial, const Jso
     }
   Json result{{"verdict", full["verdict"]}, {"checks", checks},
               {"metrics", full["metrics"]}, {"execution_status", full["execution_status"]},
+              {"observed_tool_failures", full["observed_tool_failures"]},
               {"evidence_truncated", true}, {"control_evidence_preserved", true}};
   if (full.has("goal_completion"))
     result["goal_completion"] = full["goal_completion"];
@@ -1823,6 +1924,7 @@ Json control_feedback_trial(const dataset::v1::EvaluationTrial &trial, const Jso
                                 "action_control",
                                 "loop_control",
                                 "iteration_assessment",
+                                "reviewed_required_action",
                                 "terminal_error_code_candidate"})
         if (action.has(field))
           item[field] = compact_excerpt(action[field]);
@@ -1868,13 +1970,209 @@ Json control_feedback_trial(const dataset::v1::EvaluationTrial &trial, const Jso
   return result;
 }
 
-// 搜索允许未改动的旧规则继续等待适用场景；新规则仍必须有真实应用证据。
-// 这里只控制候选留存，winner 和发布门禁仍检查完整策略的覆盖率。
-bool control_changes_observed(const Json &coverage, const Json &inherited) {
+// 压缩重复的运行上下文；已按机会优先级选出的动作不能再次按时间截断，
+// 否则容易丢掉最后的冗余后缀。typed 控制字段、必要步骤和真实依赖完整保留。
+Json compact_control_reflection_trial(Json full, const Json &selected) {
+  (void)selected;
+  if (!full["evidence"]["runs"].array())
+    return full;
+  static const char *const fields[] = {
+      "event_id", "kind", "actor_id", "execution_id", "loop_id", "iteration", "status",
+      "operation", "executed", "observed_failure", "semantic", "guard_only", "input",
+      "iteration_assessment", "reviewed_required_action", "terminal_error_code_candidate",
+      "action_control", "loop_control"};
+  for (auto &run : full["evidence"]["runs"].items()) {
+    if (!run["actions"].array())
+      continue;
+    for (auto &action : run["actions"].items()) {
+      Json item = Json::Object{};
+      for (const auto *field : fields)
+        if (action.has(field))
+          item[field] = action[field];
+      // 输出仅供解释；谓词和参数缺失的判断始终来自上面的完整 typed 字段。
+      if (action.has("output")) {
+        item["output"] = compact_excerpt(action["output"]);
+        if (item["output"].dump().size() > 512)
+          item["output"] = Json{{"preview", clip(action["output"].dump(), 512)},
+                                {"_truncated", true}};
+      }
+      if (item["input"].object())
+        for (auto &field : item["input"].fields())
+          // action 是 repeat_failed_operation 的真实谓词；其他长参数仅作背景。
+          if (field.first != "action" && field.second.dump().size() > 256)
+            field.second = Json{{"preview", clip(field.second.dump(), 256)},
+                                {"_truncated", true}};
+      if (item["iteration_assessment"].object())
+        for (auto &field : item["iteration_assessment"].fields())
+          if (field.first != "decision" && field.second.string() &&
+              field.second.text().size() > 256)
+            field.second = clip(field.second.text(), 256);
+      action = std::move(item);
+    }
+  }
+  full["evidence_compacted_for_reflection"] = true;
+  return full;
+}
+
+// 反思请求的详细轨迹按可执行机会跨 Run 选取，避免单个 Run 的时间顺序
+// 吞掉后续真正可修改的边界。完整的 16 条控制证据仍留在调用方的原视图中。
+Json compact_control_reflection_detail(Json full, const Json &selected,
+                                       std::size_t max_actions) {
+  if (!full["evidence"]["runs"].array())
+    return full;
+  const auto selected_component = [&](const char *name) {
+    return std::any_of(selected.items().begin(), selected.items().end(),
+                       [&](const auto &value) { return value.text() == name; });
+  };
+  const bool action_rules = selected_component("action_rules");
+  const bool loop_rules = selected_component("loop_rules");
+  const bool schedule_rules = selected_component("schedule_rules");
+  struct Choice {
+    std::size_t run, index;
+    int priority;
+    std::string identity;
+  };
+  std::vector<Choice> choices;
+  std::map<std::string, std::pair<std::size_t, std::size_t>> highest_keep;
+  std::size_t total_actions = 0;
+  const auto &runs = full["evidence"]["runs"].items();
+  for (std::size_t run = 0; run < runs.size(); ++run) {
+    const auto &actions = runs[run]["actions"];
+    if (!actions.array())
+      continue;
+    total_actions += actions.items().size();
+    for (std::size_t index = 0; index < actions.items().size(); ++index) {
+      const auto &action = actions.items()[index];
+      const auto &control = action["loop_control"];
+      if (!loop_rules || action.str("kind") != "loop.decision" || !control.object() ||
+          action["iteration_assessment"].str("decision") != "keep")
+        continue;
+      const auto key = control.str("target_scope") + "\n" + action.str("actor_id");
+      const auto old = highest_keep.find(key);
+      if (old == highest_keep.end() ||
+          runs[old->second.first]["actions"].items()[old->second.second]["loop_control"].num(
+              "iteration", 0) < control.num("iteration", 0))
+        highest_keep[key] = {run, index};
+    }
+  }
+  for (std::size_t run = 0; run < runs.size(); ++run) {
+    const auto &actions = runs[run]["actions"];
+    if (!actions.array())
+      continue;
+    for (std::size_t index = 0; index < actions.items().size(); ++index) {
+      const auto &action = actions.items()[index];
+      const auto &control = action["action_control"];
+      const auto &loop = action["loop_control"];
+      int priority = 0;
+      std::string identity;
+      if (action_rules && action.str("kind") == "action.end" && control.object()) {
+        identity = "action\n" + control.str("target_scope") + "\n" + action.str("operation");
+        const auto rounds = control.num("prior_operation_rounds", 0);
+        if (action.flag("guard_only", false) && !action.flag("executed", true) && rounds &&
+            control.has("reviewed_budget_prior") &&
+            control.num("reviewed_budget_prior", 0) == rounds)
+          priority = 160;
+        else if (action.has("terminal_error_code_candidate") &&
+                 !control.str("terminal_retry_query_event_id").empty())
+          priority = 150;
+        else if (action_control_evidence(action))
+          priority = 130;
+        else if (action.str("status") == "failed" || action.has("error"))
+          priority = 75;
+        else
+          priority = 20;
+      }
+      if (loop_rules && action.str("kind") == "loop.decision" && loop.object()) {
+        identity = "loop\n" + loop.str("target_scope") + "\n" + action.str("actor_id");
+        // 中性决策仍需留一条可观察上下文；它不能凭此获得可编辑证据。
+        priority = std::max(priority, 10);
+        const auto iteration = loop.num("iteration", 0);
+        const auto floor = std::max(loop.num("reviewed_waste_after", 0),
+                                    loop.num("required_iteration_floor", 0));
+        if (!loop.flag("pending_actions", false) && loop.has("reviewed_waste_after") &&
+            iteration > floor &&
+            (loop.str("proposed_decision", "continue") == "continue" ||
+             loop.str("proposed_decision") == "replan"))
+          priority = std::max(priority, 155);
+        else if (loop.num("observed_no_progress", 0) || loop.num("failed_actions", 0) ||
+                 loop.num("repeated_failure_steps", 0))
+          priority = std::max(priority, 125);
+        const auto keep = highest_keep.find(loop.str("target_scope") + "\n" +
+                                            action.str("actor_id"));
+        if (keep != highest_keep.end() && keep->second == std::make_pair(run, index))
+          priority = std::max(priority, 120);
+        if (loop.str("proposed_decision", "continue") != "continue")
+          priority = std::max(priority, 105);
+      }
+      if (schedule_rules && action.str("kind") == "action.end" &&
+          !action.str("operation").empty()) {
+        identity = "schedule\n" + action.str("execution_id") + "\n" +
+                   action.str("operation");
+        priority = std::max(priority, action.str("status") == "failed" ? 80 : 45);
+      }
+      if (priority)
+        choices.push_back({run, index, priority, std::move(identity)});
+    }
+  }
+  std::stable_sort(choices.begin(), choices.end(), [](const auto &a, const auto &b) {
+    return a.priority > b.priority;
+  });
+  std::set<std::pair<std::size_t, std::size_t>> kept;
+  std::set<std::string> represented;
+  // 先覆盖不同控制对象，再用余量补同一对象的收尾/keep 对照。
+  for (unsigned pass = 0; pass < 2; ++pass)
+    for (const auto &choice : choices) {
+      if (kept.size() >= max_actions)
+        break;
+      if (pass == 0 && represented.count(choice.identity))
+        continue;
+      if (kept.insert({choice.run, choice.index}).second)
+        represented.insert(choice.identity);
+    }
+  std::size_t kept_actions = 0;
+  Json detailed_runs = Json::Array{};
+  for (std::size_t run = 0; run < runs.size(); ++run) {
+    Json view = runs[run];
+    const auto &actions = runs[run]["actions"];
+    if (actions.array()) {
+      view["actions"] = Json::Array{};
+      for (std::size_t index = 0; index < actions.items().size(); ++index)
+        if (kept.count({run, index}))
+          view["actions"].push(actions.items()[index]);
+      kept_actions += view["actions"].items().size();
+      if (view["actions"].items().size() < actions.items().size()) {
+        view["actions_truncated"] = true;
+        view["actions_omitted"] = actions.items().size() - view["actions"].items().size();
+      }
+    }
+    if ((view["actions"].array() && !view["actions"].items().empty()) ||
+        (view["schedule_plans"].array() && !view["schedule_plans"].items().empty()))
+      detailed_runs.push(std::move(view));
+  }
+  full["evidence"]["runs"] = std::move(detailed_runs);
+  full["reflection_actions_available"] = total_actions;
+  full["reflection_actions_selected"] = kept_actions;
+  full["reflection_actions_truncated"] = kept_actions < total_actions;
+  return full;
+}
+
+// 一次提案可能改写多条规则；pool 只要求至少一条新增规则真实应用，
+// 其余未命中规则明确留在诊断里，最终覆盖门禁仍独立检查完整策略。
+Json new_control_observation(const Json &coverage, const Json &inherited) {
+  Json applied = Json::Array{}, unobserved = Json::Array{};
   for (const auto &rule : coverage["rules"].fields())
-    if (!inherited["rules"].has(rule.first) && !rule.second.num("applied", 0))
-      return false;
-  return true;
+    if (!inherited["rules"].has(rule.first)) {
+      if (rule.second.num("applied", 0))
+        applied.push(rule.first);
+      else
+        unobserved.push(rule.first);
+    }
+  return Json{{"observed", !applied.items().empty() || unobserved.items().empty()},
+              {"applied_new_rules", applied}, {"unobserved_new_rules", unobserved}};
+}
+
+bool control_changes_observed(const Json &coverage, const Json &inherited) {
+  return new_control_observation(coverage, inherited).flag("observed", false);
 }
 
 // 只保留本轮获选组件能够造成的边界差分。候选即使继承了其他层的策略，
@@ -2325,6 +2623,27 @@ Json observed_operation_bindings(const Json &input, std::size_t byte_limit) {
   }
   if (selected("schedule_rules") && input["feedback"].array()) {
     std::set<std::string> seen;
+    // 同批并行并不说明应该串行化。只有明确要求顺序，或观察到一个动作的
+    // 输出路径确实成为另一动作的输入路径，才开放新增的顺序边。
+    const auto resource_dependency = [](const Json &producer, const Json &consumer) {
+      const auto &outputs = producer["arguments"];
+      const auto &inputs = consumer["arguments"];
+      if (!outputs.object() || !inputs.object())
+        return false;
+      for (const auto &output : outputs.fields()) {
+        if (output.first != "output_path" && output.first != "output_file" &&
+            output.first != "artifact_path" && output.first != "save_path")
+          continue;
+        if (!output.second.string() || output.second.text().empty())
+          continue;
+        for (const auto &input : inputs.fields())
+          if ((input.first == "input_path" || input.first == "input_file" ||
+               input.first == "source_path") &&
+              input.second.string() && input.second.text() == output.second.text())
+            return true;
+      }
+      return false;
+    };
     for (std::size_t row = 0; row < input["feedback"].items().size(); ++row) {
       const auto &feedback = input["feedback"].items()[row];
       const auto &runs = feedback["trial"]["evidence"]["runs"];
@@ -2367,7 +2686,7 @@ Json observed_operation_bindings(const Json &input, std::size_t byte_limit) {
           };
           for (std::size_t after_index = 1; after_index < actions.items().size();
                ++after_index)
-            // 独立操作开放两个方向；明确必须的顺序只能沿已声明方向提出候选。
+            // 无顺序契约时只沿真实资源生产→消费方向提出候选。
             for (unsigned reverse = 0;
                  reverse < (contract.flag("ordering_required", false) ? 1u : 2u); ++reverse) {
             const auto &before = actions.items()[after_index - (reverse ? 0 : 1)];
@@ -2376,6 +2695,9 @@ Json observed_operation_bindings(const Json &input, std::size_t byte_limit) {
                 before.str("operation").empty() || after.str("operation").empty() ||
                 before.str("action_id") == after.str("action_id") ||
                 before.str("operation") == after.str("operation"))
+              continue;
+            if (!contract.flag("ordering_required", false) &&
+                !resource_dependency(before, after))
               continue;
             if (depends_on(after.str("action_id"), before.str("action_id")) ||
                 depends_on(before.str("action_id"), after.str("action_id")))
@@ -2654,6 +2976,268 @@ std::size_t reflection_input_bytes(const Json &input) {
     }
   }
   return maximum;
+}
+
+// Review the selected synthesis against one fact row per training task and a real
+// failure/success pair. The reduce stage has already read every map proposal;
+// sending all of them again duplicates tens of KB of task facts and can prevent
+// the counterexample review from running at all.
+Json compact_full_pool_review(Json review, const Json &selection,
+                              std::size_t input_limit) {
+  Json chosen = Json::Array{};
+  std::set<std::string> selected_ids;
+  if (selection["selected_proposals"].object())
+    for (const auto &entry : selection["selected_proposals"].fields())
+      if (entry.second.string() && !entry.second.text().empty())
+        selected_ids.insert(entry.second.text());
+  if (review["intermediate_proposals"].array())
+    for (const auto &proposal : review["intermediate_proposals"].items())
+      if (selected_ids.count(proposal.str("id"))) {
+        auto visible = proposal;
+        // The per-task facts are already represented exactly once below.
+        visible.fields().erase("task_facts");
+        chosen.push(std::move(visible));
+      }
+  review["intermediate_proposals"] = std::move(chosen);
+  review.fields().erase("training_batch_summary"); // case_outcomes is the same 32-task ledger.
+  if (review["experiences"].array()) {
+    Json relevant = Json::Array{};
+    for (const auto &experience : review["experiences"].items()) {
+      const auto key = "experience:" + experience.str("memory_id");
+      if (review["components"].has(key))
+        relevant.push(experience);
+    }
+    review["experiences"] = std::move(relevant);
+  }
+  // Keep the actual application count and memory IDs for all 32 tasks. The
+  // paired raw feedback retains the full receipt/query evidence for causal review.
+  if (review["case_outcomes"].array())
+    for (auto &outcome : review["case_outcomes"].items()) {
+      auto &applications = outcome["selected_experience_applications"];
+      if (!applications.object())
+        continue;
+      Json compact{{"status", applications["status"]}, {"count", applications["count"]}};
+      std::set<std::string> ids;
+      if (applications["points"].array())
+        for (const auto &point : applications["points"].items())
+          if (!point.str("memory_id").empty())
+            ids.insert(point.str("memory_id"));
+      compact["memory_ids"] = Json::Array{};
+      for (const auto &id : ids)
+        compact["memory_ids"].push(id);
+      applications = std::move(compact);
+    }
+  // Preserve every task, goal status, real pair, and the controls' necessary
+  // action/loop lower bounds. Only shorten diagnostic prose if the byte envelope
+  // still needs room; never delete those facts to hide an over-budget request.
+  if (reflection_input_bytes(review) > input_limit && review["case_outcomes"].array())
+    for (auto &outcome : review["case_outcomes"].items())
+      if (outcome["goal_completion"]["issues"].array())
+        for (auto &issue : outcome["goal_completion"]["issues"].items())
+          issue["reason"] = diagnostic_excerpt(issue.str("reason"), 128);
+  if (reflection_input_bytes(review) > input_limit)
+    review.fields().erase("prior_search_rejections");
+  require(reflection_input_bytes(review) <= input_limit,
+          "gepa_feedback_budget_too_small");
+  return review;
+}
+
+// 累计每个反思阶段真实送入模型的题目与字节数。reduce/review 通常不带原始
+// feedback，不能覆盖 map 阶段的覆盖题数；重复阶段键只合并题目集合，但保留每次
+// 实际请求的字节消耗，便于断点续跑审计。
+void record_reflection_coverage(Json &node, const std::string &suffix,
+                                const Json &prepared) {
+  if (!node["reflection_inputs"].object())
+    node["reflection_inputs"] = Json::Object{};
+  const auto key = suffix.empty() ? std::string("single") : suffix;
+  auto &stage = node["reflection_inputs"][key];
+  if (!stage.object())
+    stage = Json{{"phase", prepared.str("phase", key == "single" ? "single" : "reflection")},
+                 {"task_ids", Json::Array{}},
+                 {"input_bytes", 0},
+                 {"attempts", 0}};
+  std::set<std::string> stage_tasks;
+  if (stage["task_ids"].array())
+    for (const auto &task : stage["task_ids"].items())
+      if (task.string() && !task.text().empty())
+        stage_tasks.insert(task.text());
+  if (prepared["feedback"].array())
+    for (const auto &row : prepared["feedback"].items())
+      if (row["task_id"].string() && !row.str("task_id").empty())
+        stage_tasks.insert(row.str("task_id"));
+  stage["phase"] = prepared.str("phase", stage.str("phase", "reflection"));
+  stage["task_ids"] = Json::Array{};
+  for (const auto &task : stage_tasks)
+    stage["task_ids"].push(task);
+  stage["input_bytes"] = stage.num("input_bytes", 0) + prepared.dump().size();
+  stage["attempts"] = stage.num("attempts", 0) + 1;
+
+  std::set<std::string> all_tasks;
+  std::size_t total_bytes = 0;
+  for (const auto &entry : node["reflection_inputs"].fields()) {
+    total_bytes += entry.second.num("input_bytes", 0);
+    if (entry.second["task_ids"].array())
+      for (const auto &task : entry.second["task_ids"].items())
+        if (task.string() && !task.text().empty())
+          all_tasks.insert(task.text());
+  }
+  node["reflection_feedback_count"] = all_tasks.size();
+  node["reflection_input_bytes"] = total_bytes;
+}
+
+// 为 map 结果保留可归因的逐题事实，避免 reduce 只能看到一段自由文本理由。
+// 字段仅从当前训练 group.feedback 提取；不合成父子质量差，也不读取 val/holdout。
+Json reflection_task_facts(const Json &feedback_rows, const Json &selected) {
+  Json facts = Json::Array{};
+  if (!feedback_rows.array())
+    return facts;
+  const auto chosen = [&](const char *name) {
+    return std::any_of(selected.items().begin(), selected.items().end(),
+                       [&](const auto &item) { return item.text() == name; });
+  };
+  for (const auto &row : feedback_rows.items()) {
+    const auto &trial = row["trial"];
+    const auto &metrics = trial["metrics"];
+    Json fact{{"task_id", clip(row.str("task_id"), 120)},
+              {"verdict", trial["verdict"]},
+              {"execution_status", trial["execution_status"]}};
+    if (!trial.str("error_code").empty())
+      fact["error_code"] = clip(trial.str("error_code"), 64);
+    if (trial["observed_tool_failures"].object()) {
+      const auto &failures = trial["observed_tool_failures"];
+      if (failures.str("status") == "scanned")
+        fact["observed_tool_failure_count"] = failures["count"];
+      else
+        fact["observed_tool_failure_status"] = "unavailable";
+    }
+    for (const auto *name : {"quality", "tokens", "llm_calls"})
+      if (metrics.has(name))
+        fact[name] = metrics[name];
+    if (metrics.has("invalid_loops"))
+      fact["invalid_loops"] = metrics["invalid_loops"];
+    else if (trial["evidence"]["loop_review"].str("status") == "complete" &&
+             trial["evidence"]["loop_review"].has("count"))
+      fact["invalid_loops"] = trial["evidence"]["loop_review"]["count"];
+    else if (trial["evidence"]["trajectory"]["summary"].has("invalid_loop_lower_bound"))
+      fact["invalid_loops_lower_bound"] =
+          trial["evidence"]["trajectory"]["summary"]["invalid_loop_lower_bound"];
+
+    if (trial["goal_completion"].object()) {
+      Json goal = Json::Object{};
+      for (const auto *name : {"quality", "coverage", "critical_failures"})
+        if (trial["goal_completion"].has(name))
+          goal[name] = trial["goal_completion"][name];
+      std::vector<const Json *> issues;
+      if (trial["goal_completion"]["issues"].array())
+        for (const auto &issue : trial["goal_completion"]["issues"].items())
+          issues.push_back(&issue);
+      std::stable_sort(issues.begin(), issues.end(), [](const auto *left, const auto *right) {
+        const bool left_critical = left->flag("critical_failure", false);
+        const bool right_critical = right->flag("critical_failure", false);
+        if (left_critical != right_critical)
+          return left_critical;
+        return (left->str("status") != "passed") > (right->str("status") != "passed");
+      });
+      goal["issues"] = Json::Array{};
+      const auto kept = std::min<std::size_t>(2, issues.size());
+      for (std::size_t i = 0; i < kept; ++i) {
+        const auto &issue = *issues[i];
+        Json item = Json::Object{};
+        for (const auto *name : {"id", "turn", "status", "critical_failure"})
+          if (issue.has(name))
+            item[name] = issue[name];
+        if (!issue.str("reason").empty())
+          item["reason"] = diagnostic_excerpt(issue.str("reason"), 96);
+        goal["issues"].push(std::move(item));
+      }
+      if (issues.size() > kept)
+        goal["omitted_issues"] = issues.size() - kept;
+      fact["goal"] = std::move(goal);
+    }
+
+    std::size_t action_queries = 0, action_executed = 0, action_failures = 0;
+    std::size_t loop_queries = 0, loop_rejected = 0, loop_failed = 0, loop_no_progress = 0;
+    if (trial["evidence"]["runs"].array())
+      for (const auto &run : trial["evidence"]["runs"].items())
+        if (run["actions"].array())
+          for (const auto &action : run["actions"].items()) {
+            if (chosen("action_rules") && action["action_control"].object()) {
+              ++action_queries;
+              action_executed += action.flag("executed", false);
+              action_failures += action.flag("observed_failure", false);
+            }
+            if (chosen("loop_rules") && action["loop_control"].object()) {
+              ++loop_queries;
+              loop_rejected += static_cast<std::size_t>(
+                  number(action["loop_control"]["rejected_actions"]));
+              loop_failed += static_cast<std::size_t>(
+                  number(action["loop_control"]["failed_actions"]));
+              loop_no_progress += static_cast<std::size_t>(
+                  number(action["loop_control"]["observed_no_progress"]));
+            }
+          }
+    if (action_queries || loop_queries)
+      fact["control_evidence"] = Json{
+          {"action_queries", action_queries}, {"action_executed", action_executed},
+          {"action_failures", action_failures}, {"loop_queries", loop_queries},
+          {"loop_rejected_actions", loop_rejected}, {"loop_failed_actions", loop_failed},
+          {"loop_no_progress", loop_no_progress}};
+    if (row["selected_experience_applications"].object()) {
+      const auto &application = row["selected_experience_applications"];
+      Json summary{{"count", application.num("count", 0)}};
+      if (application.has("status"))
+        summary["status"] = application["status"];
+      std::set<std::string> memory_ids;
+      if (application["points"].array())
+        for (const auto &point : application["points"].items())
+          if (!point.str("memory_id").empty())
+            memory_ids.insert(point.str("memory_id"));
+      if (!memory_ids.empty()) {
+        summary["memory_ids"] = Json::Array{};
+        for (const auto &id : memory_ids)
+          summary["memory_ids"].push(clip(id, 48));
+      }
+      fact["experience_applications"] = std::move(summary);
+    }
+
+    // 单题事实有严格字节上限，32 题最多约 16 KiB；先压缩自由理由和回执 ID，
+    // 再删除次要诊断字段，绝不删除 task_id/verdict/loop-loss 这些审计锚点。
+    if (fact.dump().size() > 512 && fact["goal"]["issues"].array())
+      for (auto &issue : fact["goal"]["issues"].items())
+        if (issue.has("reason"))
+          issue["reason"] = diagnostic_excerpt(issue.str("reason"), 32);
+    if (fact.dump().size() > 512 && fact["experience_applications"].has("memory_ids"))
+      fact["experience_applications"].fields().erase("memory_ids");
+    if (fact.dump().size() > 512 && fact["experience_applications"].object())
+      fact["experience_applications"].fields().erase("status");
+    if (fact.dump().size() > 512 && fact["goal"]["issues"].array() &&
+        fact["goal"]["issues"].items().size() > 1)
+      fact["goal"]["issues"].items().resize(1);
+    if (fact.dump().size() > 512 && fact["goal"].object()) {
+      fact["goal"].fields().erase("quality");
+      fact["goal"].fields().erase("coverage");
+    }
+    if (fact.dump().size() > 512) {
+      fact.fields().erase("tokens");
+      fact.fields().erase("llm_calls");
+    }
+    if (fact.dump().size() > 512 && fact["control_evidence"].object()) {
+      fact["control_evidence"].fields().erase("action_queries");
+      fact["control_evidence"].fields().erase("action_executed");
+      fact["control_evidence"].fields().erase("action_failures");
+    }
+    if (fact.dump().size() > 512)
+      fact["task_id"] = clip(fact.str("task_id"), 64);
+    if (fact.dump().size() > 512 && fact["goal"]["issues"].array())
+      for (auto &issue : fact["goal"]["issues"].items())
+        if (issue.has("reason"))
+          issue["reason"] = diagnostic_excerpt(issue.str("reason"), 12);
+    if (fact.dump().size() > 512)
+      fact.fields().erase("goal");
+    require(fact.dump().size() <= 512, "gepa_task_diagnostic_budget_too_small");
+    facts.push(std::move(fact));
+  }
+  return facts;
 }
 
 // 应用经过授权的控制绑定更新，校验字段和动作仍由当前宿主支持。
@@ -4018,6 +4602,12 @@ struct Search {
       report = run_task_evaluation(dataset_path, evaluation_path, directory, options);
     } catch (const std::exception &exc) {
       const std::string code = exc.what();
+      const bool safe_code = !code.empty() && code.size() <= 128 &&
+          std::all_of(code.begin(), code.end(), [](unsigned char ch) {
+            return std::isalnum(ch) || ch == '_' || ch == '-' || ch == '.';
+          });
+      cache["error_code"] = safe_code ? code : "non_identifier_exception";
+      std::cerr << "[gepa] evaluation_exception code=" << cache.str("error_code") << '\n';
       const bool stale = code.rfind("evaluation_checkpoint_", 0) == 0 ||
                          code.rfind("evaluation_artifact_", 0) == 0 ||
                          code == "evaluation_file_not_regular" ||
@@ -4074,8 +4664,8 @@ struct Search {
     // ``evaluation`` above, not to the GEPA search config.  Reading the latter
     // silently disabled the lightweight mode and retained a full protobuf
     // beside every intermediate JSON report.
-    if (!final && evaluation["artifact_retention"].object() &&
-        evaluation["artifact_retention"].flag("drop_intermediate_pb", false)) {
+    const auto &retention = static_cast<const Json &>(evaluation)["artifact_retention"];
+    if (!final && retention.object() && retention.flag("drop_intermediate_pb", false)) {
       std::error_code remove_error;
       fs::remove(directory / "report.pb", remove_error);
     }
@@ -4282,6 +4872,10 @@ struct Search {
       row["fitness"] = number(row["fitness"]) + fitness;
       row["quality"] = number(row["quality"]) + quality;
       row["strict_pass_rate"] = number(row["strict_pass_rate"]) + (passed ? 1 : 0);
+      if (evidence["assessment"].object() &&
+          evidence["assessment"].has("critical_failures"))
+        row["critical_failures"] = number(row["critical_failures"]) +
+                                   evidence["assessment"].num("critical_failures", 0);
       row["duration_ms"] = number(row["duration_ms"]) + trial.duration_ms();
       if (!unknown_tokens) {
         row["tokens"] = number(row["tokens"]) + number(metrics["tokens"]);
@@ -4323,6 +4917,9 @@ struct Search {
       item.second["quality"] = number(item.second["quality"]) / item.second.num("repetitions", 1);
       item.second["strict_pass_rate"] =
           number(item.second["strict_pass_rate"]) / item.second.num("repetitions", 1);
+      if (item.second.has("critical_failures"))
+        item.second["critical_failures"] =
+            number(item.second["critical_failures"]) / item.second.num("repetitions", 1);
       for (const auto *field : {"invalid_loops", "loop_efficiency", "token_efficiency",
                                 "latency_efficiency", "duration_ms"})
         if (item.second.has(field))
@@ -4766,7 +5363,7 @@ struct Search {
     return result;
   }
 
-  // 同批独立操作可以探索普通顺序，已有明确依赖则保持其成功要求。conditional 描述结果条件，
+  // 只有明确顺序或真实资源生产/消费才探索新增先后关系。conditional 描述结果条件，
   // 例如“没找到合适结果才执行 B”，不能降格为“A 执行成功后执行 B”。
   Json schedule_training_contract(const std::string &task_id,
                                   const std::string &request = {}) const {
@@ -4775,8 +5372,9 @@ struct Search {
         const auto attributes = json(task.attributes());
         const auto dependency =
             attributes["dependency"].string() ? attributes.str("dependency") : std::string{};
-        if (dependency == "parallel")
-          return Json{{"order_editable", false}};
+        if (dependency == "parallel" || dependency == "independent" || dependency == "none")
+          return Json{{"order_editable", false}, {"ordering_required", false},
+                      {"require_success", false}};
         auto text = request.empty() ? task.task_input() : request;
         const auto expectations = turn_expectations(task);
         bool matched_turn = false, conditional = false, any_conditional = false;
@@ -4812,7 +5410,7 @@ struct Search {
         const bool ordering = explicit_dependency || success || (has("先") && has("再")) ||
             has("完成后") || has("弄好后") || has("弄好了") || has("之后再") ||
             has(" before ") || has(" after ") || has(" then ");
-        // 未要求先后不等于禁止搜索先后：这里只开放同批可编辑边，收益仍由真实配对评测决定。
+        // 未要求先后时是否可编辑仍由绑定生成器检查真实输出→输入依赖。
         return Json{{"order_editable", true}, {"ordering_required", ordering},
                     {"require_success", success},
                     {"priority", ordering ? (explicit_dependency ? (success ? 3 : 2) : 1) : 0}};
@@ -4859,7 +5457,10 @@ struct Search {
       control_selected |= item.text() == "action_rules" || item.text() == "loop_rules" ||
                           item.text() == "schedule_rules";
     }
-    const bool experience_only = !selected.items().empty() && !control_selected;
+    const bool experience_selected = std::any_of(
+        selected.items().begin(), selected.items().end(),
+        [](const auto &item) { return item.text().rfind("experience:", 0) == 0; });
+    const bool experience_only = experience_selected && !control_selected;
     Json contract = Json::Object{};
     for (const auto *key :
          {"min_pass_rate", "max_pass_rate_drop", "min_pass_rate_gain", "min_quality",
@@ -4926,6 +5527,26 @@ struct Search {
     for (const auto &trial : feedback.trials())
       trials.push_back(&trial);
     const auto feedback_scores = scores(feedback);
+    result["training_batch_summary"] = Json::Array{};
+    std::set<std::string> summary_tasks;
+    for (const auto *trial : trials) {
+      const auto task = std::find_if(dataset.tasks().begin(), dataset.tasks().end(),
+                                    [&](const auto &value) {
+                                      return value.task_id() == trial->task_id();
+                                    });
+      require(task != dataset.tasks().end() && task->split() == "train",
+              "gepa_reflection_split_violation");
+      if (!summary_tasks.insert(trial->task_id()).second)
+        continue;
+      Json summary{{"task_id", trial->task_id()}, {"verdict", trial->verdict()},
+                   {"execution_status", trial->execution_status()}};
+      if (!trial->error_code().empty())
+        summary["error_code"] = trial->error_code();
+      for (const auto *field : {"quality", "invalid_loops", "tokens", "duration_ms"})
+        if (feedback_scores[trial->task_id()].has(field))
+          summary[field] = feedback_scores[trial->task_id()][field];
+      result["training_batch_summary"].push(std::move(summary));
+    }
     std::map<std::string, bool> relevant;
     std::map<std::string, Json> applications;
     bool has_applied_experience = false;
@@ -4957,11 +5578,26 @@ struct Search {
           std::any_of(selected.items().begin(), selected.items().end(), [&](const auto &component) {
             return used.count(component.text()) || control_evidence(single, component.text());
           });
-      if (experience_only) {
+      if (experience_selected) {
         applications[trial->trial_id()] = selected_experience_applications(*trial, selected, seed);
-        relevant[trial->trial_id()] = applications.at(trial->trial_id()).num("count", 0) != 0;
-        has_applied_experience |= relevant[trial->trial_id()];
+        const bool applied = applications.at(trial->trial_id()).num("count", 0) != 0;
+        relevant[trial->trial_id()] = relevant[trial->trial_id()] || applied;
+        has_applied_experience |= applied;
       }
+    }
+    if (experience_selected) {
+      // 用本批真实应用数预留元数据字节；最终只统计实际装入反思包的题。
+      std::size_t application_upper = 0;
+      std::set<std::string> applied_tasks;
+      for (const auto *trial : trials) {
+        const auto count = applications.at(trial->trial_id()).num("count", 0);
+        application_upper += count;
+        if (count)
+          applied_tasks.insert(trial->task_id());
+      }
+      result["experience_application_count"] = application_upper;
+      result["experience_application_task_count"] = applied_tasks.size();
+      result["experience_evidence_sufficient"] = false;
     }
     // 顺序词和数据集提示只参与排序，不作为样本准入条件；缺少这些字样不等于没有
     // 编排机会，也不能让一个误命中的独立任务排除整批其他真实边界证据。
@@ -4980,8 +5616,9 @@ struct Search {
     // L1 不能只看失败就停用整条经验；在原有预算内，把同经验的成功应用放在第二位。
     // 多选组件时按实际回执中的同一 memory_id 配对，不能借另一条经验的成功充数。
     const dataset::v1::EvaluationTrial *paired_success = nullptr;
-    if (experience_only && config.num("max_feedback_trials", 4) >= 2 && trials.size() > 1 &&
-        trials.front()->verdict() == "failed" && relevant[trials.front()->trial_id()]) {
+    if (experience_selected && config.num("max_feedback_trials", 4) >= 2 && trials.size() > 1 &&
+        trials.front()->verdict() == "failed" &&
+        applications.at(trials.front()->trial_id()).num("count", 0)) {
       const auto &failed_points = applications.at(trials.front()->trial_id())["points"];
       const auto success = std::find_if(trials.begin() + 1, trials.end(), [&](const auto *trial) {
         if (trial->verdict() != "passed" || trial->execution_status() != "completed" ||
@@ -4993,6 +5630,36 @@ struct Search {
                 point.str("memory_id") == failed.str("memory_id"))
               return true;
         return false;
+      });
+      if (success != trials.end()) {
+        paired_success = *success;
+        std::rotate(trials.begin() + 1, success, success + 1);
+      }
+    }
+    if (control_selected && trials.size() > 1) {
+      // 同类失败的大量重复不能占满窗口：先覆盖不同执行对象/结果，再补同类题。
+      std::set<std::string> signatures;
+      std::vector<const dataset::v1::EvaluationTrial *> diverse, repeated;
+      for (const auto *trial : trials) {
+        std::set<std::string> operations;
+        const auto &runs = reviewed_views.at(trial)["evidence"]["runs"];
+        if (runs.array())
+          for (const auto &run : runs.items())
+            if (run["actions"].array())
+              for (const auto &action : run["actions"].items())
+                if (action["action_control"].object() || action["loop_control"].object())
+                  operations.insert(action.str("actor_id") + ":" + action.str("operation"));
+        std::string signature = trial->verdict() + ":" + trial->error_code();
+        for (const auto &operation : operations)
+          signature += "\n" + operation;
+        (signatures.insert(signature).second ? diverse : repeated).push_back(trial);
+      }
+      diverse.insert(diverse.end(), repeated.begin(), repeated.end());
+      trials = std::move(diverse);
+      const auto success = std::find_if(trials.begin() + 1, trials.end(), [&](const auto *trial) {
+        return trial == paired_success ||
+               (trial->verdict() == "passed" && trial->execution_status() == "completed" &&
+                relevant[trial->trial_id()]);
       });
       if (success != trials.end()) {
         paired_success = *success;
@@ -5048,9 +5715,12 @@ struct Search {
       result = std::move(extended);
     }
     bool paired_success_retained = false;
+    std::set<std::string> retained_tasks;
     for (const auto *trial : trials) {
       if (result["feedback"].items().size() >= config.num("max_feedback_trials", 4))
         break;
+      if (retained_tasks.count(trial->task_id()))
+        continue;
       const dataset::v1::EvaluationTask *task = nullptr;
       for (const auto &value : dataset.tasks())
         if (value.task_id() == trial->task_id())
@@ -5065,8 +5735,16 @@ struct Search {
       auto feedback_controls = controls;
       feedback_controls["aggressive_controls"] = policy.options().aggressive_controls();
       auto trial_view = control_selected
-                            ? control_feedback_trial(*trial, selected, feedback_controls)
+                            ? compact_control_reflection_trial(
+                                  control_feedback_trial(*trial, selected, feedback_controls), selected)
                             : feedback_trial(*trial, controls);
+      // 原视图保留 control_feedback_trial 的全部优先级动作；只对入模 packet
+      // 生成预算内的详细视图。真实剩余空间决定最终纳入的题数，不预设能装满 8 题。
+      const Json complete_control_view = control_selected ? trial_view : Json::Object{};
+      std::size_t detail_width = 8;
+      if (control_selected)
+        trial_view = compact_control_reflection_detail(complete_control_view, selected,
+                                                       detail_width);
       const bool counterexample =
           experience_only && has_applied_experience && !relevant[trial->trial_id()];
       // 未使用获选经验的失败只作对照；全未命中或停用待恢复时仍保留原执行反馈。
@@ -5092,8 +5770,30 @@ struct Search {
         row = compact_excerpt(row);
         row["evidence_role"] = "unapplied_counterexample";
       }
-      if (experience_only)
+      if (experience_selected)
         row["selected_experience_applications"] = applications.at(trial->trial_id());
+      if (experience_selected && control_selected && has_applied_experience &&
+          !applications.at(trial->trial_id()).num("count", 0))
+        row["evidence_role"] = "unapplied_counterexample";
+      if (control_selected) {
+        const auto remaining_rows = std::max<std::size_t>(
+            1, config.num("max_feedback_trials", 4) - result["feedback"].items().size());
+        const auto used = reflection_input_bytes(result);
+        const auto remaining = used < input_limit ? input_limit - used : 0;
+        const auto preferred_row_bytes =
+            std::max<std::size_t>(4096, remaining / std::min<std::size_t>(8, remaining_rows));
+        for (const auto width : {6u, 4u, 2u}) {
+          auto packet = result;
+          packet["feedback"].push(row);
+          if (reflection_input_bytes(packet) - used <= preferred_row_bytes)
+            break;
+          detail_width = width;
+          row["trial"] = compact_control_reflection_detail(complete_control_view, selected,
+                                                           detail_width);
+          if (selected_values.has("schedule_rules"))
+            bind_schedule_contracts(row, task->task_id());
+        }
+      }
       const auto original_row = row;
       for (unsigned attempt = 0; attempt < 2; ++attempt) {
         if (attempt != 0)
@@ -5112,6 +5812,19 @@ struct Search {
               row["constraints"].push(clip(constraint, 1024));
             }
             row["expected_behavior"] = clip(task->expected_behavior(), 2048);
+            trial_packet = result;
+            trial_packet["feedback"].push(row);
+            for (const auto width : {6u, 4u, 2u}) {
+              if (reflection_input_bytes(trial_packet) <= input_limit || width >= detail_width)
+                continue;
+              detail_width = width;
+              row["trial"] = compact_control_reflection_detail(complete_control_view, selected,
+                                                               detail_width);
+              if (selected_values.has("schedule_rules"))
+                bind_schedule_contracts(row, task->task_id());
+              trial_packet = result;
+              trial_packet["feedback"].push(row);
+            }
           } else if (!counterexample) {
             row["trial"] = Json::Object{};
             auto overhead = result;
@@ -5126,6 +5839,7 @@ struct Search {
         if (reflection_input_bytes(trial_packet) <= input_limit) {
           result = std::move(trial_packet);
           paired_success_retained |= trial == paired_success;
+          retained_tasks.insert(trial->task_id());
           break;
         }
         // 首条证据仍放不下时退还历史空间，避免新增提示让原本可评测的任务报预算错误。
@@ -5143,6 +5857,27 @@ struct Search {
       truncated["feedback_truncated"] = true;
       if (reflection_input_bytes(truncated) <= input_limit)
         result = std::move(truncated);
+    }
+    if (experience_selected) {
+      std::size_t applied_points = 0;
+      std::set<std::string> tasks;
+      std::map<std::string, std::set<std::string>> memory_tasks;
+      for (const auto &row : result["feedback"].items()) {
+        const auto &application = row["selected_experience_applications"];
+        applied_points += application.num("count", 0);
+        if (application.num("count", 0))
+          tasks.insert(row.str("task_id"));
+        for (const auto &point : application["points"].items())
+          if (!point.str("memory_id").empty())
+            memory_tasks["experience:" + point.str("memory_id")].insert(row.str("task_id"));
+      }
+      bool sufficient = true;
+      for (const auto &component : selected.items())
+        if (component.text().rfind("experience:", 0) == 0)
+          sufficient &= memory_tasks[component.text()].size() >= 2;
+      result["experience_application_count"] = applied_points;
+      result["experience_application_task_count"] = tasks.size();
+      result["experience_evidence_sufficient"] = sufficient;
     }
     require(!result["feedback"].items().empty() && reflection_input_bytes(result) <= input_limit,
             "gepa_feedback_budget_too_small");
@@ -5166,8 +5901,28 @@ struct Search {
         schedule_binding |= binding.str("component") == "schedule_rules" &&
                             binding.str("primitive_id") == "order_operations";
       }
-    if (component == "schedule_rules")
-      return schedule_binding;
+    // 空父规则不能因独立操作可排列就占用反思轮次；已有规则若在真实计划
+    // 中应用，仍可反思移除错误的旧边。
+    if (component == "schedule_rules") {
+      if (schedule_binding)
+        return true;
+      if (input["components"]["schedule_rules"].array() &&
+          !input["components"]["schedule_rules"].items().empty())
+        for (const auto &feedback : input["feedback"].items()) {
+          const auto &runs = feedback["trial"]["evidence"]["runs"];
+          if (!runs.array())
+            continue;
+          for (const auto &run : runs.items()) {
+            if (!run["schedule_plans"].array())
+              continue;
+            for (const auto &plan : run["schedule_plans"].items())
+              if (plan["effective_plan"]["rule_ids"].array() &&
+                  !plan["effective_plan"]["rule_ids"].items().empty())
+                return true;
+          }
+        }
+      return false;
+    }
     for (const auto &feedback : input["feedback"].items()) {
       // 受预算限制的行只保留分数和输出，不保留可执行证据，不能据此生成控制规则。
       const auto &runs = feedback["trial"]["evidence"]["runs"];
@@ -5321,8 +6076,12 @@ struct Search {
         continue;
       const auto evidence = json(trial.evidence());
       const auto traces =
-          evidence["traces"].array() ? evidence["traces"] : Json(Json::Array{evidence["trace"]});
-      for (const auto &trace : traces.items())
+          evidence["traces"].array() ? evidence["traces"]
+          : evidence["trace"].object() ? Json(Json::Array{evidence["trace"]})
+                                       : Json(Json::Array{});
+      for (const auto &trace : traces.items()) {
+        if (!trace["events"].array())
+          continue;
         for (const auto &event : trace["events"].items()) {
           if (event.str("kind") != "advice.applied" ||
               event["application"].str("status") != "applied")
@@ -5342,6 +6101,7 @@ struct Search {
               result.insert("experience:" + id);
           }
         }
+      }
     }
     return result;
   }
@@ -5697,10 +6457,114 @@ struct Search {
     const auto [selected, previous] = observed_score_subset(candidate, parent, changes);
     const auto acceptance = config.str("acceptance", "strict_improvement");
     if (acceptance == "pareto")
-      return gepa::no_worse(selected, previous) ||
-             gepa::local_gain(selected, previous, number(config["min_improvement"], 0.000001));
+      // Pareto 只要求当前改动在同题观测上有真实局部收益；全局质量、loop、
+      // token 和时延的安全边界由 screening_quality_safe 统一约束，不能再用
+      // “所有指标都不得下降”的门槛把可用的单指标改进全部挡掉。
+      return gepa::local_gain(selected, previous, number(config["min_improvement"], 0.000001));
     return acceptance == "improvement_or_equal" ? gepa::no_worse(selected, previous)
                                                 : improves(selected, previous);
+  }
+
+  // 当本次规则确已执行、但受影响题数很少时，允许批次级显著收益进入独立 Val
+  // 求证；它只是待归因信号，不能作为接受节点或选择父节点的证据。
+  bool screening_batch_gain(const Json &candidate, const Json &parent) const {
+    if (!candidate.object() || !parent.object() || candidate.fields().empty() ||
+        candidate.fields().size() != parent.fields().size())
+      return false;
+    for (const auto &task : parent.fields())
+      if (!candidate.has(task.first))
+        return false;
+    auto complete_metric = [&](const char *field) {
+      for (const auto &task : parent.fields())
+        if (!task.second.has(field) || task.second[field].null() ||
+            !candidate[task.first].has(field) || candidate[task.first][field].null())
+          return false;
+      return true;
+    };
+    if (mean(candidate, "quality") >= mean(parent, "quality") + 0.01 - 1e-12)
+      return true;
+    const auto strict = mean(candidate, "strict_pass_rate");
+    const auto base_strict = mean(parent, "strict_pass_rate");
+    if (complete_metric("strict_pass_rate") &&
+        strict >= base_strict + 1.0 / candidate.fields().size() - 1e-12)
+      return true;
+    for (const auto *field : {"invalid_loops", "tokens", "duration_ms"}) {
+      if (!complete_metric(field))
+        continue;
+      const auto value = mean(candidate, field), baseline = mean(parent, field);
+      if (value > -1e8 && baseline > 0 && value <= baseline * 0.90 + 1e-12)
+        return true;
+    }
+    return false;
+  }
+
+  bool screening_gain_for_validation(const Json &candidate, const Json &parent,
+                                     const Json &changes) const {
+    return observed_training_gain(candidate, parent, changes) ||
+           (config.str("acceptance", "strict_improvement") == "pareto" &&
+            screening_batch_gain(candidate, parent));
+  }
+
+  // Pool 只决定是否值得独立验证，不使用最终发布门禁的零质量回退容差。
+  // 少量逐题二值波动可由 Val 复核，但大范围退化或新增关键目标失败仍须挡住。
+  bool screening_quality_safe(const Json &candidate, const Json &parent,
+                              const Json &causal_changes = Json()) const {
+    if (!candidate.object() || !parent.object() || candidate.fields().empty() ||
+        parent.fields().empty() || candidate.fields().size() != parent.fields().size())
+      return false;
+    const auto allowed = std::clamp(number(config["screening_max_quality_drop"], 0.03), 0.0, 0.15);
+    const auto quality = mean(candidate, "quality"), parent_quality = mean(parent, "quality");
+    if (quality + allowed < parent_quality - 1e-12)
+      return false;
+    for (const auto &task : parent.fields()) {
+      if (!candidate.has(task.first) || !candidate[task.first].has("quality") ||
+          !task.second.has("quality") || candidate[task.first]["quality"].null() ||
+          task.second["quality"].null())
+        return false;
+      if (number(candidate[task.first]["critical_failures"]) >
+          number(task.second["critical_failures"]) + 1e-12)
+        return false;
+    }
+    // Pareto 不能用少数质量提升掩盖资源灾难；允许核心指标在 10% 内自然波动，
+    // 但不允许明显的 loop/成本灾难；最终 Val/holdout 门禁仍使用严格 1.0 比例。
+    // 这样专长节点仍可探索，但 Node22
+    // 这类 loop/成本整体回退不会继续占据搜索预算。
+    const auto tolerance = 1.10;
+    for (const auto *field : {"invalid_loops", "duration_ms", "tokens"}) {
+      bool observed = true, partly_observed = false;
+      for (const auto &task : parent.fields()) {
+        const bool before = task.second.has(field) && !task.second[field].null();
+        const bool after = candidate[task.first].has(field) &&
+                           !candidate[task.first][field].null();
+        observed &= before && after;
+        partly_observed |= before != after;
+      }
+      if (partly_observed)
+        return false;
+      if (!observed)
+        continue;
+      const auto a = mean(candidate, field), b = mean(parent, field);
+      if (a > -1e8 && b > -1e8 && a > b * tolerance + 1e-9)
+        return false;
+    }
+    std::size_t affected = 0, regressed = 0;
+    if (causal_changes.object())
+      for (const auto &task : causal_changes.fields()) {
+        bool applied = false;
+        if (task.second.object())
+          for (const auto &boundary : task.second.fields())
+            applied |= number(boundary.second, 0) > 0;
+        if (!applied)
+          continue;
+        if (!candidate.has(task.first) || !parent.has(task.first))
+          return false;
+        ++affected;
+        regressed += number(candidate[task.first]["quality"]) + 1e-12 <
+                     number(parent[task.first]["quality"]);
+      }
+    if (affected >= 6 && regressed * 3 >= affected)
+      return false;
+    return true;
   }
 
   // 使用同一套逻辑归档正常筛选和断点恢复结果，避免两条路径对同一份证据给出不同状态。
@@ -5713,32 +6577,63 @@ struct Search {
     node["screening"]["applied_changes"] = applied_changes(parent_artifact, screening);
     node["screening"]["causal_changes"] =
         component_applied_changes(node["components"], node["screening"]["applied_changes"]);
+    std::size_t affected = 0, regressed = 0;
+    for (const auto &task : node["screening"]["causal_changes"].fields()) {
+      bool applied = false;
+      for (const auto &boundary : task.second.fields())
+        applied |= number(boundary.second, 0) > 0;
+      if (!applied || !values.has(task.first) || !parent_scores.has(task.first))
+        continue;
+      ++affected;
+      regressed += number(values[task.first]["quality"]) + 1e-12 <
+                   number(parent_scores[task.first]["quality"]);
+    }
+    node["screening"]["quality_tradeoff"] =
+        Json{{"mean_delta", mean(values, "quality") - mean(parent_scores, "quality")},
+             {"affected_tasks", affected}, {"regressed_affected_tasks", regressed},
+             {"limited_attribution_sample", affected < 6 && regressed > 0}};
     const auto inherited_controls = control_coverage(parent_artifact, Report{});
+    node["screening"]["new_control_observation"] =
+        new_control_observation(node["screening"]["control_coverage"], inherited_controls);
     const bool controls_observed =
-        control_changes_observed(node["screening"]["control_coverage"], inherited_controls);
+        node["screening"]["new_control_observation"].flag("observed", false);
     node["screening"]["controls_observed"] = controls_observed;
     const auto acceptance = config.str("acceptance", "strict_improvement");
-    const bool pass = acceptance == "pareto"
-                          ? gepa::no_worse(values, parent_scores) ||
-                                observed_local_gain(values, parent_scores,
-                                                    node["screening"]["causal_changes"])
-                      : acceptance == "improvement_or_equal"
-                          ? gepa::no_worse(values, parent_scores)
-                          : improves(values, parent_scores);
-    const bool changed = controls_observed &&
-                         !node["screening"]["causal_changes"].fields().empty();
+    const bool quality_safe =
+        screening_quality_safe(values, parent_scores, node["screening"]["causal_changes"]);
     const bool observed_gain =
         observed_training_gain(values, parent_scores, node["screening"]["causal_changes"]);
+    const bool batch_gain = screening_batch_gain(values, parent_scores);
+    node["screening"]["observed_local_gain"] = observed_gain;
+    node["screening"]["batch_gain"] = batch_gain;
+    node["screening"]["attribution_pending"] = !observed_gain && batch_gain;
+    const bool pass = quality_safe &&
+                      (acceptance == "pareto"
+                           ? observed_gain || batch_gain
+                           : acceptance == "improvement_or_equal"
+                               ? gepa::no_worse(values, parent_scores)
+                               : improves(values, parent_scores));
+    const bool changed = controls_observed &&
+                         !node["screening"]["causal_changes"].fields().empty();
     node.fields().erase("reason");
     node["status"] = values.fields().empty() ? "inconclusive"
                      : !changed              ? "unobserved_changes"
-                     : pass && observed_gain ? "screened"
+                     : pass && screening_gain_for_validation(
+                                   values, parent_scores, node["screening"]["causal_changes"])
+                                             ? "screened"
                                              : "rejected_minibatch";
+    if (node.str("status") == "screened")
+      node["screening"]["selection_basis"] =
+          observed_gain ? "observed_local_gain" : "batch_gain_attribution_pending";
     if (!changed && !values.fields().empty())
       node["reason"] = !controls_observed ? "new_control_not_applied"
                                             : "selected_component_not_applied";
+    else if (changed && !values.fields().empty() && !quality_safe)
+      node["reason"] = "pool_quality_regression";
     else if (changed && !values.fields().empty() && !observed_gain)
-      node["reason"] = "no_observed_training_gain";
+      node["reason"] = node.str("status") == "screened"
+                           ? "batch_gain_attribution_pending"
+                           : "no_observed_training_gain";
     return values;
   }
 
@@ -6540,6 +7435,7 @@ struct Search {
         observed_operation_bindings(input, std::numeric_limits<std::size_t>::max());
     require(prepared.dump().size() <= config.num("max_input_bytes", 65536),
             "gepa_feedback_budget_too_small");
+    auto &reflection_node = tree["nodes"].items()[node];
     search_check();
     require(tree.num("model_calls", 0) < config.num("max_model_calls", 8),
             "gepa_model_budget_exhausted");
@@ -6587,6 +7483,8 @@ struct Search {
     validate_local_data(Json(request.system_prompt));
     write(root / "reflections" / (name + ".request.json"),
           Json{{"system", request.system_prompt}, {"input", prepared}}.dump());
+    record_reflection_coverage(reflection_node, suffix, prepared);
+    save();
     const auto call_started = std::chrono::steady_clock::now();
     const auto response = adapter->evaluate(request);
     const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -6760,6 +7658,575 @@ struct Search {
     return drafts;
   }
 
+  // Map covers every distinct training task in the parent pool. The regular packet builder
+  // enforces the same byte and trial limits on each group; unlike the old COMBEE shuffling,
+  // no row is silently dropped after a model call has been assigned to it.
+  Json propose_full_pool(const Json &parent, const Json &input, const Report &parent_report,
+                         std::size_t node, Json &pending) {
+    if (config.str("reflection_strategy", "single") != "combee")
+      return reflect(input, node);
+    const auto &selected = input["selected_components"];
+    std::map<std::string, dataset::v1::EvaluationTrial> remaining;
+    for (const auto &trial : parent_report.trials())
+      if (trial.variant_id() == "candidate" && !trial.task_id().empty())
+        remaining.emplace(trial.task_id(), trial);
+    require(!remaining.empty(), "gepa_parent_evaluation_inconclusive");
+    const auto all_trials = remaining;
+    std::map<std::string, std::set<std::string>> applied_memory_tasks;
+    for (const auto &entry : all_trials) {
+      const auto applications = selected_experience_applications(entry.second, selected, seed);
+      for (const auto &point : applications["points"].items())
+        if (!point.str("memory_id").empty())
+          applied_memory_tasks["experience:" + point.str("memory_id")].insert(entry.first);
+    }
+    const auto pool_size = remaining.size();
+    const auto input_limit = config.num("max_input_bytes", 65536);
+    std::vector<Json> groups;
+    std::vector<Json> continuation_rows;
+    std::set<std::string> covered;
+    const bool control_selected = std::any_of(
+        selected.items().begin(), selected.items().end(), [](const auto &item) {
+          return item.text() == "action_rules" || item.text() == "loop_rules" ||
+                 item.text() == "schedule_rules";
+        });
+    while (!remaining.empty()) {
+      Report rest;
+      for (const auto &entry : remaining)
+        *rest.add_trials() = entry.second;
+      auto group = packet(parent, rest, selected);
+      // A later group cannot forget necessary work observed in an earlier successful
+      // parent run. Bindings still come only from this group's real trajectories.
+      const auto merge_global_requirements = [&](Json &target) {
+        for (const auto *field : {"action_requirements", "loop_requirements"})
+          if (input["controls"][field].array())
+            target["controls"][field] = input["controls"][field];
+      };
+      merge_global_requirements(group);
+      while (reflection_input_bytes(group) > input_limit &&
+             group["feedback"].items().size() > 1) {
+        Report smaller;
+        const auto &rows = group["feedback"].items();
+        for (std::size_t i = 0; i + 1 < rows.size(); ++i)
+          *smaller.add_trials() = remaining.at(rows[i].str("task_id"));
+        group = packet(parent, smaller, selected);
+        merge_global_requirements(group);
+      }
+      if (reflection_input_bytes(group) > input_limit)
+        group.fields().erase("prior_search_rejections");
+      Json ids = Json::Array{};
+      for (const auto &row : group["feedback"].items()) {
+        const auto id = row.str("task_id");
+        if (remaining.count(id))
+          ids.push(id);
+      }
+      require(!ids.items().empty(), "gepa_reflection_pool_coverage_stalled");
+      group["phase"] = "pool_diagnostic_map";
+      group["pool_task_count"] = pool_size;
+      group["group_task_ids"] = ids;
+      // The packet builder may use its last byte for real task evidence. Keep its
+      // original rows instead of rejecting a valid group for diagnostic metadata.
+      if (reflection_input_bytes(group) > input_limit)
+        group.fields().erase("group_task_ids");
+      if (reflection_input_bytes(group) > input_limit)
+        group.fields().erase("pool_task_count");
+      if (reflection_input_bytes(group) > input_limit)
+        group.fields().erase("phase");
+      require(reflection_input_bytes(group) <= input_limit,
+              "gepa_feedback_budget_too_small");
+      for (const auto &id : ids.items()) {
+        covered.insert(id.text());
+        remaining.erase(id.text());
+      }
+      if (control_selected)
+        for (const auto &row : group["feedback"].items()) {
+          const auto found = all_trials.find(row.str("task_id"));
+          if (found == all_trials.end())
+            continue;
+          auto feedback_controls = controls;
+          const auto policy = proto<v1::RuntimePolicy>(parent["policy"]);
+          feedback_controls["aggressive_controls"] = policy.options().aggressive_controls();
+          const auto complete = compact_control_reflection_trial(
+              control_feedback_trial(found->second, selected, feedback_controls), selected);
+          std::map<std::string, std::size_t> displayed;
+          for (const auto &run : row["trial"]["evidence"]["runs"].items())
+            for (const auto &action : run["actions"].items())
+              ++displayed[run.str("run_id") + "\n" + action.dump()];
+          Json supplemental = row;
+          supplemental["trial"]["evidence"]["runs"] = Json::Array{};
+          Json kind_counts = Json::Object{};
+          std::size_t unshown = 0, highlighted = 0;
+          for (const auto &run : complete["evidence"]["runs"].items()) {
+            Json partial{{"run_id", run["run_id"]}, {"actions", Json::Array{}}};
+            for (const auto &action : run["actions"].items()) {
+              auto &seen = displayed[run.str("run_id") + "\n" + action.dump()];
+              if (seen) {
+                --seen;
+                continue;
+              }
+              ++unshown;
+              const auto kind = action.str("kind") + ":" + action.str("actor_id") + ":" +
+                                action.str("operation") + ":" + action.str("status");
+              kind_counts[kind] = kind_counts.num(kind, 0) + 1;
+              const bool relevant = action_control_evidence(action) ||
+                  (action["loop_control"].object() &&
+                   (action["loop_control"].num("observed_no_progress", 0) ||
+                    action["loop_control"].num("repeated_failure_steps", 0) ||
+                    action["loop_control"].has("reviewed_waste_after")));
+              if (relevant && highlighted < 8) {
+                partial["actions"].push(action);
+                ++highlighted;
+              }
+            }
+            if (!partial["actions"].items().empty())
+              supplemental["trial"]["evidence"]["runs"].push(std::move(partial));
+          }
+          if (!unshown)
+            continue;
+          std::size_t other_kinds = 0, other_actions = 0;
+          if (kind_counts.fields().size() > 16) {
+            Json retained = Json::Object{};
+            std::vector<std::pair<std::string, std::size_t>> ranked;
+            for (const auto &entry : kind_counts.fields())
+              ranked.emplace_back(entry.first, kind_counts.num(entry.first, 0));
+            std::stable_sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
+              return a.second > b.second;
+            });
+            for (std::size_t i = 0; i < ranked.size(); ++i)
+              if (i < 16)
+                retained[ranked[i].first] = ranked[i].second;
+              else {
+                ++other_kinds;
+                other_actions += ranked[i].second;
+              }
+            kind_counts = std::move(retained);
+          }
+          std::size_t raw_events = 0;
+          const auto raw = json(found->second.evidence());
+          const auto traces = raw["traces"].array() ? raw["traces"]
+                            : raw["trace"].object() ? Json(Json::Array{raw["trace"]})
+                                                     : Json(Json::Array{});
+          for (const auto &trace : traces.items())
+            for (const auto &event : trace["events"].items())
+              raw_events += event.str("kind") == "action.end" ||
+                            event.str("kind") == "loop.decision";
+          // The remaining selected action types are counted; up to eight additional
+          // real typed examples give a second view without replaying redundant raw events.
+          supplemental["trial"]["reflection_segment"] =
+              Json{{"index", 2}, {"total", 2},
+                   {"unshown_selected_actions", unshown},
+                   {"typed_examples", highlighted},
+                   {"remaining_without_detail", unshown - highlighted},
+                   {"raw_action_events", raw_events},
+                   {"other_action_kinds", other_kinds},
+                   {"other_actions", other_actions},
+                   {"action_counts", kind_counts}};
+          supplemental["trial"]["reflection_actions_truncated"] =
+              unshown > highlighted;
+          continuation_rows.push_back(std::move(supplemental));
+      }
+      // Store the authoritative group ID list outside the request-size envelope.
+      group["pool_group_task_ids_audit"] = ids;
+      groups.push_back(std::move(group));
+    }
+    require(covered.size() == pool_size, "gepa_reflection_pool_coverage_incomplete");
+    std::size_t continuation_index = 0;
+    while (continuation_index < continuation_rows.size()) {
+      auto segment = input;
+      segment["phase"] = "pool_trajectory_segment";
+      segment["feedback"] = Json::Array{};
+      Json ids = Json::Array{};
+      while (continuation_index < continuation_rows.size() &&
+             segment["feedback"].items().size() < config.num("max_feedback_trials", 8)) {
+        auto attempt = segment;
+        attempt["feedback"].push(continuation_rows[continuation_index]);
+        if (reflection_input_bytes(attempt) > input_limit)
+          break;
+        segment = std::move(attempt);
+        ids.push(continuation_rows[continuation_index].str("task_id"));
+        ++continuation_index;
+      }
+      require(!ids.items().empty(), "gepa_feedback_budget_too_small");
+      segment["pool_group_task_ids_audit"] = ids;
+      groups.push_back(std::move(segment));
+    }
+
+    auto &reflection_node = tree["nodes"].items()[node];
+    Json stages = Json::Array{}, intermediates = Json::Array{};
+    const auto before = components(parent);
+    auto proposal_record = [&](const Json &draft, const Json &ids,
+                               const std::string &id, const Json &task_facts) {
+      const auto candidate = mutate(parent, draft, selected);
+      const auto after = components(candidate);
+      Json changes = Json::Object{};
+      for (const auto &component : selected.items()) {
+        const auto key = component.text();
+        if (after[key].dump() != before[key].dump())
+          changes[key] = after[key];
+      }
+      return Json{{"id", id}, {"reason", diagnostic_excerpt(draft.str("reason"), 768)},
+                  {"task_ids", ids}, {"task_facts", task_facts},
+                  {"candidate_values", changes}};
+    };
+    // Reduce and review select component values that already passed a real map trial's
+    // typed-binding and mutate checks. This avoids inventing a new unbound budget in a
+    // summary packet which has no original action evidence.
+    auto selected_draft = [&](const Json &selection, const Json &records) {
+      require(selection["selected_proposals"].object() &&
+                  !selection.str("reason").empty(),
+              "gepa_reflection_selection_invalid");
+      Json draft{{"reason", diagnostic_excerpt(selection.str("reason"), 2048)},
+                 {"experiences", Json::Array{}}};
+      for (const auto &component : selected.items()) {
+        const auto key = component.text();
+        const auto id = selection["selected_proposals"].str(key);
+        if (id.empty())
+          continue;
+        const Json *value = nullptr;
+        for (const auto &record : records.items())
+          if (record.str("id") == id && record["candidate_values"].has(key)) {
+            value = &record["candidate_values"][key];
+            break;
+          }
+        require(value != nullptr, "gepa_reflection_selection_invalid");
+        if (key.rfind("experience:", 0) == 0) {
+          Json change{{"memory_id", key.substr(11)},
+                      {"content", value->object() ? (*value)["content"] : *value}};
+          if (value->object())
+            for (const auto *field : {"trigger_pattern", "observed_operations"})
+              if (value->has(field))
+                change[field] = (*value)[field];
+          draft["experiences"].push(std::move(change));
+        } else {
+          require(value->array(), "gepa_reflection_selection_invalid");
+          draft["controls"][key] = *value;
+        }
+      }
+      // A cross-pool synthesis may rewrite an actually used L1 memory after seeing all
+      // task facts. This does not grant new control bindings or unselected memory IDs.
+      if (selection.has("experience_revisions")) {
+        require(selection["experience_revisions"].array(),
+                "gepa_reflection_selection_invalid");
+        for (const auto &revision : selection["experience_revisions"].items()) {
+          const auto key = "experience:" + revision.str("memory_id");
+          const bool authorized = std::any_of(
+              selected.items().begin(), selected.items().end(),
+              [&](const auto &item) { return item.text() == key; });
+          require(authorized && applied_memory_tasks[key].size() >= 2,
+                  "gepa_reflection_selection_invalid");
+          auto &changes = draft["experiences"].items();
+          changes.erase(std::remove_if(changes.begin(), changes.end(),
+                                       [&](const auto &item) {
+                                         return item.str("memory_id") == revision.str("memory_id");
+                                       }),
+                        changes.end());
+          changes.push_back(revision);
+        }
+      }
+      (void)mutate(parent, draft, selected);
+      return draft;
+    };
+    // A completed stage is reusable after interruption in this same job. Match its
+    // selected components and actual task IDs; reduce/review also match the supplied
+    // intermediate records. No external version gate blocks recovery.
+    auto call_stage = [&](const Json &request, const std::string &suffix, bool aggregate,
+                          bool &reused) {
+      const auto stem = std::to_string(node) + suffix;
+      const auto request_path = root / "reflections" / (stem + ".request.json");
+      const auto draft_path = root / "reflections" / (stem + ".draft.json");
+      reused = false;
+      if (fs::exists(request_path) && fs::exists(draft_path))
+        try {
+          const auto earlier = Json::parse(read(request_path, 262144))["input"];
+          // Check the same final input shape that reflect() persisted. Comparing
+          // bound controls with the pre-binding request needlessly repeats stages.
+          const auto prepared = observed_operation_bindings(
+              request, std::numeric_limits<std::size_t>::max());
+          const auto same = [&](const char *field) {
+            return earlier[field].dump() == prepared[field].dump();
+          };
+          Json earlier_ids = Json::Array{}, current_ids = Json::Array{};
+          if (earlier["feedback"].array())
+            for (const auto &row : earlier["feedback"].items())
+              earlier_ids.push(row["task_id"]);
+          if (request["feedback"].array())
+            for (const auto &row : request["feedback"].items())
+              current_ids.push(row["task_id"]);
+          if (same("selected_components") && same("phase") &&
+              earlier_ids.dump() == current_ids.dump() &&
+              same("feedback") && same("case_outcomes") && same("controls") &&
+              same("intermediate_proposals") && same("proposed_strategy")) {
+            auto draft = Json::parse(read(draft_path, 262144));
+            reused = true;
+            return draft;
+          }
+        } catch (const std::exception &) {
+          // A partial or corrupt checkpoint is safe to recompute from the cached report.
+        }
+      auto draft = reflect(request, node, suffix, aggregate);
+      write(draft_path, draft.dump());
+      return draft;
+    };
+    auto choose_stage = [&](const Json &request, const std::string &suffix,
+                            const Json &records, Json &selection, bool &reused) {
+      selection = call_stage(request, suffix, true, reused);
+      try {
+        return selected_draft(selection, records);
+      } catch (const Error &error) {
+        const auto code = std::string(error.what());
+        if (code != "gepa_reflection_selection_invalid" && code != "gepa_draft_invalid")
+          throw;
+        auto repair = request;
+        repair["phase"] = "pool_selection_repair";
+        repair["selection_error"] = code;
+        repair["rejected_selection"] = selection;
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("rejected_selection");
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("prior_search_rejections");
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("training_batch_summary");
+        require(reflection_input_bytes(repair) <= input_limit,
+                "gepa_feedback_budget_too_small");
+        bool repair_reused = false;
+        selection = call_stage(repair, suffix + "-selection-repair", true, repair_reused);
+        auto corrected = selected_draft(selection, records);
+        stages.push(Json{{"phase", "pool_selection_repair"},
+                         {"file", std::to_string(node) + suffix + "-selection-repair"},
+                         {"error", code}, {"reused", repair_reused}});
+        reflection_node["reflection_stages"] = stages;
+        save();
+        return corrected;
+      }
+    };
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+      auto &group = groups[i];
+      const auto suffix = ".pool-map-" + std::to_string(i);
+      const auto ids = group["pool_group_task_ids_audit"];
+      group.fields().erase("pool_group_task_ids_audit");
+      bool reused = false;
+      bool repaired = false;
+      Json draft, record;
+      try {
+        draft = call_stage(group, suffix, false, reused);
+        record = proposal_record(draft, ids, "map-" + std::to_string(i),
+                                 reflection_task_facts(group["feedback"], selected));
+      } catch (const Error &error) {
+        const auto code = std::string(error.what());
+        if (code != "control_binding_invalid" && code != "gepa_draft_invalid" &&
+            code != "unknown_field")
+          throw;
+        auto repair = group;
+        repair["phase"] = "pool_map_repair";
+        repair["error"] = code;
+        if (draft.object())
+          repair["failed_draft"] = draft;
+        if (code == "control_binding_invalid") {
+          const auto &diagnostic =
+              tree["reflection_calls"][std::to_string(tree.num("model_calls", 0))]
+                  ["control_binding_error"];
+          if (diagnostic.object())
+            repair["binding_error"] = diagnostic;
+        }
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("failed_draft");
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("prior_search_rejections");
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("training_batch_summary");
+        require(reflection_input_bytes(repair) <= input_limit,
+                "gepa_feedback_budget_too_small");
+        bool repair_reused = false;
+        draft = call_stage(repair, suffix + "-repair", false, repair_reused);
+        record = proposal_record(draft, ids, "map-" + std::to_string(i),
+                                 reflection_task_facts(group["feedback"], selected));
+        repaired = true;
+        stages.push(Json{{"phase", "pool_map_repair"},
+                         {"file", std::to_string(node) + suffix + "-repair"},
+                         {"error", code}, {"task_ids", ids},
+                         {"reused", repair_reused}});
+      }
+      pending = draft;
+      intermediates.push(std::move(record));
+      stages.push(Json{{"phase", group.str("phase", "pool_diagnostic_map")},
+                       {"file", std::to_string(node) + suffix},
+                       {"task_ids", ids},
+                       {"feedback_records", group["feedback"].items().size()},
+                       {"reused", reused},
+                       {"repaired", repaired},
+                       {"input_bytes", observed_operation_bindings(
+                                           group, std::numeric_limits<std::size_t>::max())
+                                           .dump().size()}});
+      reflection_node["reflection_stages"] = stages;
+      reflection_node["reflection_pool_task_count"] = pool_size;
+      std::set<std::string> completed;
+      for (const auto &stage : stages.items())
+        if (stage.str("phase") == "pool_diagnostic_map")
+          for (const auto &id : stage["task_ids"].items())
+            completed.insert(id.text());
+      reflection_node["reflection_pool_covered_task_count"] = completed.size();
+      save();
+    }
+
+    // Hierarchical reduce keeps every map conclusion if 32 long cases produce too many
+    // intermediate proposals for a single request. Each internal record retains its task IDs.
+    std::size_t level = 0;
+    Json reduced, final_choices;
+    while (true) {
+      auto reduction = input;
+      reduction.fields().erase("feedback");
+      reduction["phase"] = "pool_diagnostic_reduce";
+      reduction["pool_task_count"] = pool_size;
+      reduction["intermediate_proposals"] = intermediates;
+      if (reflection_input_bytes(reduction) <= input_limit) {
+        const auto suffix = ".pool-reduce-" + std::to_string(level);
+        bool reused = false;
+        reduced = choose_stage(reduction, suffix, intermediates, final_choices, reused);
+        pending = reduced;
+        stages.push(Json{{"phase", "pool_diagnostic_reduce"},
+                         {"file", std::to_string(node) + suffix},
+                         {"task_count", pool_size},
+                         {"reused", reused},
+                         {"input_bytes", observed_operation_bindings(
+                                             reduction, std::numeric_limits<std::size_t>::max())
+                                             .dump().size()}});
+        reflection_node["reflection_stages"] = stages;
+        save();
+        break;
+      }
+      Json next = Json::Array{};
+      std::size_t cursor = 0, part = 0;
+      while (cursor < intermediates.items().size()) {
+        auto chunk = reduction;
+        chunk["intermediate_proposals"] = Json::Array{};
+        while (cursor < intermediates.items().size()) {
+          auto attempt = chunk;
+          attempt["intermediate_proposals"].push(intermediates.items()[cursor]);
+          if (reflection_input_bytes(attempt) > input_limit)
+            break;
+          chunk = std::move(attempt);
+          ++cursor;
+        }
+        require(!chunk["intermediate_proposals"].items().empty(),
+                "gepa_reflection_reduce_budget_too_small");
+        if (chunk["intermediate_proposals"].items().size() == 1) {
+          next.push(chunk["intermediate_proposals"].items().front());
+          continue;
+        }
+        chunk["phase"] = "pool_diagnostic_reduce_part";
+        const auto suffix = ".pool-reduce-" + std::to_string(level) + "-" +
+                            std::to_string(part++);
+        bool reused = false;
+        Json selection;
+        const auto draft = choose_stage(chunk, suffix, chunk["intermediate_proposals"],
+                                        selection, reused);
+        pending = draft;
+        Json ids = Json::Array{};
+        Json facts = Json::Array{};
+        std::set<std::string> unique;
+        for (const auto &item : chunk["intermediate_proposals"].items())
+          for (const auto &id : item["task_ids"].items())
+            if (unique.insert(id.text()).second)
+              ids.push(id);
+        for (const auto &item : chunk["intermediate_proposals"].items())
+          for (const auto &fact : item["task_facts"].items())
+            facts.push(fact);
+        next.push(proposal_record(draft, ids, "reduce-" + std::to_string(level) + "-" +
+                                              std::to_string(part - 1), facts));
+        stages.push(Json{{"phase", "pool_diagnostic_reduce_part"},
+                         {"file", std::to_string(node) + suffix},
+                         {"task_ids", ids},
+                         {"reused", reused},
+                         {"input_bytes", observed_operation_bindings(
+                                             chunk, std::numeric_limits<std::size_t>::max())
+                                             .dump().size()}});
+        reflection_node["reflection_stages"] = stages;
+        save();
+      }
+      require(next.items().size() < intermediates.items().size(),
+              "gepa_reflection_reduce_no_progress");
+      intermediates = std::move(next);
+      ++level;
+    }
+
+    // The final review sees all task outcomes plus a compact real success/failure pair.
+    // A score table alone is not sufficient to recognize a missing requested goal.
+    auto review = input;
+    review["phase"] = "pool_counterexample_review";
+    review["pool_task_count"] = pool_size;
+    review["proposed_strategy"] = reduced;
+    review["proposed_selection"] = final_choices["selected_proposals"];
+    review["intermediate_proposals"] = intermediates;
+    review["case_outcomes"] = Json::Array{};
+    review["feedback"] = Json::Array{};
+    Json failed_case, successful_case;
+    std::set<std::string> outcome_tasks;
+    for (const auto &group : groups)
+      for (const auto &row : group["feedback"].items()) {
+        const auto &trial = row["trial"];
+        Json outcome{{"task_id", row["task_id"]},
+                     {"verdict", trial["verdict"]},
+                     {"execution_status", trial["execution_status"]},
+                     {"metrics", trial["metrics"]}};
+        if (trial["observed_tool_failures"].object())
+          outcome["observed_tool_failures"] = trial["observed_tool_failures"];
+        if (trial["goal_completion"].object()) {
+          outcome["goal_completion"] = trial["goal_completion"];
+          if (outcome["goal_completion"]["issues"].array()) {
+            auto &issues = outcome["goal_completion"]["issues"].items();
+            if (issues.size() > 2)
+              issues.resize(2);
+            for (auto &issue : issues)
+              issue["reason"] = diagnostic_excerpt(issue.str("reason"), 256);
+          }
+        }
+        if (row["selected_experience_applications"].object())
+          outcome["selected_experience_applications"] =
+              row["selected_experience_applications"];
+        if (outcome_tasks.insert(row.str("task_id")).second)
+          review["case_outcomes"].push(std::move(outcome));
+        if (trial.str("verdict") == "passed" && successful_case.null())
+          successful_case = row;
+        if (trial.str("verdict") != "passed" && failed_case.null())
+          failed_case = row;
+      }
+    for (auto example : {failed_case, successful_case})
+      if (example.object()) {
+        if (example["trial"]["evidence"]["runs"].array())
+          example["trial"] =
+              compact_control_reflection_detail(example["trial"], selected, 2);
+        review["feedback"].push(std::move(example));
+      }
+    review["counterexample_pair"] = Json{{"failure_present", failed_case.object()},
+                                          {"success_present", successful_case.object()}};
+    review = compact_full_pool_review(std::move(review), final_choices, input_limit);
+    const auto suffix = ".pool-counterexample-review";
+    bool reused = false;
+    Json reviewed_choices;
+    const auto final_draft = choose_stage(review, suffix, review["intermediate_proposals"],
+                                          reviewed_choices, reused);
+    pending = final_draft;
+    (void)mutate(parent, final_draft, selected);
+    Json review_ids = Json::Array{};
+    for (const auto &row : review["feedback"].items())
+      review_ids.push(row["task_id"]);
+    stages.push(Json{{"phase", "pool_counterexample_review"},
+                     {"file", std::to_string(node) + suffix},
+                     {"task_count", pool_size},
+                     {"case_outcomes", review["case_outcomes"].items().size()},
+                     {"selected_proposals_visible",
+                      review["intermediate_proposals"].items().size()},
+                     {"feedback_task_ids", review_ids},
+                     {"failure_example", failed_case.object()},
+                     {"success_example", successful_case.object()},
+                     {"reused", reused},
+                     {"input_bytes", observed_operation_bindings(
+                                         review, std::numeric_limits<std::size_t>::max())
+                                         .dump().size()}});
+    reflection_node["reflection_stages"] = stages;
+    save();
+    return final_draft;
+  }
+
   // 计算能够关联到真实策略应用的验证收益，避免把随机差异全部归功于候选。
   bool attributed_validation_gain(std::size_t index) const {
     if (index == 0)
@@ -6927,8 +8394,13 @@ struct Search {
     }
     auto &node = tree["nodes"].items()[index];
     node["error_stage"] = node["status"];
-    // 父批次未决属于观测未完成，不是子策略失败；不参与停滞计数或负面记忆反馈。
-    node["status"] = code == "gepa_parent_evaluation_inconclusive" ? "inconclusive" : "error";
+    // 父批次未决属于观测未完成；控制绑定无法依据 typed evidence 修复时也只是
+    // 当前组件不可触发，不能把一次模型格式/绑定问题升级成整轮搜索 error。
+    node["status"] = code == "gepa_parent_evaluation_inconclusive"
+                         ? "inconclusive"
+                         : code == "control_binding_invalid" ? "untriggerable_controls" : "error";
+    if (code == "control_binding_invalid")
+      node["reason"] = "control_binding_unrepairable";
     // 只持久化固定错误码；模型/传输诊断可能包含密钥等敏感信息。
     const std::set<std::string> codes{"gepa_trial_budget_exhausted",
                                       "gepa_search_time_reserved",
@@ -6993,10 +8465,19 @@ struct Search {
                                                                       screened["applied_changes"]);
       if (node.str("kind") != "merge" && screened.object() &&
           screened.str("split", "train") == "train" && screened["parent"].object() &&
+          screened["candidate"].object() &&
+          !screening_quality_safe(screened["candidate"], screened["parent"])) {
+        node["status"] = "rejected_minibatch";
+        node["reason"] = "pool_quality_regression";
+        save();
+        return;
+      }
+      if (node.str("kind") != "merge" && screened.object() &&
+          screened.str("split", "train") == "train" && screened["parent"].object() &&
           screened["candidate"].object() && screened["applied_changes"].object() &&
           (screening_causal_changes.fields().empty() ||
-           !observed_training_gain(screened["candidate"], screened["parent"],
-                                   screening_causal_changes))) {
+           !screening_gain_for_validation(screened["candidate"], screened["parent"],
+                                          screening_causal_changes))) {
         node["status"] = "rejected_minibatch";
         node["reason"] = screening_causal_changes.fields().empty()
                              ? "selected_component_not_applied"
@@ -7031,13 +8512,16 @@ struct Search {
         const auto coverage = control_coverage(candidate, report);
         const auto values = scores(report);
         node["validation_probe"] = Json{{"scores", values}, {"control_coverage", coverage}};
+        const auto combined = merge_control_coverage(coverage, training);
+        const bool any_new_control_applied = control_changes_observed(combined, inherited);
         for (const auto &rule : coverage["rules"].fields()) {
           const auto &previous = training["rules"][rule.first];
-          if (!inherited["rules"].has(rule.first) && !values.fields().empty() &&
+          if (!any_new_control_applied && !inherited["rules"].has(rule.first) &&
+              !values.fields().empty() &&
               previous.num("queries", 0) && !previous.num("applied", 0) &&
               rule.second.num("queries", 0) && !rule.second.num("applied", 0)) {
             // 即使另一条规则被淘汰，已执行的训练证据也不能丢失。
-            node["control_coverage"] = merge_control_coverage(coverage, training);
+            node["control_coverage"] = combined;
             node["status"] = "unobserved_controls";
             node["reason"] = "control_unobserved_in_train_and_validation";
             save();
@@ -7060,6 +8544,8 @@ struct Search {
       node["validation_control_coverage"] = control_coverage(candidate, report);
       node["control_coverage"] =
           merge_control_coverage(node["validation_control_coverage"], training);
+      node["validation_control_observation"] =
+          new_control_observation(node["control_coverage"], inherited);
       const auto &screening_changes = node["screening"]["causal_changes"].object()
                                           ? node["screening"]["causal_changes"]
                                           : node["screening"]["applied_changes"];
@@ -7067,7 +8553,7 @@ struct Search {
       for (const auto &parent : node["validation_applied_changes"].fields())
         changed |= !parent.second.fields().empty();
       const bool controls_observed =
-          control_changes_observed(node["control_coverage"], inherited);
+          node["validation_control_observation"].flag("observed", false);
       const bool attributed = !values.fields().empty() && controls_observed && changed &&
                               attributed_validation_gain(index);
       node["validation_gain_attributed"] = attributed;
@@ -7496,23 +8982,8 @@ struct Search {
     tree["fixed_controls"] = Json::Array{};
     if (proto<v1::RuntimePolicy>(seed["policy"]).options().requested_level() >= v1::L2)
       tree["fixed_controls"].push("observed_tool_required_arguments");
-    if (tree["nodes"].items()[0].str("status") == "seed") {
-      auto &root_node = tree["nodes"].items()[0];
-      if (!root_node["validation"].object() || root_node["validation"].fields().empty()) {
-        const bool imported = config.has("seed_report_file");
-        const auto report = imported ? import_validation_report("seed", seed)
-                                     : evaluate(seed, val, "val");
-        if (imported)
-          root_node["validation_source"] = Json{{"status", "imported"},
-              {"report_sha256", hash(read(config.str("seed_report_file"), kMaxEvaluationReportBytes))}};
-        const auto values = scores(report);
-        require(!values.fields().empty(), "gepa_seed_evaluation_inconclusive");
-        root_node["validation"] = values;
-        root_node["control_coverage"] = control_coverage(seed, report);
-        save();
-      }
-    }
-    // 在为 L0 参考额外花费固定评测前，先验证可部署种子；验证内容始终不进入任何模型包。
+    // L0 baseline 必须先于 seed 的 validation 诊断生成；它是所有后续
+    // pool/validation/holdout 比较的固定参考，不能由 seed 评测顺序隐式替代。
     if (!tree.has("baseline_validation")) {
       Json task_ids = Json::Array{};
       for (const auto &id : val)
@@ -7585,6 +9056,24 @@ struct Search {
         reserve = holdout_trials * finalist_budget_count;
       save();
       require(!locked || cached.str("status") == "hit", "gepa_holdout_baseline_changed");
+    }
+    // L0 已落盘后先评测 seed；节点优化标注必须读取真实的同题验证成绩。
+    // 恢复时只补缺失的 seed validation，不能重跑已完成的 L0。
+    {
+      auto &root_node = tree["nodes"].items()[0];
+      if (!root_node["validation"].object() || root_node["validation"].fields().empty()) {
+        const bool imported = config.has("seed_report_file");
+        const auto report = imported ? import_validation_report("seed", seed)
+                                     : evaluate(seed, val, "val");
+        if (imported)
+          root_node["validation_source"] = Json{{"status", "imported"},
+              {"report_sha256", hash(read(config.str("seed_report_file"), kMaxEvaluationReportBytes))}};
+        const auto values = scores(report);
+        require(!values.fields().empty(), "gepa_seed_evaluation_inconclusive");
+        root_node["validation"] = values;
+        root_node["control_coverage"] = control_coverage(seed, report);
+        save();
+      }
     }
     if (tree["nodes"].items()[0].str("status") == "seed") {
       auto &root_node = tree["nodes"].items()[0];
@@ -7933,292 +9422,469 @@ struct Search {
                   }
                 }
               }
-              // 使用同一训练批次已有的证据，不额外调用模型、不扩展可执行权限。
-              if (selected.items().size() == 1 && available.has("action_rules") &&
-                  available.has("loop_rules") &&
-                  (selected.items().front().text() == "action_rules" ||
-                   selected.items().front().text() == "loop_rules")) {
-                const auto coupled = Json(Json::Array{"action_rules", "loop_rules"});
-                const auto joint_input = packet(parent_artifact, parent_report, coupled);
-                const auto next = recovery_components(selected, joint_input, available);
-                if (next.items().size() > selected.items().size()) {
-                  selected = next;
+              // 单次经验命中不足以支持可靠反思；优先把同一批次的控制证据交给
+              // 反思模型，若没有可执行控制机会则记录 untriggerable，不让一次偶然
+              // 应用生成新的全局经验改写。
+              bool skip_proposal = false;
+              if (selected.items().size() == 1 &&
+                  selected.items().front().text().rfind("experience:", 0) == 0 &&
+                  !input.flag("experience_evidence_sufficient", false)) {
+                Json rerouted, rerouted_input;
+                if (route_control_opportunity(parent_artifact, parent_report, available,
+                                              node.num("component_slot", 0),
+                                              selected.items().front().text(), rerouted,
+                                              rerouted_input)) {
+                  node["component_fallback"] =
+                      Json{{"from", selected.items().front()},
+                           {"to", rerouted.items().front()},
+                           {"reason", "experience_evidence_insufficient"}};
+                  selected = std::move(rerouted);
                   node["components"] = selected;
-                  input = joint_input;
-                  node["component_coupling"] = "same_branch_failure_recovery";
+                  input = std::move(rerouted_input);
+                } else {
+                  skip_proposal = true;
+                  node["status"] = "untriggerable_controls";
+                  node["reason"] = "experience_evidence_insufficient";
+                  save();
                 }
               }
-              if (!node.flag("component_reserved", false)) {
-                for (const auto &component : selected.items())
-                  tree["component_selections"][component.text()] =
-                      tree["component_selections"].num(component.text(), 0) + 1;
-                node["component_reserved"] = true;
-                save();
-              }
-              Json draft, candidate, accepted;
-              Json contract_repairs;
-              node.fields().erase("control_binding_provenance");
-              try {
-                bool paired = false;
-                if (node.num("proposal_ordinal", 0) == 1 && tree["batch"].object())
-                  for (const auto &sibling_id : tree["batch"]["nodes"].items()) {
-                    if (sibling_id.integer() >= index)
-                      continue;
-                    const auto &sibling = tree["nodes"].items()[sibling_id.integer()];
-                    paired |= sibling.num("parent", SIZE_MAX) == node.num("parent", SIZE_MAX) &&
-                              sibling["components"].dump() == selected.dump() &&
-                              sibling["tasks"].dump() == node["tasks"].dump() &&
-                              sibling.flag("component_reserved", false) &&
-                              sibling.str("generation_method") != "experience_ablation";
+              if (!skip_proposal) {
+                // 使用同一训练批次已有的证据，不额外调用模型、不扩展可执行权限。
+                if (selected.items().size() == 1 && available.has("action_rules") &&
+                    available.has("loop_rules") &&
+                    (selected.items().front().text() == "action_rules" ||
+                     selected.items().front().text() == "loop_rules")) {
+                  const auto coupled = Json(Json::Array{"action_rules", "loop_rules"});
+                  const auto joint_input = packet(parent_artifact, parent_report, coupled);
+                  const auto next = recovery_components(selected, joint_input, available);
+                  if (next.items().size() > selected.items().size()) {
+                    selected = next;
+                    node["components"] = selected;
+                    input = joint_input;
+                    node["component_coupling"] = "same_branch_failure_recovery";
                   }
-                bool independent_ablation =
-                    config.str("sampling_strategy", "same_parent") == "independent";
-                if (independent_ablation)
-                  independent_ablation = !experience_ablation_seen(
-                      tree["nodes"].items()[node.num("parent", 0)].str("version"), selected, index);
-                // 独立采样没有同轮兄弟：以实测父版本作对照，每版本/经验只消融一次。
-                if (paired || independent_ablation)
-                  draft = experience_ablation(parent_artifact, selected, parent_report);
-                if (!draft.null())
-                  node["generation_method"] = "experience_ablation";
-                else
-                  draft = propose(parent_artifact, input, index, draft);
-                write(root / "reflections" / (std::to_string(index) + ".draft.json"), draft.dump());
-                // 普通草稿和 COMBEE 均先校验再进入同一修复入口，权限与预算不变。
-                accepted = expand_control_updates(draft, components(parent_artifact), selected);
-                accepted = repair_schedule_contracts(accepted, parent_report, contract_repairs);
-                if (!contract_repairs.items().empty())
-                  node["schedule_contract_repair"] = contract_repairs;
-                candidate = mutate(parent_artifact, accepted, selected);
-              } catch (const std::exception &exception) {
-                const std::string code = exception.what();
-                if ((code != "control_source_not_approved" &&
-                     code != "gepa_component_not_authorized" &&
-                     code != "gepa_experience_not_authorized" &&
-                     code != "control_failure_replan_not_authorized" && code != "unknown_field" &&
-                     code != "gepa_draft_invalid" && code != "control_duplicate_loop_scope" &&
-                     code != "control_binding_invalid" &&
-                     code != "control_repeat_operation_required" &&
-                     code != "control_loop_semantic_scope_required" &&
-                     code != "control_loop_relaxes_condition" &&
-                     code != "control_loop_condition_invalid" && code != "schedule_rule_cycle") ||
-                    controls.num("max_attempts", 2) < 2 ||
-                    tree.num("model_calls", 0) >= config.num("max_model_calls", 8))
-                  throw;
-                // 在相同模型与输入预算内最多修复一次。来源和格式修正无需轨迹；
-                // 组件选择修正必须附带证据。
-                Json repair{{"phase", code == "control_source_not_approved"
-                                          ? "repair_control_source"
-                                      : (code == "unknown_field" || code == "gepa_draft_invalid" ||
-                                         code == "control_duplicate_loop_scope")
-                                          ? "repair_draft_format"
-                                          : "repair_component_selection"},
-                            {"error", code},
-                            {"draft", draft},
-                            {"experiences", input["experiences"]},
-                            {"selected_components", selected},
-                            {"components", input["components"]}};
-                if (input.has("controls"))
-                  repair["controls"] = input["controls"];
-                if (code == "schedule_rule_cycle") {
-                  // 仍只修复一次；保留真实父规则和草稿，由模型根据证据选边，程序不删边或放宽无环校验。
-                  repair["phase"] = "repair_schedule_cycle";
-                  repair["instruction"] =
-                      "editable_bindings只是候选，不是已有规则；真实父规则以components和base_schedule_rules为准。"
-                      "add添加有向依赖，remove只删除真实父规则；反向add不表示并行。请根据证据修复环。";
-                  repair["feedback"] = Json::Array{};
-                  if (const auto *evidence = repair_feedback_row(input, selected))
-                    repair["feedback"].push(*evidence);
-                } else if (code == "control_binding_invalid") {
-                  repair = input;
-                  repair.fields().erase("parent_version");
-                  repair["phase"] = "repair_control_binding";
-                  repair["error"] = code;
-                  const Json &saved = tree;
-                  const auto &diagnostic =
-                      saved["reflection_calls"][std::to_string(tree.num("model_calls", 0))]
-                           ["control_binding_error"];
-                  if (diagnostic.object()) {
-                    repair["binding_error"] = diagnostic;
-                    if (repair.dump().size() > config.num("max_input_bytes", 65536))
-                      repair["binding_error"].fields().erase("budget");
-                  }
-                } else if (code == "gepa_component_not_authorized" ||
-                           code == "gepa_experience_not_authorized" ||
-                           code == "control_failure_replan_not_authorized" ||
-                           code == "control_repeat_operation_required" ||
-                           code == "control_loop_semantic_scope_required" ||
-                           code == "control_loop_relaxes_condition" ||
-                           code == "control_loop_condition_invalid") {
-                  repair = input;
-                  repair.fields().erase("parent_version");
-                  repair["phase"] = (code == "gepa_component_not_authorized" ||
-                                     code == "gepa_experience_not_authorized")
-                                        ? "repair_component_selection"
-                                        : "repair_control_capability";
-                  repair["error"] = code;
-                  repair["feedback"] = Json::Array{};
-                  const auto *evidence = repair_feedback_row(input, selected);
-                  // 只复用一条相关训练行，不复用未授权草稿或整个小批；保留其任务契约和轨迹。
-                  // 轮次上限漏写收尾条件也走这一次修复；不能由程序代填宿主能力或放宽校验。
-                  if (evidence)
-                    repair["feedback"].push(*evidence);
                 }
-                node["repair_error"] = code;
-                save();
-                accepted = reflect(repair, index, "-repair");
-                write(root / "reflections" / (std::to_string(index) + "-repair.draft.json"),
-                      accepted.dump());
-                accepted = expand_control_updates(accepted, components(parent_artifact), selected);
-                accepted = repair_schedule_contracts(accepted, parent_report, contract_repairs);
-                if (!contract_repairs.items().empty())
-                  node["schedule_contract_repair"] = contract_repairs;
-                candidate = mutate(parent_artifact, accepted, selected);
-              }
-              // 合法弃权才补一个有完整评审依据的候选，不覆盖有效提案或绕开原有门禁。
-              const auto probe =
-                  reviewed_control_probe(parent_artifact, candidate, input, parent_report, index);
-              if (!probe.null()) {
-                node["control_probe"] = probe["detail"];
-                try {
-                  const auto probe_draft =
-                      expand_control_updates(probe["draft"], components(parent_artifact), selected);
-                  const auto probe_candidate = mutate(parent_artifact, probe_draft, selected);
-                  const auto check =
-                      control_preflight(parent_artifact, probe_candidate, parent_report);
-                  if (check.flag("passed", false) &&
-                      components(probe_candidate).dump() != components(parent_artifact).dump()) {
-                    accepted = probe_draft;
-                    candidate = probe_candidate;
-                    node["generation_method"] = "reviewed_control_probe";
-                    node["control_probe"]["status"] = "proposed";
-                  } else
-                    node["control_probe"]["status"] = "untriggerable";
-                } catch (const Error &error) {
-                  const std::string code = error.what();
-                  if (code.rfind("control_", 0) != 0 && code != "gepa_candidate_not_authorized")
-                    throw;
-                  node["control_probe"]["status"] = "invalid";
-                }
-              }
-              node["reason"] = accepted.str("reason");
-              node["control_preflight"] = control_preflight(
-                  parent_artifact, candidate, parent_report,
-                  node.has("control_binding_provenance")
-                      ? node["control_binding_provenance"]
-                      : Json(Json::Array{}));
-              if (node["control_preflight"].has("unconditioned_recovery") &&
-                  !node.has("repair_error") && controls.num("max_attempts", 2) >= 2 &&
-                  tree.num("model_calls", 0) < config.num("max_model_calls", 8)) {
-                // 预检缺少恢复条件也复用同一次修复预算；条件由模型根据训练事实补充，不能代填。
-                auto repair = input;
-                repair.fields().erase("parent_version");
-                repair["phase"] = "repair_control_capability";
-                repair["error"] = "recovery_condition_required";
-                repair["draft"] = draft;
-                repair["preflight"] = node["control_preflight"];
-                repair["feedback"] = Json::Array{};
-                const auto proposed_policy = proto<v1::RuntimePolicy>(candidate["policy"]);
-                const Json *evidence = nullptr;
-                for (const auto &row : input["feedback"].items()) {
-                  const auto &runs = row["trial"]["evidence"]["runs"];
-                  if (!runs.array())
-                    continue;
-                  for (const auto &run : runs.items()) {
-                    if (!run["actions"].array())
+                // COMBEE 可以同时改一条确实注入的经验和同一 run 的动作/循环控制。
+                // 先以原始回执定位同一因果链，再用最终反思包验证 typed 控制证据；
+                // 每次最多一条 L1、两种控制，绝不因经验在库中存在就批量授权。
+                if (config.str("reflection_strategy", "single") == "combee" &&
+                    selected.items().size() <= 2 &&
+                    std::none_of(selected.items().begin(), selected.items().end(),
+                                 [](const Json &item) {
+                                   return item.text() == "schedule_rules";
+                                 })) {
+                  std::map<std::string, std::set<std::string>> experience_runs,
+                      experience_tasks;
+                  const auto aliases = canonical_experience_aliases(
+                      proto<v1::RuntimePolicy>(seed["policy"]));
+                  for (const auto &trial : parent_report.trials()) {
+                    if (trial.variant_id() != "candidate")
                       continue;
-                    for (const auto &action : run["actions"].items()) {
-                      const auto &control = action["loop_control"];
-                      if (action.str("kind") != "loop.decision" || !control.object() ||
-                          (!control.num("rejected_actions", 0) &&
-                           (!control["error_codes"].array() ||
-                            control["error_codes"].items().empty())))
+                    const auto evidence = json(trial.evidence());
+                    const auto traces = evidence["traces"].array()
+                                            ? evidence["traces"]
+                                            : Json(Json::Array{evidence["trace"]});
+                    for (const auto &trace : traces.items()) {
+                      const auto run_id = trace["identity"].str("run_id");
+                      if (run_id.empty() || !trace["events"].array())
                         continue;
-                      for (const auto &rule : proposed_policy.options().loop_rules())
-                        if (rule.target_scope() == control.str("target_scope") &&
-                            (rule.actor_id().empty() ||
-                             rule.actor_id() == action.str("actor_id")) &&
-                            std::any_of(
-                                node["control_preflight"]["unconditioned_recovery"].items().begin(),
-                                node["control_preflight"]["unconditioned_recovery"].items().end(),
-                                [&](const auto &id) { return id.text() == rule.rule_id(); }))
-                          evidence = &row;
+                      for (const auto &event : trace["events"].items()) {
+                        if (event.str("kind") != "advice.applied" ||
+                            event["application"].str("status") != "applied" ||
+                            event["attributes"]["receipt"].str("boundary") != "llm")
+                          continue;
+                        const auto &sources = event["attributes"]["receipt"]["experiences"];
+                        if (!sources.array())
+                          continue;
+                        for (const auto &source : sources.items()) {
+                          auto id = source.str("memory_id");
+                          const auto alias = aliases.find({id, source.str("content_revision")});
+                          if (alias != aliases.end())
+                            id = alias->second;
+                          const auto key = "experience:" + id;
+                          if (id.empty() || !available.has(key) || !observed.count(key))
+                            continue;
+                          experience_runs[key].insert(trial.task_id() + "\n" + run_id);
+                          experience_tasks[key].insert(trial.task_id());
+                        }
+                      }
                     }
                   }
-                  if (evidence)
+                  std::vector<std::string> candidates;
+                  for (const auto &component : selected.items())
+                    if (component.text().rfind("experience:", 0) == 0)
+                      candidates.push_back(component.text());
+                  if (candidates.empty())
+                    for (const auto &entry : experience_tasks)
+                      if (entry.second.size() >= 2)
+                        candidates.push_back(entry.first);
+                  std::stable_sort(candidates.begin(), candidates.end(), [&](const auto &a,
+                                                                               const auto &b) {
+                    return tree["component_selections"].num(a, 0) <
+                           tree["component_selections"].num(b, 0);
+                  });
+                  for (const auto &key : candidates) {
+                    if (experience_tasks[key].size() < 2)
+                      continue;
+                    Json expanded = Json::Array{key};
+                    for (const auto *control : {"action_rules", "loop_rules"})
+                      if (available.has(control))
+                        expanded.push(control);
+                    if (expanded.items().size() == 1)
+                      continue;
+                    Json probe;
+                    try {
+                      probe = packet(parent_artifact, parent_report, expanded);
+                    } catch (const Error &error) {
+                      if (std::string(error.what()) == "gepa_feedback_budget_too_small")
+                        continue;
+                      throw;
+                    }
+                    Json authorized = Json::Array{};
+                    std::string evidence_task, evidence_run;
+                    for (const auto &row : probe["feedback"].items()) {
+                      const auto &runs = row["trial"]["evidence"]["runs"];
+                      if (!runs.array())
+                        continue;
+                      for (const auto &run : runs.items()) {
+                        const auto run_id = run.str("run_id");
+                        if (!experience_runs[key].count(row.str("task_id") + "\n" + run_id))
+                          continue;
+                        auto isolated = row;
+                        isolated["trial"]["evidence"]["runs"] = Json::Array{run};
+                        auto single = probe;
+                        single["feedback"] = Json::Array{isolated};
+                        Json controls_here = Json::Array{};
+                        for (const auto *control : {"action_rules", "loop_rules"})
+                          if (available.has(control) && control_evidence(single, control))
+                            controls_here.push(control);
+                        bool covers_selected = true;
+                        for (const auto &component : selected.items())
+                          if (component.text().rfind("experience:", 0) != 0 &&
+                              std::none_of(controls_here.items().begin(),
+                                           controls_here.items().end(), [&](const Json &item) {
+                                             return item.text() == component.text();
+                                           }))
+                            covers_selected = false;
+                        if (!covers_selected || controls_here.items().size() <=
+                                                    authorized.items().size())
+                          continue;
+                        authorized = controls_here;
+                        evidence_task = row.str("task_id");
+                        evidence_run = run_id;
+                      }
+                    }
+                    if (authorized.items().empty())
+                      continue;
+                    Json coupled = Json::Array{key};
+                    for (const auto &control : authorized.items())
+                      coupled.push(control);
+                    try {
+                      auto joint = packet(parent_artifact, parent_report, coupled);
+                      if (!joint.flag("experience_evidence_sufficient", false))
+                        continue;
+                      selected = std::move(coupled);
+                      input = std::move(joint);
+                    } catch (const Error &error) {
+                      if (std::string(error.what()) == "gepa_feedback_budget_too_small")
+                        continue;
+                      throw;
+                    }
+                    node["components"] = selected;
+                    node["component_coupling"] = "same_run_applied_experience_control";
+                    node["component_coupling_evidence"] =
+                        Json{{"task_id", evidence_task}, {"run_id", evidence_run},
+                             {"experience", key}, {"control_count", authorized.items().size()}};
                     break;
+                  }
                 }
-                // 没有该规则作用域/actor 的真实条件，或原草稿与证据放不下时，保留原预检拒绝。
-                if (evidence)
-                  repair["feedback"].push(*evidence);
-                if (evidence && repair.dump().size() <= config.num("max_input_bytes", 65536)) {
-                  node["preflight_before_repair"] = node["control_preflight"];
-                  node["repair_error"] = "recovery_condition_required";
+                if (!node.flag("component_reserved", false)) {
+                  for (const auto &component : selected.items())
+                    tree["component_selections"][component.text()] =
+                        tree["component_selections"].num(component.text(), 0) + 1;
+                  node["component_reserved"] = true;
                   save();
-                  accepted = reflect(repair, index, "-repair");
-                  write(root / "reflections" / (std::to_string(index) + "-repair.draft.json"),
-                        accepted.dump());
-                  accepted =
-                      expand_control_updates(accepted, components(parent_artifact), selected);
+                }
+                Json draft, candidate, accepted;
+                Json contract_repairs;
+                node.fields().erase("control_binding_provenance");
+                try {
+                  bool paired = false;
+                  if (node.num("proposal_ordinal", 0) == 1 && tree["batch"].object())
+                    for (const auto &sibling_id : tree["batch"]["nodes"].items()) {
+                      if (sibling_id.integer() >= index)
+                        continue;
+                      const auto &sibling = tree["nodes"].items()[sibling_id.integer()];
+                      paired |= sibling.num("parent", SIZE_MAX) == node.num("parent", SIZE_MAX) &&
+                                sibling["components"].dump() == selected.dump() &&
+                                sibling["tasks"].dump() == node["tasks"].dump() &&
+                                sibling.flag("component_reserved", false) &&
+                                sibling.str("generation_method") != "experience_ablation";
+                    }
+                  bool independent_ablation =
+                      config.str("sampling_strategy", "same_parent") == "independent";
+                  if (independent_ablation)
+                    independent_ablation = !experience_ablation_seen(
+                        tree["nodes"].items()[node.num("parent", 0)].str("version"), selected, index);
+                  // 独立采样没有同轮兄弟：以实测父版本作对照，每版本/经验只消融一次。
+                  if (paired || independent_ablation)
+                    draft = experience_ablation(parent_artifact, selected, parent_report);
+                  if (!draft.null())
+                    node["generation_method"] = "experience_ablation";
+                  else
+                    draft = propose_full_pool(parent_artifact, input, parent_report, index, draft);
+                  write(root / "reflections" / (std::to_string(index) + ".draft.json"), draft.dump());
+                  // 普通草稿和 COMBEE 均先校验再进入同一修复入口，权限与预算不变。
+                  accepted = expand_control_updates(draft, components(parent_artifact), selected);
                   accepted = repair_schedule_contracts(accepted, parent_report, contract_repairs);
                   if (!contract_repairs.items().empty())
                     node["schedule_contract_repair"] = contract_repairs;
                   candidate = mutate(parent_artifact, accepted, selected);
-                  node["reason"] = accepted.str("reason");
-                  node["control_preflight"] = control_preflight(
-                      parent_artifact, candidate, parent_report,
-                      node.has("control_binding_provenance")
-                          ? node["control_binding_provenance"]
-                          : Json(Json::Array{}));
+                } catch (const std::exception &exception) {
+                  const std::string code = exception.what();
+                  if ((code != "control_source_not_approved" &&
+                       code != "gepa_component_not_authorized" &&
+                       code != "gepa_experience_not_authorized" &&
+                       code != "control_failure_replan_not_authorized" && code != "unknown_field" &&
+                       code != "gepa_draft_invalid" && code != "control_duplicate_loop_scope" &&
+                       code != "control_binding_invalid" &&
+                       code != "control_repeat_operation_required" &&
+                       code != "control_loop_semantic_scope_required" &&
+                       code != "control_loop_relaxes_condition" &&
+                       code != "control_loop_condition_invalid" && code != "schedule_rule_cycle") ||
+                      controls.num("max_attempts", 2) < 2 ||
+                      tree.num("model_calls", 0) >= config.num("max_model_calls", 8))
+                    throw;
+                  // 在相同模型与输入预算内最多修复一次。来源和格式修正无需轨迹；
+                  // 组件选择修正必须附带证据。
+                  Json repair{{"phase", code == "control_source_not_approved"
+                                            ? "repair_control_source"
+                                        : (code == "unknown_field" || code == "gepa_draft_invalid" ||
+                                           code == "control_duplicate_loop_scope")
+                                            ? "repair_draft_format"
+                                            : "repair_component_selection"},
+                              {"error", code},
+                              {"draft", draft},
+                              {"experiences", input["experiences"]},
+                              {"selected_components", selected},
+                              {"components", input["components"]}};
+                  if (input.has("controls"))
+                    repair["controls"] = input["controls"];
+                  if (code == "schedule_rule_cycle") {
+                    // 仍只修复一次；保留真实父规则和草稿，由模型根据证据选边，程序不删边或放宽无环校验。
+                    repair["phase"] = "repair_schedule_cycle";
+                    repair["instruction"] =
+                        "editable_bindings只是候选，不是已有规则；真实父规则以components和base_schedule_rules为准。"
+                        "add添加有向依赖，remove只删除真实父规则；反向add不表示并行。请根据证据修复环。";
+                    repair["feedback"] = Json::Array{};
+                    if (const auto *evidence = repair_feedback_row(input, selected))
+                      repair["feedback"].push(*evidence);
+                  } else if (code == "control_binding_invalid") {
+                    repair = input;
+                    repair.fields().erase("parent_version");
+                    repair["phase"] = "repair_control_binding";
+                    repair["error"] = code;
+                    const Json &saved = tree;
+                    const auto &diagnostic =
+                        saved["reflection_calls"][std::to_string(tree.num("model_calls", 0))]
+                             ["control_binding_error"];
+                    if (diagnostic.object()) {
+                      repair["binding_error"] = diagnostic;
+                      if (repair.dump().size() > config.num("max_input_bytes", 65536))
+                        repair["binding_error"].fields().erase("budget");
+                    }
+                  } else if (code == "gepa_component_not_authorized" ||
+                             code == "gepa_experience_not_authorized" ||
+                             code == "control_failure_replan_not_authorized" ||
+                             code == "control_repeat_operation_required" ||
+                             code == "control_loop_semantic_scope_required" ||
+                             code == "control_loop_relaxes_condition" ||
+                             code == "control_loop_condition_invalid") {
+                    repair = input;
+                    repair.fields().erase("parent_version");
+                    repair["phase"] = (code == "gepa_component_not_authorized" ||
+                                       code == "gepa_experience_not_authorized")
+                                          ? "repair_component_selection"
+                                          : "repair_control_capability";
+                    repair["error"] = code;
+                    repair["feedback"] = Json::Array{};
+                    const auto *evidence = repair_feedback_row(input, selected);
+                    // 只复用一条相关训练行，不复用未授权草稿或整个小批；保留其任务契约和轨迹。
+                    // 轮次上限漏写收尾条件也走这一次修复；不能由程序代填宿主能力或放宽校验。
+                    if (evidence)
+                      repair["feedback"].push(*evidence);
+                  }
+                  node["repair_error"] = code;
+                  save();
+                  accepted = reflect(repair, index, "-repair");
+                  write(root / "reflections" / (std::to_string(index) + "-repair.draft.json"),
+                        accepted.dump());
+                  accepted = expand_control_updates(accepted, components(parent_artifact), selected);
+                  accepted = repair_schedule_contracts(accepted, parent_report, contract_repairs);
+                  if (!contract_repairs.items().empty())
+                    node["schedule_contract_repair"] = contract_repairs;
+                  candidate = mutate(parent_artifact, accepted, selected);
                 }
-              }
-              if (!node["control_preflight"].flag("passed", false) &&
-                  std::any_of(selected.items().begin(), selected.items().end(),
-                              [](const auto &item) { return item.text() == "schedule_rules"; })) {
-                Json repairs;
-                auto repaired_draft = repair_schedule_guards(accepted, parent_report, repairs);
-                if (!repairs.items().empty()) {
-                  node["schedule_guard_repair"] = repairs;
-                  auto repaired = mutate(parent_artifact, repaired_draft, selected);
-                  auto check = control_preflight(
-                      parent_artifact, repaired, parent_report,
-                      node.has("control_binding_provenance")
-                          ? node["control_binding_provenance"]
-                          : Json(Json::Array{}));
-                  if (check.flag("passed", false)) {
-                    candidate = std::move(repaired);
-                    accepted = std::move(repaired_draft);
-                    node["control_preflight"] = std::move(check);
+                if (!node.has("repair_error") && controls.num("max_attempts", 2) >= 2 &&
+                    tree.num("model_calls", 0) < config.num("max_model_calls", 8) &&
+                    components(candidate).dump() == components(parent_artifact).dump()) {
+                  const auto repair = noop_experience_repair_packet(
+                      input, draft, config.num("max_input_bytes", 65536));
+                  if (!repair.null()) {
+                    node["repair_error"] = "experience_update_matches_parent";
+                    save();
+                    const auto repaired = reflect(repair, index, "-noop-repair");
+                    write(root / "reflections" / (std::to_string(index) + "-noop-repair.draft.json"),
+                          repaired.dump());
+                    accepted = expand_control_updates(repaired, components(parent_artifact), selected);
+                    candidate = mutate(parent_artifact, accepted, selected);
                   }
                 }
+                // 合法弃权才补一个有完整评审依据的候选，不覆盖有效提案或绕开原有门禁。
+                const auto probe =
+                    reviewed_control_probe(parent_artifact, candidate, input, parent_report, index);
+                if (!probe.null()) {
+                  node["control_probe"] = probe["detail"];
+                  try {
+                    const auto probe_draft =
+                        expand_control_updates(probe["draft"], components(parent_artifact), selected);
+                    const auto probe_candidate = mutate(parent_artifact, probe_draft, selected);
+                    const auto check =
+                        control_preflight(parent_artifact, probe_candidate, parent_report);
+                    if (check.flag("passed", false) &&
+                        components(probe_candidate).dump() != components(parent_artifact).dump()) {
+                      accepted = probe_draft;
+                      candidate = probe_candidate;
+                      node["generation_method"] = "reviewed_control_probe";
+                      node["control_probe"]["status"] = "proposed";
+                    } else
+                      node["control_probe"]["status"] = "untriggerable";
+                  } catch (const Error &error) {
+                    const std::string code = error.what();
+                    if (code.rfind("control_", 0) != 0 && code != "gepa_candidate_not_authorized")
+                      throw;
+                    node["control_probe"]["status"] = "invalid";
+                  }
+                }
+                node["reason"] = accepted.str("reason");
+                node["control_preflight"] = control_preflight(
+                    parent_artifact, candidate, parent_report,
+                    node.has("control_binding_provenance")
+                        ? node["control_binding_provenance"]
+                        : Json(Json::Array{}));
+                if (node["control_preflight"].has("unconditioned_recovery") &&
+                    !node.has("repair_error") && controls.num("max_attempts", 2) >= 2 &&
+                    tree.num("model_calls", 0) < config.num("max_model_calls", 8)) {
+                  // 预检缺少恢复条件也复用同一次修复预算；条件由模型根据训练事实补充，不能代填。
+                  auto repair = input;
+                  repair.fields().erase("parent_version");
+                  repair["phase"] = "repair_control_capability";
+                  repair["error"] = "recovery_condition_required";
+                  repair["draft"] = draft;
+                  repair["preflight"] = node["control_preflight"];
+                  repair["feedback"] = Json::Array{};
+                  const auto proposed_policy = proto<v1::RuntimePolicy>(candidate["policy"]);
+                  const Json *evidence = nullptr;
+                  for (const auto &row : input["feedback"].items()) {
+                    const auto &runs = row["trial"]["evidence"]["runs"];
+                    if (!runs.array())
+                      continue;
+                    for (const auto &run : runs.items()) {
+                      if (!run["actions"].array())
+                        continue;
+                      for (const auto &action : run["actions"].items()) {
+                        const auto &control = action["loop_control"];
+                        if (action.str("kind") != "loop.decision" || !control.object() ||
+                            (!control.num("rejected_actions", 0) &&
+                             (!control["error_codes"].array() ||
+                              control["error_codes"].items().empty())))
+                          continue;
+                        for (const auto &rule : proposed_policy.options().loop_rules())
+                          if (rule.target_scope() == control.str("target_scope") &&
+                              (rule.actor_id().empty() ||
+                               rule.actor_id() == action.str("actor_id")) &&
+                              std::any_of(
+                                  node["control_preflight"]["unconditioned_recovery"].items().begin(),
+                                  node["control_preflight"]["unconditioned_recovery"].items().end(),
+                                  [&](const auto &id) { return id.text() == rule.rule_id(); }))
+                            evidence = &row;
+                      }
+                    }
+                    if (evidence)
+                      break;
+                  }
+                  // 没有该规则作用域/actor 的真实条件，或原草稿与证据放不下时，保留原预检拒绝。
+                  if (evidence)
+                    repair["feedback"].push(*evidence);
+                  if (evidence && repair.dump().size() <= config.num("max_input_bytes", 65536)) {
+                    node["preflight_before_repair"] = node["control_preflight"];
+                    node["repair_error"] = "recovery_condition_required";
+                    save();
+                    accepted = reflect(repair, index, "-repair");
+                    write(root / "reflections" / (std::to_string(index) + "-repair.draft.json"),
+                          accepted.dump());
+                    accepted =
+                        expand_control_updates(accepted, components(parent_artifact), selected);
+                    accepted = repair_schedule_contracts(accepted, parent_report, contract_repairs);
+                    if (!contract_repairs.items().empty())
+                      node["schedule_contract_repair"] = contract_repairs;
+                    candidate = mutate(parent_artifact, accepted, selected);
+                    node["reason"] = accepted.str("reason");
+                    node["control_preflight"] = control_preflight(
+                        parent_artifact, candidate, parent_report,
+                        node.has("control_binding_provenance")
+                            ? node["control_binding_provenance"]
+                            : Json(Json::Array{}));
+                  }
+                }
+                if (!node["control_preflight"].flag("passed", false) &&
+                    std::any_of(selected.items().begin(), selected.items().end(),
+                                [](const auto &item) { return item.text() == "schedule_rules"; })) {
+                  Json repairs;
+                  auto repaired_draft = repair_schedule_guards(accepted, parent_report, repairs);
+                  if (!repairs.items().empty()) {
+                    node["schedule_guard_repair"] = repairs;
+                    auto repaired = mutate(parent_artifact, repaired_draft, selected);
+                    auto check = control_preflight(
+                        parent_artifact, repaired, parent_report,
+                        node.has("control_binding_provenance")
+                            ? node["control_binding_provenance"]
+                            : Json(Json::Array{}));
+                    if (check.flag("passed", false)) {
+                      candidate = std::move(repaired);
+                      accepted = std::move(repaired_draft);
+                      node["control_preflight"] = std::move(check);
+                    }
+                  }
+                }
+                const auto subset = triggerable_loop_subset(
+                    parent_artifact, candidate, parent_report, node["control_preflight"],
+                    node.has("control_binding_provenance")
+                        ? node["control_binding_provenance"]
+                        : Json(Json::Array{}));
+                if (!subset.null()) {
+                  node["preflight_before_subset"] = node["control_preflight"];
+                  node["control_subset"] = Json{{"removed_rule_ids", subset["removed_rule_ids"]}};
+                  candidate = subset["candidate"];
+                  node["control_preflight"] = subset["preflight"];
+                  node["generation_method"] = "triggerable_loop_subset";
+                  node["reason"] = "retained_independent_loop_changes_with_training_evidence";
+                }
+                if (!node["control_preflight"].flag("passed", false) &&
+                    (config.str("component_selector", "round_robin") == "round_robin" ||
+                     node["control_preflight"].flag("pure_removal_no_effect", false) ||
+                     node["control_preflight"].has("unconditioned_recovery") ||
+                     node["control_preflight"].has("known_keep_truncation"))) {
+                  node["status"] = "untriggerable_controls";
+                  node["reason"] = node["control_preflight"].has("unconditioned_recovery")
+                                       ? "recovery_condition_required"
+                                   : node["control_preflight"].has("known_keep_truncation")
+                                       ? "known_required_iterations_would_be_truncated"
+                                       : "no_differential_training_trigger";
+                  save();
+                } else
+                  proposal(index, candidate);
               }
-              const auto subset = triggerable_loop_subset(
-                  parent_artifact, candidate, parent_report, node["control_preflight"],
-                  node.has("control_binding_provenance")
-                      ? node["control_binding_provenance"]
-                      : Json(Json::Array{}));
-              if (!subset.null()) {
-                node["preflight_before_subset"] = node["control_preflight"];
-                node["control_subset"] = Json{{"removed_rule_ids", subset["removed_rule_ids"]}};
-                candidate = subset["candidate"];
-                node["control_preflight"] = subset["preflight"];
-                node["generation_method"] = "triggerable_loop_subset";
-                node["reason"] = "retained_independent_loop_changes_with_training_evidence";
-              }
-              if (!node["control_preflight"].flag("passed", false) &&
-                  (config.str("component_selector", "round_robin") == "round_robin" ||
-                   node["control_preflight"].flag("pure_removal_no_effect", false) ||
-                   node["control_preflight"].has("unconditioned_recovery") ||
-                   node["control_preflight"].has("known_keep_truncation"))) {
-                node["status"] = "untriggerable_controls";
-                node["reason"] = node["control_preflight"].has("unconditioned_recovery")
-                                     ? "recovery_condition_required"
-                                 : node["control_preflight"].has("known_keep_truncation")
-                                     ? "known_required_iterations_would_be_truncated"
-                                     : "no_differential_training_trigger";
-                save();
-              } else
-                proposal(index, candidate);
             }
           }
           if (node.str("status") == "proposed") {
@@ -8448,6 +10114,7 @@ Json load_gepa_config(const fs::path &path) {
                 "patience",
                 "seed",
                 "min_improvement",
+                "screening_max_quality_drop",
                 "exploration_max_quality_drop",
                 "objective",
                 "use_merge",
@@ -8478,7 +10145,7 @@ Json load_gepa_config(const fs::path &path) {
                 "seed_report_file"});
   require(config.num("schema_version", 0) == 1, "gepa_config_invalid");
   bound(config, "max_rounds", 8, 1, 256);
-  bound(config, "max_model_calls", 8, 1, 256);
+  bound(config, "max_model_calls", 8, 1, 1024);
   bound(config, "max_trials", 400, 4, 20000);
   // 离线大规模搜索可跨多个小时运行；单题执行超时仍由 evaluation 配置独立限制。
   // 这里仅放宽整棵搜索树的总墙钟预算，上限固定为七天，避免无界作业。
@@ -8533,6 +10200,9 @@ Json load_gepa_config(const fs::path &path) {
   require(number(config["min_improvement"], 0.000001) > 0 &&
               number(config["min_improvement"], 0.000001) <= 1,
           "gepa_improvement_invalid");
+  require(number(config["screening_max_quality_drop"], 0.03) >= 0 &&
+              number(config["screening_max_quality_drop"], 0.03) <= 0.15,
+          "gepa_strategy_invalid");
   require(number(config["exploration_max_quality_drop"], 0.15) >= 0 &&
               number(config["exploration_max_quality_drop"], 0.15) <= 1,
           "gepa_strategy_invalid");

@@ -32,24 +32,29 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _rows() -> dict[str, dict]:
-    archive_path = SOURCE / "bfcl_v3_splits.zip"
+def _rows(source: Path | None = None) -> dict[str, dict]:
+    archive_path = (source or SOURCE) / "bfcl_v3_splits.zip"
     with ZipFile(archive_path) as archive:
         rows = []
         for member in (TRAIN_NAME, VAL_NAME):
-            rows.extend(json.loads(line) for line in archive.read(member).splitlines() if line.strip())
+            for line in archive.read(member).splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    row["_bfcl_source_member"] = member
+                    rows.append(row)
     result = {str(row["id"]): row for row in rows}
     if len(result) != 800:
         raise ValueError("bfcl_source_identity_invalid")
     return result
 
 
-def selected_rows() -> dict[str, list[dict]]:
-    indexed = _rows()
+def selected_rows(source: Path | None = None) -> dict[str, list[dict]]:
+    source = source or SOURCE
+    indexed = _rows(source)
     result = {}
     seen: set[str] = set()
     for split, expected in EXPECTED.items():
-        ids = [line.strip() for line in (SOURCE / f"{split}_ids.txt").read_text().splitlines()
+        ids = [line.strip() for line in (source / f"{split}_ids.txt").read_text().splitlines()
                if line.strip()]
         if len(ids) != expected or len(set(ids)) != expected or any(item not in indexed for item in ids):
             raise ValueError(f"bfcl_{split}_ids_invalid")
@@ -84,12 +89,17 @@ def _user_text(turn: list[dict]) -> str:
 
 def evaluation_task(row: dict, split: str) -> dict:
     inputs = [_user_text(turn) for turn in row["turns"]]
-    source_member = TRAIN_NAME if split == "train" else VAL_NAME
+    # Source archive membership is immutable even when a new protocol moves a
+    # row between train and evaluation. Never infer it from the destination.
+    original_split = row.get("split", split)
+    source_member = row.get("_bfcl_source_member") or (
+        TRAIN_NAME if original_split == "train" else VAL_NAME)
     scenario = str(row.get("scenario", "unknown"))
     difficulty = "hard" if len(inputs) >= 5 or "long_context" in str(row.get("subset")) else (
         "medium" if len(inputs) >= 3 else "easy")
-    # Search and selection have a documented 2/2 scenario split.  Include the
-    # view name in group_id so native split isolation remains explicit.
+    # Native groups identify instances in their declared source view. The
+    # source manifest separately declares whether scenarios are intentionally
+    # shared across training/evaluation (seen-scenarios protocol).
     return {
         "task_id": str(row["id"]),
         "group_id": f"bfcl-v3:{split}:scenario:{scenario}",
@@ -129,12 +139,13 @@ def evaluation_task(row: dict, split: str) -> dict:
     }
 
 
-def materialize(destination: Path, *, check: bool = True) -> dict:
+def materialize(destination: Path, *, check: bool = True, source: Path | None = None) -> dict:
+    source = source or SOURCE
     destination = destination.resolve()
     if destination.exists():
         raise FileExistsError(f"refusing to overwrite BFCL native view: {destination}")
-    source_manifest = _read_json(SOURCE / "manifest.json")
-    splits = selected_rows()
+    source_manifest = _read_json(source / "manifest.json")
+    splits = selected_rows(source)
     tasks = [evaluation_task(row, split) for split, rows in splits.items() for row in rows]
     counts = Counter(task["split"] for task in tasks)
     if counts != Counter({"train": 550, "val": 50, "holdout": 200}):
@@ -147,8 +158,8 @@ def materialize(destination: Path, *, check: bool = True) -> dict:
                                       for task in tasks), encoding="utf-8")
         config = {
             "schema_version": 1,
-            "name": "bfcl-v3-multi-turn",
-            "split_seed": "bfcl-v3-frozen-splits-v1",
+            "name": source_manifest.get("dataset", "bfcl-v3-multi-turn"),
+            "split_seed": source_manifest.get("split_seed", "bfcl-v3-frozen-splits-v1"),
             "split_percent": [68, 7, 25],
             "max_tasks": len(tasks),
             "max_model_calls": 0,
@@ -171,7 +182,7 @@ def materialize(destination: Path, *, check: bool = True) -> dict:
         selection = {
             "schema_version": 1,
             "source_zip_sha256": source_manifest["source_zip_sha256"],
-            "source_manifest_sha256": hashlib.sha256((SOURCE / "manifest.json").read_bytes()).hexdigest(),
+            "source_manifest_sha256": hashlib.sha256((source / "manifest.json").read_bytes()).hexdigest(),
             "requested_counts": EXPECTED,
             "native_counts": dict(counts),
             "mapping": {"train": "train", "search": "train", "selection": "val", "holdout": "holdout"},
@@ -186,8 +197,9 @@ def materialize(destination: Path, *, check: bool = True) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--source", type=Path, default=SOURCE)
     args = parser.parse_args(argv)
-    print(json.dumps(materialize(args.output), ensure_ascii=False, indent=2))
+    print(json.dumps(materialize(args.output, source=args.source), ensure_ascii=False, indent=2))
     return 0
 
 

@@ -354,6 +354,9 @@ struct AgentEvaluationService::Impl {
         bytes += std::string(name) + "=" + value + "\n";
     // 逐轮标准和裁判契约属于评分语义；旧评分只能重评，不能与当前口径混用。
     bytes += "\nturn-acceptance-v2:judge-contract-v3:action-requests-v1";
+    if (evaluation["judge"].has("loop_review_prompt") &&
+        evaluation["judge"].has("consistency_prompt"))
+      bytes += "\nloop-consistency-v2:separate-goal-loop-reviews";
     // 新评分版本只隔离 objectives 缓存，未切换评分口径的旧基线仍可复用。
     if (evaluation["judge"].str("assessment_mode", "legacy") == "objectives")
       bytes += "\ngoal-assessment-v1:judge-summary-consistency-v1";
