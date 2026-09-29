@@ -469,6 +469,22 @@ void experience_packet_attribution_isolation() {
              paired["feedback"].items()[1].str("task_id") == "applied-success" &&
              paired["feedback"].items()[1]["selected_experience_applications"].num("count", 0) == 1,
          "same-experience applied success was displaced by multiple failed trials");
+  Search mixed = search;
+  mixed.controls = Json{{"enabled", true}, {"prompt_file", "fixture.txt"}};
+  validate_control_learning(mixed.controls);
+  const auto joint = mixed.packet(
+      mixed.seed, balanced, Json::Array{"experience:private", "action_rules"});
+  std::set<std::string> applied_joint_tasks;
+  bool joint_success = false, joint_failure = false;
+  for (const auto &row : joint["feedback"].items())
+    if (row["selected_experience_applications"].num("count", 0)) {
+      applied_joint_tasks.insert(row.str("task_id"));
+      joint_success |= row["trial"].str("verdict") == "passed";
+      joint_failure |= row["trial"].str("verdict") == "failed";
+    }
+  expect(applied_joint_tasks.size() >= 2 && joint_success && joint_failure &&
+             joint.num("experience_application_task_count", 0) >= 2,
+         "joint L1/control packet hid actual application points or its success contrast");
   expect(balanced.SerializeAsString() == original, "balanced sampling rewrote original evidence");
   const Json multiple = Json::Array{"experience:private", "experience:shared-independent"};
   paired = search.packet(search.seed, balanced, multiple);
@@ -498,6 +514,69 @@ void experience_packet_attribution_isolation() {
   expect(bounded["feedback"].items().size() == 1 && bounded.flag("feedback_truncated", false) &&
              reflection_input_bytes(bounded) <= search.config.num("max_input_bytes", 0),
          "positive counterpart overflowed the byte budget or silently disappeared");
+}
+
+// 应用次数不是独立题数；反思诊断必须只统计真正保留在请求里的题。
+void experience_packet_counts_distinct_retained_tasks() {
+  Search search;
+  search.seed = public_alias_fixture();
+  search.config = Json{{"max_input_bytes", 65536}, {"max_feedback_trials", 1},
+                       {"objective", Json{{"invalid_loop_weight", 0}, {"token_weight", 0}}}};
+  const auto policy = proto<trajectory::evolution::v1::RuntimePolicy>(search.seed["policy"]);
+  std::string revision;
+  for (const auto &source : policy.snapshot().experiences())
+    if (source.memory_id() == "private") revision = source.content_revision();
+  expect(!revision.empty(), "experience fixture has no selected source revision");
+  Report report;
+  for (unsigned task_index = 0; task_index < 3; ++task_index) {
+    const auto id = "applied-task-" + std::to_string(task_index);
+    auto *task = search.dataset.add_tasks();
+    task->set_task_id(id);
+    task->set_split("train");
+    task->set_task_input("Check the required image and report the result.");
+    task->set_expected_behavior("Deliver the result without repeated work.");
+    auto *trial = report.add_trials();
+    trial->set_task_id(id);
+    trial->set_trial_id(id);
+    trial->set_variant_id("candidate");
+    trial->set_execution_status("completed");
+    trial->set_verdict("failed");
+    Json events = Json::Array{};
+    for (unsigned application = 0; application < (task_index == 0 ? 2u : 1u); ++application) {
+      const auto suffix = std::to_string(application);
+      const Json refs = Json::Array{Json{{"memory_id", "private"},
+                                         {"content_revision", revision}}};
+      events.push(Json{{"kind", "custom"}, {"step_id", "model-" + suffix},
+                       {"event_id", "query-" + suffix},
+                       {"attributes", Json{{"type", "policy.query"},
+                         {"decision", Json{{"query", Json{{"boundary", "llm"}}},
+                                           {"experiences", refs}}}}}});
+      events.push(Json{{"kind", "advice.applied"}, {"step_id", "model-" + suffix},
+                       {"event_id", "receipt-" + suffix},
+                       {"application", Json{{"status", "applied"}}},
+                       {"attributes", Json{{"receipt", Json{{"boundary", "llm"},
+                                                             {"experiences", refs}}}}}});
+    }
+    *trial->mutable_evidence() = proto<google::protobuf::Struct>(
+        Json{{"trace", Json{{"identity", Json{{"run_id", "run-" + id}}},
+                              {"events", events}}}});
+  }
+  const auto packet = search.packet(search.seed, report, Json::Array{"experience:private"});
+  expect(packet["feedback"].items().size() == 1 &&
+             packet["feedback"].items()[0].str("task_id") == "applied-task-0" &&
+             packet["feedback"].items()[0]["selected_experience_applications"].num("count", 0) == 2,
+         "fixture did not retain the two applications of one task");
+  expect(packet.num("experience_application_count", 0) == 2 &&
+             packet.num("experience_application_task_count", 0) == 1 &&
+             !packet.flag("experience_evidence_sufficient", true),
+         "repeated applications or discarded tasks were counted as independent evidence");
+  search.config["max_feedback_trials"] = 2;
+  const auto paired = search.packet(search.seed, report, Json::Array{"experience:private"});
+  expect(paired["feedback"].items().size() == 2 &&
+             paired.num("experience_application_count", 0) == 3 &&
+             paired.num("experience_application_task_count", 0) == 2 &&
+             paired.flag("experience_evidence_sufficient", false),
+         "two distinct retained tasks did not establish same-memory support");
 }
 
 // 测试辅助函数：empty_experience_receipts。
@@ -607,7 +686,7 @@ void observed_training_screening() {
     auto neutral = candidate;
     neutral["changed"] = parent["changed"];
     expect(search.observed_training_gain(neutral, parent, changes) ==
-               (std::string(acceptance) != "strict_improvement"),
+               (std::string(acceptance) == "improvement_or_equal"),
            "neutral attribution ignored the configured acceptance mode");
     expect(!search.observed_training_gain(candidate, parent, Json{{"changed", Json{{"llm", 0}}}}),
            "zero application count was treated as a changed trial");
@@ -629,6 +708,80 @@ void observed_training_screening() {
   search.config["acceptance"] = "improvement_or_equal";
   expect(!search.observed_training_gain(specialist, specialist_parent, specialist_changes),
          "Pareto exception leaked into nonregression acceptance");
+
+  // 22 题 pool 中少数二值质量回退被其他同题收益抵消时，交给独立 Val 复核；
+  // 大范围回退、关键目标新失败和没有真实命中收益仍不得消耗 Val。
+  Json tradeoff_parent = Json::Object{}, tradeoff = Json::Object{}, tradeoff_changes = Json::Object{};
+  for (int i = 0; i < 22; ++i) {
+    const auto id = std::to_string(i);
+    const double original = i == 4 || i == 5 ? 1.0 : i == 6 ? .6 :
+                            i < 4 ? 0.0 : .6;
+    tradeoff_parent[id] = score(original, original, 3, 100);
+    tradeoff[id] = score(original, original, 2.7, 90);
+    if (i < 14)
+      tradeoff_changes[id] = Json{{"llm", 1}};
+  }
+  tradeoff["0"]["quality"] = 1;
+  tradeoff["1"]["quality"] = 1;
+  tradeoff["2"]["quality"] = .5;
+  tradeoff["3"]["quality"] = .05;
+  tradeoff["4"]["quality"] = 0;
+  tradeoff["5"]["quality"] = 0;
+  tradeoff["6"]["quality"] = 0;
+  search.config["acceptance"] = "pareto";
+  expect(search.screening_quality_safe(tradeoff, tradeoff_parent, tradeoff_changes) &&
+             search.observed_training_gain(tradeoff, tradeoff_parent, tradeoff_changes),
+         "small measured pool tradeoff with attributed gains was barred from validation");
+  auto widespread = tradeoff;
+  widespread["7"]["quality"] = 0;
+  widespread["8"]["quality"] = 0;
+  expect(!search.screening_quality_safe(widespread, tradeoff_parent, tradeoff_changes),
+         "one-third affected-task quality regressions entered validation");
+  auto critical = tradeoff;
+  critical["7"]["critical_failures"] = 1;
+  expect(!search.screening_quality_safe(critical, tradeoff_parent, tradeoff_changes),
+         "new critical goal failure entered validation");
+  auto severe = tradeoff;
+  for (int i = 7; i < 22; ++i)
+    severe[std::to_string(i)]["quality"] = 0;
+  expect(!search.screening_quality_safe(severe, tradeoff_parent, tradeoff_changes),
+         "large mean quality regression entered validation");
+  expect(!search.observed_training_gain(tradeoff, tradeoff_parent, Json::Object{}),
+         "untriggered change entered validation");
+  Json partial_parent = Json::Object{}, partial_candidate = Json::Object{},
+       partial_changes = Json::Object{};
+  for (int i = 0; i < 22; ++i) {
+    const auto id = std::to_string(i);
+    partial_parent[id] = score(.6, .6, 3, 100);
+    partial_candidate[id] = score(.65, .65, 2.7, 83);
+    partial_parent[id]["tokens"] = 100;
+    partial_candidate[id]["tokens"] = 88;
+    if (i < 6)
+      partial_changes[id] = Json{{"loop", 1}};
+  }
+  const Json partial_coverage{{"rules", Json{{"applied-a", Json{{"applied", 4}}},
+                                               {"applied-b", Json{{"applied", 2}}},
+                                               {"missed-c", Json{{"applied", 0}}}}}};
+  const Json empty_inherited{{"rules", Json::Object{}}};
+  expect(new_control_observation(partial_coverage, empty_inherited).flag("observed", false) &&
+             search.screening_quality_safe(partial_candidate, partial_parent, partial_changes) &&
+             search.observed_training_gain(partial_candidate, partial_parent, partial_changes),
+         "partially applied proposal with causal gain was barred before independent validation");
+  auto sparse_candidate = partial_candidate;
+  Json sparse_changes = Json::Object{};
+  for (int i = 0; i < 3; ++i)
+    sparse_changes[std::to_string(i)] = Json{{"actions", 1}};
+  sparse_candidate["0"]["quality"] = .5;
+  sparse_candidate["0"]["fitness"] = .5;
+  for (int i = 1; i < 3; ++i) {
+    sparse_candidate[std::to_string(i)]["quality"] = .6;
+    sparse_candidate[std::to_string(i)]["fitness"] = .6;
+  }
+  expect(search.screening_quality_safe(sparse_candidate, partial_parent, sparse_changes) &&
+             !search.observed_training_gain(sparse_candidate, partial_parent, sparse_changes) &&
+             search.screening_gain_for_validation(sparse_candidate, partial_parent,
+                                                  sparse_changes),
+         "three affected tasks forced a premature attribution verdict before validation");
 
   // 旧 screened 检查点先用原训练评分重验，不加载候选、调用模型或重新跑验证题。
   char directory[] = "/tmp/trajectory-gepa-screening-XXXXXX";
@@ -1395,6 +1548,10 @@ void action_feedback_keeps_iteration_assessment() {
                                   action["iteration_assessment"].str("reason").size() <= 524;
                          }),
          "action-only feedback lost the compact semantic iteration assessment");
+  expect(actions[0].flag("reviewed_required_action", false) &&
+             !actions[1].flag("reviewed_required_action", false) &&
+             !actions[2].flag("reviewed_required_action", false),
+         "control projection dropped the required action or marked waste as required");
 }
 
 // 测试辅助函数：incremental_control_coverage。
@@ -1423,7 +1580,14 @@ void incremental_control_coverage() {
   coverage = merge_control_coverage(probe, coverage);
   expect(coverage["rules"]["new-loop"].num("applied", 0) == 1,
          "validation erased training receipts");
-  expect(!control_changes_observed(coverage, inherited), "another missed new control was ignored");
+  expect(control_changes_observed(coverage, inherited),
+         "an applied new control was blocked by another untriggered rule");
+  const auto partial = new_control_observation(coverage, inherited);
+  expect(partial["applied_new_rules"].items().size() == 1 &&
+             partial["unobserved_new_rules"].items().size() == 1 &&
+             partial["unobserved_new_rules"].items().front().text() == "missed-rule" &&
+             !coverage.flag("complete", true),
+         "partially observed controls lost their missing-rule diagnosis");
   // 筛选和反馈必须只看本轮组件对应的控制边界，不能让继承层的随机变化代为记功。
   const Json mixed_changes{{"task-a", Json{{"llm", 4}, {"schedule", 0}}},
                            {"task-b", Json{{"schedule", 2}, {"loop", 1}}}};
@@ -2876,13 +3040,12 @@ void loop_feedback_runtime_budget() {
                        {"level", "L3"},
                        {"policy", json(te::compile_runtime_policy(snapshot, options))}};
     const auto packet = search.packet(search.seed, report, Json::Array{"loop_rules"});
-    const auto &rows = packet["feedback"]
-                           .items()
-                           .front()["trial"]["evidence"]["runs"]
-                           .items()
-                           .front()["actions"]
-                           .items();
-    expect(rows.size() == 16, "iteration evidence expanded the feedback budget");
+    const auto &runs = packet["feedback"].items().front()["trial"]["evidence"]["runs"];
+    expect(runs.array() && !runs.items().empty(),
+           "neutral loop context disappeared from the reflection packet");
+    const auto &rows = runs.items().front()["actions"].items();
+    expect(!rows.empty() && rows.size() <= 8,
+           "neutral loop context was lost or expanded beyond the reflection budget");
     const bool included = std::any_of(rows.begin(), rows.end(), [](const auto &row) {
       return row.str("actor_id") == "coordinator" && row["loop_control"].num("iteration", 0) == 3 &&
              row["loop_control"].num("observed_no_progress", 99) == 0;
@@ -5143,6 +5306,288 @@ void missing_trial_control_evidence() {
   expect(!search.control_evidence(packet, "action_rules") &&
              !search.control_evidence(packet, "loop_rules"),
          "capture failure authorized runtime controls");
+  // 部分旧评测只留下 trace 容器，没有 events；经验应用诊断应返回未观测，
+  // 不能因一个坏 trace 中断整批反思。
+  auto missing_events = trial;
+  missing_events.set_trial_id("missing-events");
+  *missing_events.mutable_evidence() = proto<google::protobuf::Struct>(
+      Json{{"traces", Json::Array{Json{{"run_id", "empty-trace"}},
+                                    Json{{"events", Json::Array{}}}}}});
+  const auto applications = selected_experience_applications(
+      missing_events, Json::Array{"experience:private"}, public_alias_fixture());
+  expect(applications.str("status") == "not_observed" &&
+             applications.num("count", 1) == 0 && applications["points"].items().empty(),
+         "missing trace events crashed or invented an experience application");
+}
+
+// 长轨迹压缩只能删除重复正文，不能删除生成 typed 控制和解释失败所需的字段。
+void compact_control_reflection_preserves_typed_evidence() {
+  const Json action{{"event_id", "action-event"}, {"kind", "action.end"},
+                    {"operation", "run_skills"}, {"observed_failure", "invalid_arguments"},
+                    {"input", Json{{"skills", Json::Array{}}}},
+                    {"iteration_assessment", Json{{"decision", "waste"}}},
+                    {"reviewed_required_action", true},
+                    {"terminal_error_code_candidate", "invalid_arguments"},
+                    {"output", std::string(12000, 'x')},
+                    {"action_control", Json{{"query_event_id", "action-query"},
+                                             {"target_scope", "coordinator"},
+                                             {"operation", "run_skills"},
+                                             {"decision", "reject"},
+                                             {"prior_failures", 2},
+                                             {"failure_key_candidates", Json::Array{"invalid_arguments"}},
+                                             {"missing_required_arguments", Json::Array{"skills"}},
+                                             {"terminal_retry_query_event_id", "retry-query"}}}};
+  const Json loop{{"event_id", "loop-event"}, {"kind", "loop.decision"},
+                  {"actor_id", "coordinator"}, {"execution_id", "branch"},
+                  {"loop_control", Json{{"query_event_id", "loop-query"},
+                                         {"target_scope", "coordinator"},
+                                         {"iteration", 3}, {"pending_actions", false},
+                                         {"proposed_decision", "continue"},
+                                         {"observed_no_progress", 1},
+                                         {"repeated_failure_steps", 2},
+                                         {"error_codes", Json::Array{"invalid_arguments"}},
+                                         {"reviewed_waste_after", 2},
+                                         {"required_iteration_floor", 4},
+                                         {"can_finalize", true}}}};
+  Json actions = Json::Array{action, loop};
+  for (unsigned index = 2; index < 12; ++index) {
+    auto next = action;
+    next["event_id"] = "action-event-" + std::to_string(index);
+    actions.push(std::move(next));
+  }
+  Json source{{"verdict", "failed"}, {"execution_status", "completed"},
+              {"error_code", "final_answer_missing"},
+              {"checks", Json::Array{Json{{"criterion", "deliver answer"},
+                                           {"passed", false},
+                                           {"reason", "missing final answer"}}}},
+              {"goal_completion", Json{{"quality", 0.25}, {"critical_failures", 1}}}};
+  source["evidence"]["runs"] = Json::Array{Json{{"run_id", "run"}, {"actions", actions}}};
+  const auto original = source.dump();
+  const auto compact = compact_control_reflection_trial(
+      source, Json::Array{"action_rules", "loop_rules"});
+  const auto &rows = compact["evidence"]["runs"].items()[0]["actions"].items();
+  expect(rows.size() == 12 && compact.flag("evidence_compacted_for_reflection", false) &&
+             compact.str("error_code") == "final_answer_missing" &&
+             compact["checks"].items()[0].str("reason") == "missing final answer" &&
+             compact["goal_completion"].num("critical_failures", 0) == 1,
+         "control compression lost evaluation failure context");
+  expect(rows[0]["action_control"].str("query_event_id") == "action-query" &&
+             rows[0]["action_control"].str("decision") == "reject" &&
+             rows[0]["action_control"]["missing_required_arguments"].items()[0].text() ==
+                 "skills" &&
+             rows[0]["action_control"].str("terminal_retry_query_event_id") == "retry-query" &&
+             rows[1]["loop_control"].str("query_event_id") == "loop-query" &&
+             rows[1]["loop_control"].num("required_iteration_floor", 0) == 4 &&
+             rows[1]["loop_control"].num("reviewed_waste_after", 0) == 2 &&
+             rows[1]["loop_control"].flag("can_finalize", false) &&
+             rows[0]["input"].has("skills") &&
+             rows[0]["iteration_assessment"].str("decision") == "waste" &&
+             rows[0].flag("reviewed_required_action", false) &&
+             rows[0].str("terminal_error_code_candidate") == "invalid_arguments" &&
+             rows[11].str("event_id") == "action-event-11" &&
+             rows[0]["output"].dump().size() < action["output"].dump().size() &&
+             source.dump() == original,
+         "control compression lost typed selector/action/loop evidence or modified source");
+}
+
+// 64KB 反思预算应容纳八道不同的控制证据题，并保留成功对照与可编辑绑定。
+void control_packet_retains_eight_distinct_tasks() {
+  namespace te = trajectory::evolution;
+  Search search;
+  search.seed = public_alias_fixture();
+  auto policy = proto<te::v1::RuntimePolicy>(search.seed["policy"]);
+  auto options = policy.options();
+  options.set_requested_level(te::v1::L3);
+  options.add_host_capabilities("loop.decide");
+  auto *base_loop = options.add_loop_rules();
+  base_loop->set_rule_id("base-loop");
+  base_loop->set_target_scope("assistant");
+  base_loop->set_max_iterations(12);
+  base_loop->set_max_no_progress(3);
+  base_loop->set_no_progress_decision("stop");
+  base_loop->set_reason("Preserve the existing execution budget");
+  search.seed["level"] = "L3";
+  search.seed["policy"] = json(te::compile_runtime_policy(policy.snapshot(), options));
+  search.controls = Json{{"enabled", true}, {"prompt_file", "unused"}};
+  search.config = Json{{"max_input_bytes", 65536}, {"max_feedback_trials", 8},
+                       {"objective", Json{{"invalid_loop_weight", 0}, {"token_weight", 0}}}};
+  Report report;
+  for (unsigned index = 0; index < 8; ++index) {
+    const auto id = "control-task-" + std::to_string(index);
+    auto *task = search.dataset.add_tasks();
+    task->set_task_id(id);
+    task->set_split("train");
+    task->set_task_input("Execute the necessary action and deliver a verified result: " + id);
+    task->set_expected_behavior("Report the completed result and any failure honestly.");
+    Json events = Json::Array{};
+    for (unsigned prior = 0; prior < 2; ++prior) {
+      const auto action_id = "prior-" + id + "-" + std::to_string(prior);
+      events.push(Json{{"kind", "action.start"}, {"action_id", action_id},
+                       {"operation", "query"}, {"input", Json::Object{}},
+                       {"attributes", Json{{"type", "schedule.action"},
+                                            {"target_scope", "assistant"}}}});
+      events.push(Json{{"kind", "action.end"}, {"event_id", action_id},
+                       {"action_id", action_id}, {"operation", "query"},
+                       {"status", "completed"},
+                       {"output", "prior-result-" + id + std::string(2500, 'x')},
+                       {"attributes", Json{{"semantic", "action"}, {"executed", true}}}});
+    }
+    const Json query{{"boundary", "actions"}, {"execution_id", "branch"},
+                     {"advice_query", Json{{"target_scope", "assistant"}}},
+                     {"actions", Json::Array{Json{{"action_id", "action-" + id},
+                                                    {"operation", "query"},
+                                                    {"arguments", Json::Object{}}}}}};
+    const Json decision{{"query", query},
+                        {"actions", Json::Array{Json{{"action_id", "action-" + id},
+                                                        {"decision", "allow"}}}}};
+    const Json attributes{{"type", "policy.query"}, {"decision", decision}};
+    events.push(Json{{"kind", "custom"}, {"event_id", "query-" + id},
+                     {"step_id", "guard"}, {"attributes", attributes}});
+    events.push(Json{{"kind", "action.start"}, {"action_id", "action-" + id},
+                     {"operation", "query"},
+                     {"attributes", Json{{"extensions", Json{{"guard_only", true}}}}}});
+    events.push(Json{{"kind", "action.end"}, {"event_id", "action-end-" + id},
+                     {"action_id", "action-" + id}, {"operation", "query"},
+                     {"status", "completed"},
+                     {"output", "observed-result-" + id + std::string(2500, 'x')},
+                     {"attributes", Json{{"semantic", "action"}, {"executed", false},
+                                          {"guard_only", true}}}});
+    auto *trial = report.add_trials();
+    trial->set_task_id(id);
+    trial->set_trial_id(id);
+    trial->set_variant_id("candidate");
+    trial->set_execution_status("completed");
+    trial->set_verdict(index == 7 ? "passed" : "failed");
+    *trial->mutable_evidence() = proto<google::protobuf::Struct>(
+        Json{{"trace", Json{{"identity", Json{{"run_id", id}}}, {"events", events}}}});
+  }
+  const auto source = report.SerializeAsString();
+  const auto packet = search.packet(search.seed, report, Json::Array{"action_rules"});
+  std::set<std::string> ids;
+  bool positive = false;
+  for (const auto &row : packet["feedback"].items()) {
+    ids.insert(row.str("task_id"));
+    positive |= row["trial"].str("verdict") == "passed";
+    expect(row["trial"]["evidence"]["runs"].array() &&
+               !row["trial"]["evidence"]["runs"].items().empty(),
+           "control feedback lost its real execution evidence");
+  }
+  expect(packet["feedback"].items().size() == 8 && ids.size() == 8 && positive &&
+             reflection_input_bytes(packet) <= 65536 &&
+             report.SerializeAsString() == source,
+         "eight distinct control tasks or successful counterpart were lost under 64KB");
+  const auto prepared = observed_operation_bindings(packet, 65536);
+  if (!prepared["controls"]["editable_bindings"].array() ||
+      prepared["controls"]["editable_bindings"].items().empty()) {
+    std::cerr << "eight_task_packet bytes=" << reflection_input_bytes(packet)
+              << " prepared_bytes=" << prepared.dump().size()
+              << " action_primitives=" << packet["controls"]["action_primitives"].dump()
+              << " first_actions="
+              << packet["feedback"].items().front()["trial"]["evidence"]["runs"]
+                     .items().front()["actions"].dump().substr(0, 3000)
+              << '\n';
+  }
+  expect(prepared.dump().size() <= 65536 &&
+             prepared["controls"]["editable_bindings"].array() &&
+             !prepared["controls"]["editable_bindings"].items().empty(),
+         "eight-task control packet lost typed editable bindings");
+}
+
+// 回归用例：反思分阶段覆盖只统计实际入模 task_id，reduce 空 feedback 不清零；
+// 同一 suffix 重试将 task 取并集，输入字节累计真实请求。
+void reflection_stage_coverage_accumulates_unique_tasks() {
+  Json node = Json::Object{};
+  const Json first{{"phase", "pool_diagnostic_map"},
+                   {"feedback", Json::Array{Json{{"task_id", "a"}},
+                                             Json{{"task_id", "b"}},
+                                             Json{{"task_id", "a"}}}}};
+  const auto first_bytes = first.dump().size();
+  record_reflection_coverage(node, ".pool-map-0", first);
+  expect(node.num("reflection_feedback_count", 0) == 2 &&
+             node.num("reflection_input_bytes", 0) == first_bytes &&
+             node["reflection_inputs"][".pool-map-0"]["task_ids"].items().size() == 2,
+         "reflection coverage did not dedupe tasks in an actual map input");
+
+  const Json second{{"phase", "pool_diagnostic_map"},
+                    {"feedback", Json::Array{Json{{"task_id", "b"}},
+                                              Json{{"task_id", "c"}}}}};
+  record_reflection_coverage(node, ".pool-map-1", second);
+  expect(node.num("reflection_feedback_count", 0) == 3 &&
+             node.num("reflection_input_bytes", 0) == first_bytes + second.dump().size(),
+         "reflection coverage did not union tasks across map groups");
+
+  const Json reduce{{"phase", "pool_diagnostic_reduce"}, {"feedback", Json::Array{}}};
+  record_reflection_coverage(node, ".pool-reduce-0", reduce);
+  expect(node.num("reflection_feedback_count", 0) == 3 &&
+             node.num("reflection_input_bytes", 0) ==
+                 first_bytes + second.dump().size() + reduce.dump().size() &&
+             node["reflection_inputs"][".pool-reduce-0"]["task_ids"].items().empty(),
+         "empty-feedback reduce erased prior coverage or invented task evidence");
+
+  const Json retry{{"phase", "pool_diagnostic_map"},
+                   {"feedback", Json::Array{Json{{"task_id", "c"}},
+                                             Json{{"task_id", "d"}}}}};
+  record_reflection_coverage(node, ".pool-map-1", retry);
+  expect(node.num("reflection_feedback_count", 0) == 4 &&
+             node.num("reflection_input_bytes", 0) == first_bytes + second.dump().size() +
+                 reduce.dump().size() + retry.dump().size() &&
+             node["reflection_inputs"][".pool-map-1"].num("attempts", 0) == 2,
+         "repeated reflection stage double-counted task coverage or lost request bytes");
+
+  Json single = Json::Object{};
+  const Json ordinary{{"feedback", Json::Array{Json{{"task_id", "seed-task"}}}}};
+  record_reflection_coverage(single, "", ordinary);
+  expect(single.num("reflection_feedback_count", 0) == 1 &&
+             single.num("reflection_input_bytes", 0) == ordinary.dump().size() &&
+             single["reflection_inputs"].has("single"),
+         "single-stage reflection metrics changed shape");
+}
+
+// 逐题 map 摘要必须保留明确业务根因、loop loss 与正反例身份，且不超过紧凑预算。
+void reflection_task_facts_are_bounded_and_grounded() {
+  const std::string long_reason = "Satisfied an unrelated precondition. Missing the requested final image.";
+  Json failing_trial{{"verdict", "failed"},
+                     {"execution_status", "completed"},
+                     {"error_code", "business_failure"},
+                     {"metrics", Json{{"quality", 0.25}, {"tokens", 120}}}};
+  failing_trial["goal_completion"] = Json{
+      {"quality", 0.25}, {"coverage", 0.5}, {"critical_failures", 1},
+      {"issues", Json::Array{Json{{"id", "image"}, {"status", "failed"},
+                                 {"critical_failure", true}, {"reason", long_reason}}}}};
+  Json actions = Json::Array{};
+  actions.push(Json{{"executed", true}, {"observed_failure", true},
+                    {"action_control", Json{{"decision", "allow"}}}});
+  actions.push(Json{{"loop_control", Json{{"rejected_actions", 1}, {"failed_actions", 2},
+                                            {"observed_no_progress", 1}}}});
+  failing_trial["evidence"] = Json::Object{};
+  failing_trial["evidence"]["loop_review"] = Json{{"status", "complete"}, {"count", 3}};
+  failing_trial["evidence"]["runs"] = Json::Array{Json{{"actions", actions}}};
+  Json failure_row{{"task_id", "task-fail"},
+                   {"selected_experience_applications",
+                    Json{{"status", "observed"}, {"count", 2},
+                         {"points", Json::Array{Json{{"memory_id", "memory-a"}}}}}},
+                   {"trial", failing_trial}};
+  Json success_row{{"task_id", "task-pass"},
+                   {"trial", Json{{"verdict", "passed"},
+                                   {"execution_status", "completed"},
+                                   {"metrics", Json{{"quality", 1.0}}}}}};
+  const Json rows = Json::Array{failure_row, success_row};
+  const auto facts = reflection_task_facts(rows, Json::Array{"action_rules", "loop_rules"});
+  expect(facts.items().size() == 2 && facts.items()[0].num("invalid_loops", 0) == 3 &&
+             facts.items()[0]["control_evidence"].num("action_queries", 0) == 1 &&
+             facts.items()[0]["control_evidence"].num("loop_rejected_actions", 0) == 1 &&
+             facts.items()[0]["goal"]["issues"].items()[0].str("id") == "image" &&
+             facts.items()[0]["experience_applications"].num("count", 0) == 2 &&
+             facts.items()[0].dump().size() <= 512 && facts.items()[1].dump().size() <= 512,
+         "per-task reflection facts lost a counterexample field or exceeded the bound");
+  expect(facts.items()[0].str("verdict") == "failed" &&
+             facts.items()[1].str("verdict") == "passed",
+         "per-task facts did not preserve a real success/failure contrast");
+  const auto experience_only = reflection_task_facts(
+      Json::Array{rows.items()[0]}, Json::Array{"experience:memory-a"});
+  expect(experience_only.items()[0]["experience_applications"].num("count", 0) == 2 &&
+             !experience_only.items()[0].has("control_evidence"),
+         "experience-only summary invented control evidence");
 }
 
 // 测试辅助函数：reflection_transport_diagnostics。
@@ -5252,8 +5697,13 @@ void missing_metric_recovery_cache(const fs::path &directory) {
   std::size_t boundary_calls = 0;
   te::evaluation_test_boundary = [&](const fs::path &output, const te::TaskEvaluationOptions &options) {
     ++boundary_calls;
-    expect(options.resume_report.empty(), "缺指标重跑又载入了旧共享报告");
     const auto request = Json::parse(options.config_json);
+    expect((request["task_ids"].items().size() == 2 && options.resume_report == shared &&
+                options.resume_rerun_trial_ids == std::set<std::string>{"original-missing"}) ||
+               (request["task_ids"].dump() == "[\"missing\"]" &&
+                options.resume_report.empty() &&
+                options.resume_rerun_trial_ids.empty()),
+           "共享检查点未精确重跑缺指标题，或本地子集错误接回旧执行");
     Report fresh = old;
     fresh.clear_trials();
     fresh.set_run_id("fresh-execution");
@@ -5270,7 +5720,8 @@ void missing_metric_recovery_cache(const fs::path &directory) {
   struct ResetBoundary {
     ~ResetBoundary() { te::evaluation_test_boundary = {}; }
   } reset;
-  // 已持久化重跑标志但尚无可评分本地报告时，也不能让共享恢复覆盖该决定。
+  // 已持久化重跑标志且无可评分本地报告时，可复用共享报告的完整题，
+  // 但必须把缺 token 的旧执行列入强制重跑集合。
   search.tree["evaluations"][key] = Json{{"status", "running"}, {"attempt", 1},
       {"evaluation_context", search.evaluation_context},
       {"candidate_evaluation_context", search.candidate_evaluation_context},
@@ -5302,6 +5753,8 @@ void missing_metric_recovery_cache(const fs::path &directory) {
     bounded.root = directory / (eventually_complete ? "parent-recovered/search"
                                                   : "parent-unresolved/search");
     bounded.context = eventually_complete ? "parent-recovered" : "parent-unresolved";
+    // 与上方的共享子集隔离，单独验证父节点自身的两次恢复及上限。
+    bounded.candidate_evaluation_context = bounded.context + "-runtime";
     const auto full_key = evaluation_cache_key(bounded, settings);
     auto subset_settings = settings;
     subset_settings["task_ids"] = Json::Array{"missing"};
@@ -5948,8 +6401,8 @@ void fixed_holdout_baseline_cache() {
       changed.identity["evaluation_context"] = "execution-v2";
     if (mode == 5)
       changed.identity["candidate_evaluation_context"] = "runtime-v2";
-    expect(changed.lookup(pinned).str("status") == "invalid",
-           "incompatible holdout baseline was reused");
+    expect(changed.lookup(pinned).str("status") == (mode == 5 ? "hit" : "invalid"),
+           "holdout L0 identity incorrectly followed candidate context or ignored execution mismatch");
   }
   auto invalid = original;
   invalid.mutable_trials(0)->set_split("val");
@@ -6464,7 +6917,7 @@ void schedule_sampling_hint_preserves_other_evidence() {
              resource.items()[1]["arguments"].str("input_path") == "assets/poster.png",
          "低优先级样本中的真实资源依赖被丢失或改写");
 
-  // 明确顺序和未规定先后的同批操作都可以搜索；后者不能凭空增加成功要求。
+  // 明确顺序与真实输出→输入依赖可以搜索；独立并行不能凭空串行化。
   // 此基础夹具只有 L1 经验；编排更新必须另有获准的编排来源，不能借用 L1 的 memory_id。
   auto binding_input = packet;
   binding_input["controls"]["control_sources"] = Json::Array{Json{
@@ -6472,16 +6925,15 @@ void schedule_sampling_hint_preserves_other_evidence() {
       {"target_type", "CANDIDATE_TARGET_TYPE_SKILL_ORCHESTRATION"}}};
   const auto prepared = observed_operation_bindings(binding_input, 65536);
   const auto &bindings = prepared["controls"]["editable_bindings"];
-  expect(bindings.items().size() == 5 && search.control_evidence(packet, "schedule_rules"),
-         "真实同批操作没有形成可编辑顺序绑定");
-  // 独立操作必须允许比较两个方向，不能把父计划的列表顺序当作唯一可学习顺序。
+  expect(bindings.items().size() == 2 && search.control_evidence(packet, "schedule_rules"),
+         "明确顺序或资源依赖没有形成可编辑顺序绑定");
+  // Node26 的真实形态是多个独立并行计划，未见任何生产/消费或先后要求。
+  // 此时即使轨迹很长，也不应制造两个任意方向的候选边。
   std::set<std::pair<std::string, std::string>> independent_orders;
   for (const auto &entry : bindings.items())
     if (entry.str("task_text") == "查询天气和列出提醒")
       independent_orders.emplace(entry.str("before_operation"), entry.str("after_operation"));
-  expect(independent_orders == std::set<std::pair<std::string, std::string>>{
-                                  {"query", "list"}, {"list", "query"}},
-         "独立同批操作未同时开放两个顺序方向");
+  expect(independent_orders.empty(), "独立同批操作被错误登记为串行候选");
   for (const auto &binding : bindings.items())
     expect(binding.str("primitive_id") == "order_operations" &&
                !binding.flag("require_success", true),
@@ -6499,14 +6951,31 @@ void schedule_sampling_hint_preserves_other_evidence() {
   for (const auto &task : search.dataset.tasks())
     search.train.push_back(task.task_id());
   search.remember_opportunities(search.seed, feedback);
-  expect(search.tree["training_opportunities"]["schedule_rules"].fields().size() == 3,
-         "机会记录未使用与反思相同的真实绑定，或遗漏独立操作");
+  expect(search.tree["training_opportunities"]["schedule_rules"].fields().size() == 2,
+         "机会记录把独立操作误算为可执行编排改动");
   auto independent = search;
   *independent.dataset.mutable_tasks(2)->mutable_attributes() =
       proto<google::protobuf::Struct>(Json{{"dependency", "independent"}});
-  expect(independent.schedule_training_contract("task-2").flag("order_editable", false) &&
+  expect(!independent.schedule_training_contract("task-2").flag("order_editable", true) &&
              !independent.schedule_training_contract("task-2").flag("require_success", true),
-         "独立操作被误判为禁止学习普通顺序");
+         "显式独立操作仍被开放为串行候选");
+
+  auto node26 = packet;
+  node26["feedback"] = Json::Array{packet["feedback"].items()[2]};
+  auto &independent_plans = node26["feedback"].items()[0]["trial"]["evidence"]["runs"]
+      .items()[0]["schedule_plans"];
+  const auto independent_plan = independent_plans.items().front();
+  while (independent_plans.items().size() < 19)
+    independent_plans.push(independent_plan);
+  expect(!search.control_evidence(node26, "schedule_rules") &&
+             !observed_operation_bindings(node26, 65536)["controls"]["editable_bindings"].array(),
+         "Node26 形态的独立并行计划仍占用编排反思轮次");
+  node26["components"]["schedule_rules"] = Json::Array{Json{
+      {"memory_id", "schedule-source"}, {"before_operation", "query"},
+      {"after_operation", "list"}}};
+  independent_plans.items()[0]["effective_plan"]["rule_ids"] = Json::Array{"existing-rule"};
+  expect(search.control_evidence(node26, "schedule_rules"),
+         "修复独立假机会时丢失了移除已有错误编排边的机会");
 
   // 没有同批两个操作、已有同方向依赖时，不凭任务文本制造不存在的编辑机会。
   auto single = packet;
@@ -6550,7 +7019,7 @@ void schedule_sampling_hint_preserves_other_evidence() {
   const auto conditional_packet = search.packet(search.seed, feedback, Json::Array{"schedule_rules"});
   const auto conditional_bindings = observed_operation_bindings(conditional_packet, 65536);
   expect(conditional_packet["feedback"].items().size() == 3 &&
-             conditional_bindings["controls"]["editable_bindings"].items().size() == 4 &&
+             conditional_bindings["controls"]["editable_bindings"].items().size() == 1 &&
              !search.tree["training_opportunities"]["schedule_rules"].has("task-0"),
          "conditional 被登记为虚假成功依赖，或通过删题掩盖不支持的结果条件");
 }
@@ -6626,7 +7095,19 @@ void reflection_history_budget_reservation() {
       unrelated["after"] = Json{{"experience:shared-independent", Json()}};
     }
     search.reflection_history["records"] = Json::Array{unrelated};
-    expect(search.packet(search.seed, feedback, selected).dump() == without_history.dump(),
+    const auto unrelated_packet = search.packet(search.seed, feedback, selected);
+    if (unrelated_packet.dump() != without_history.dump()) {
+      const auto expected = without_history.dump(), actual = unrelated_packet.dump();
+      std::size_t first_difference = 0;
+      while (first_difference < expected.size() && first_difference < actual.size() &&
+             expected[first_difference] == actual[first_difference])
+        ++first_difference;
+      std::cerr << "unrelated_history mode=" << mode << " expected_bytes=" << expected.size()
+                << " actual_bytes=" << actual.size() << " first_difference=" << first_difference
+                << " expected_tail=" << expected.substr(first_difference, 250)
+                << " actual_tail=" << actual.substr(first_difference, 250) << '\n';
+    }
+    expect(unrelated_packet.dump() == without_history.dump(),
            "不相关历史占用了预算或污染当前组件反思");
   }
   expect(feedback.SerializeAsString() == source_before, "组装反思请求修改了原始执行证据");
@@ -6770,8 +7251,12 @@ void reflection_control_binding_budget_reservation() {
   }
   const auto source = report.SerializeAsString();
   const Json selected = Json::Array{"action_rules"};
+  std::cerr << "binding_budget_stage=packet\n";
   const auto original = search.packet(search.seed, report, selected);
+  std::cerr << "binding_budget_stage=original feedback=" << original["feedback"].items().size()
+            << " bytes=" << original.dump().size() << '\n';
   const auto full = observed_operation_bindings(original, 65536);
+  std::cerr << "binding_budget_stage=full\n";
   expect(full["controls"]["editable_bindings"].array() &&
              !full["controls"]["editable_bindings"].items().empty(),
          "回归样本没有形成真实可编辑操作，不能证明预算修复");
@@ -6779,6 +7264,8 @@ void reflection_control_binding_budget_reservation() {
   expect(full.dump().size() > limit, "回归样本没有覆盖正文填满、绑定被挤出的边界");
   search.config["max_input_bytes"] = limit;
   const auto packet = search.packet(search.seed, report, selected);
+  std::cerr << "binding_budget_stage=bounded feedback=" << packet["feedback"].items().size()
+            << " bytes=" << packet.dump().size() << '\n';
   auto prepared = observed_operation_bindings(packet, limit);
   expect(prepared.dump().size() <= limit &&
              prepared["controls"]["editable_bindings"].array() &&
@@ -6792,6 +7279,7 @@ void reflection_control_binding_budget_reservation() {
   repair["binding_error"] = Json{{"reason", "budget_out_of_range"}, {"update_index", 0},
       {"budget", prepared["controls"]["editable_bindings"].items()[0]["budget"]}};
   const auto repaired = observed_operation_bindings(repair, limit);
+  std::cerr << "binding_budget_stage=repair\n";
   expect(repaired.dump().size() <= limit &&
              repaired["controls"]["editable_bindings"].array() &&
              !repaired["controls"]["editable_bindings"].items().empty(),
@@ -6810,6 +7298,7 @@ void reflection_control_binding_budget_reservation() {
   } catch (const Error &) {
   }
   expect(diagnostic.str("reason") == "budget_field_mismatch", "未复现真实绑定字段诊断");
+  std::cerr << "binding_budget_stage=diagnostic\n";
   auto field_repair = original;
   field_repair.fields().erase("parent_version");
   field_repair["phase"] = "repair_control_binding";
@@ -6818,6 +7307,7 @@ void reflection_control_binding_budget_reservation() {
   expect(observed_operation_bindings(field_repair, std::numeric_limits<std::size_t>::max())
                  .dump().size() <= reflection_input_bytes(original),
          "纠错预留只覆盖数值越界，没有覆盖更长的实际诊断");
+  std::cerr << "binding_budget_stage=field_repair\n";
 
   // 分组放大到超过输入预算，验证实际发送给模型的控制证据仍完整，而非只测裁剪函数。
   // 模型桩只返回合法弃权，整个测试不会访问远程接口或生成真实策略。
@@ -6867,12 +7357,352 @@ void reflection_control_binding_budget_reservation() {
   adapter->limit = search.config.num("max_input_bytes", 0);
   search.model = adapter;
   Json pending;
+  std::cerr << "binding_budget_stage=before_propose\n";
   const auto grouped_draft = search.propose(search.seed, grouped, 0, pending);
+  std::cerr << "binding_budget_stage=proposed\n";
   expect(adapter->bounded_maps == 2 && search.tree.num("model_calls", 0) == 3,
          "分组裁剪没有覆盖两次 map 和一次 reduce，或错误增减调用预算");
   expect(search.mutate(search.seed, grouped_draft, selected).dump() == search.seed.dump(),
          "合法分组弃权错误生成了新策略");
   expect(report.SerializeAsString() == source, "预算调整修改了原始执行和评分证据");
+}
+
+// Full-pool reflection must visit all 32 distinct train tasks and resume completed
+// map/reduce stages after a failed final model call, without replaying their API calls.
+void full_pool_reflection_covers_32_tasks_and_resumes() {
+  Search search;
+  search.seed = public_alias_fixture();
+  auto mixed_policy = proto<trajectory::evolution::v1::RuntimePolicy>(search.seed["policy"]);
+  auto mixed_options = mixed_policy.options();
+  mixed_options.set_requested_level(trajectory::evolution::v1::L3);
+  mixed_options.add_host_capabilities("loop.decide");
+  auto *base_loop = mixed_options.add_loop_rules();
+  base_loop->set_rule_id("base-loop");
+  base_loop->set_target_scope("assistant");
+  base_loop->set_max_iterations(12);
+  base_loop->set_max_no_progress(3);
+  base_loop->set_no_progress_decision("stop");
+  base_loop->set_reason("Preserve the existing execution budget");
+  search.seed["level"] = "L3";
+  search.seed["policy"] = json(trajectory::evolution::compile_runtime_policy(
+      mixed_policy.snapshot(), mixed_options));
+  search.controls = Json{{"enabled", true}, {"prompt_file", "unused-in-unit-test"}};
+  validate_control_learning(search.controls);
+  search.config = Json{{"max_input_bytes", 65536}, {"max_feedback_trials", 8},
+                       {"max_model_calls", 64}, {"reflection_strategy", "combee"},
+                       {"objective", Json{{"invalid_loop_weight", 0}, {"token_weight", 0}}}};
+  std::string selected_key;
+  const auto available = search.components(search.seed);
+  for (const auto &entry : available.fields())
+    if (entry.first.rfind("experience:", 0) == 0) {
+      selected_key = entry.first;
+      break;
+    }
+  expect(!selected_key.empty(), "full-pool fixture has no editable experience");
+  const Json selected = Json::Array{selected_key, "loop_rules"};
+  Report report;
+  for (unsigned i = 0; i < 32; ++i) {
+    const auto id = "pool-" + std::to_string(i);
+    auto *task = search.dataset.add_tasks();
+    task->set_task_id(id);
+    task->set_split("train");
+    task->set_task_input("完成第 " + std::to_string(i) + " 项任务");
+    task->set_expected_behavior("完整交付");
+    auto *trial = report.add_trials();
+    trial->set_trial_id(id);
+    trial->set_task_id(id);
+    trial->set_variant_id("candidate");
+    trial->set_execution_status("completed");
+    trial->set_verdict(i % 7 == 0 ? "passed" : "failed");
+  }
+  const auto memory_id = selected_key.substr(11);
+  const auto policy =
+      proto<trajectory::evolution::v1::RuntimePolicy>(search.seed["policy"]);
+  std::string revision;
+  for (const auto &source : policy.snapshot().experiences())
+    if (source.memory_id() == memory_id)
+      revision = source.content_revision();
+  expect(!revision.empty(), "full-pool fixture memory has no approved revision");
+  for (unsigned i = 0; i < 2; ++i) {
+    const Json refs = Json::Array{
+        Json{{"memory_id", memory_id}, {"content_revision", revision}}};
+    const Json events = Json::Array{
+        Json{{"kind", "custom"}, {"step_id", "model"}, {"event_id", "query"},
+             {"attributes", Json{{"type", "policy.query"},
+                 {"decision", Json{{"query", Json{{"boundary", "llm"}}},
+                                     {"experiences", refs}}}}}},
+        Json{{"kind", "advice.applied"}, {"step_id", "model"}, {"event_id", "receipt"},
+             {"application", Json{{"status", "applied"}}},
+             {"attributes", Json{{"receipt", Json{{"boundary", "llm"},
+                                                    {"experiences", refs}}}}}}};
+    *report.mutable_trials(i)->mutable_evidence() = proto<google::protobuf::Struct>(
+        Json{{"trace", Json{{"identity", Json{{"run_id", "pool-run-" +
+                                                  std::to_string(i)}}},
+                             {"events", events}}}});
+  }
+  const auto original = report.SerializeAsString();
+  const auto initial = search.packet(search.seed, report, selected);
+  struct FullPoolModel final : legacy::ModelAdapter {
+    std::set<std::string> mapped;
+    std::size_t map_calls = 0, reduce_calls = 0, review_calls = 0;
+    bool fail_review_once = true;
+    bool mixed_provenance_preserved = true;
+    std::string memory_id;
+    std::string trigger_pattern;
+    std::string name() const override { return "full-pool-fixture"; }
+    std::string model_id() const override { return "local"; }
+    legacy::RawModelResponse evaluate(const legacy::ModelRequest &request) override {
+      const auto packet = Json::parse(request.user_prompt);
+      legacy::RawModelResponse response;
+      response.transport_ok = true;
+      if (packet.str("phase") == "pool_diagnostic_map") {
+        ++map_calls;
+        mixed_provenance_preserved &= packet["selected_components"].items().size() == 2 &&
+                                      packet.dump().size() <= 65536;
+        for (const auto &row : packet["feedback"].items()) {
+          mapped.insert(row.str("task_id"));
+          mixed_provenance_preserved &= row["trial"]["observed_tool_failures"].object();
+        }
+        response.body = R"({"reason":"现有证据不足，保留父策略。","experiences":[]})";
+      } else if (packet.str("phase") == "pool_counterexample_review") {
+        ++review_calls;
+        if (fail_review_once) {
+          fail_review_once = false;
+          response.transport_ok = false;
+          response.error_code = "temporary";
+        } else
+          response.body =
+              Json{{"reason", "跨题复核保留对全部交付目标的经验修订。"},
+                   {"selected_proposals", Json::Object{}},
+                   {"experience_revisions", Json::Array{
+                       Json{{"memory_id", memory_id},
+                            {"content", "Verify every requested deliverable and state unmet goals."},
+                            {"trigger_pattern", trigger_pattern}}}}}
+                  .dump();
+      } else {
+        ++reduce_calls;
+        response.body =
+            Json{{"reason", "跨32题目标缺失作综合经验修订。"},
+                 {"selected_proposals", Json::Object{}},
+                 {"experience_revisions", Json::Array{
+                     Json{{"memory_id", memory_id},
+                          {"content", "Verify every requested deliverable and state unmet goals."},
+                          {"trigger_pattern", trigger_pattern}}}}}
+                .dump();
+      }
+      return response;
+    }
+  };
+  char directory[] = "/tmp/trajectory-gepa-full-pool-XXXXXX";
+  expect(::mkdtemp(directory) != nullptr, "cannot create full-pool fixture directory");
+  struct Cleanup {
+    fs::path path;
+    ~Cleanup() { std::error_code ignored; fs::remove_all(path, ignored); }
+  } cleanup{directory};
+  search.root = directory;
+  search.tree = Json{{"started_ms", now()}, {"nodes", Json::Array{Json::Object{}}}};
+  search.config["prompt_file"] = std::string(directory) + "/prompt.txt";
+  search.config["aggregation_prompt_file"] = search.config["prompt_file"];
+  write(search.config.str("prompt_file"), "仅依据本次训练证据输出严格 JSON。");
+  auto model = std::make_shared<FullPoolModel>();
+  model->memory_id = memory_id;
+  model->trigger_pattern = available[selected_key].str("trigger_pattern");
+  if (model->trigger_pattern.empty())
+    model->trigger_pattern = "when delivery verification is needed";
+  search.model = model;
+  Json pending;
+  bool interrupted = false;
+  try {
+    (void)search.propose_full_pool(search.seed, initial, report, 0, pending);
+  } catch (const Error &error) {
+    interrupted = std::string(error.what()) == "gepa_reflection_transport_failed";
+  }
+  expect(interrupted && model->mapped.size() == 32 && model->mixed_provenance_preserved &&
+             search.tree["nodes"].items()[0].num("reflection_pool_covered_task_count", 0) == 32,
+         "mixed full-pool maps lost provenance, exceeded 64 KiB, or missed a task");
+  const auto map_calls = model->map_calls, reduce_calls = model->reduce_calls;
+  const auto cached = fs::path(directory) / "reflections/0.pool-map-0.request.json";
+  auto stale = Json::parse(read(cached));
+  stale["input"]["feedback"].items()[0]["trial"]["observed_tool_failures"]["count"] = 99;
+  write(cached, stale.dump());
+  const auto draft = search.propose_full_pool(search.seed, initial, report, 0, pending);
+  expect(model->map_calls == map_calls + 1 && model->reduce_calls == reduce_calls &&
+             model->review_calls == 2,
+         "resume failed to refresh a changed feedback stage or repeated unaffected reduce");
+  expect(search.mutate(search.seed, draft, selected).dump() != search.seed.dump() &&
+             draft["experiences"].items().size() == 1 &&
+             report.SerializeAsString() == original,
+         "full-pool synthesis lost its applied L1 revision or changed source report");
+}
+
+void full_pool_review_preserves_32_cases_with_mixed_controls() {
+  const std::string memory = "experience:shared-review-memory";
+  Json review{{"phase", "pool_counterexample_review"},
+              {"selected_components", Json::Array{memory, "action_rules"}},
+              {"components", Json{{memory, Json{{"content", std::string(700, 'm')}}},
+                                   {"action_rules", Json::Array{}}}},
+              {"controls", Json{{"action_requirements", Json::Array{
+                  Json{{"operation", "run_skills"}, {"min_attempts", 2}}}},
+                  {"loop_requirements", Json::Array{
+                      Json{{"operation", "run_skills"}, {"min_attempts", 2}}}}}},
+              {"experiences", Json::Array{}},
+              {"training_batch_summary", Json::Array{}},
+              {"intermediate_proposals", Json::Array{}},
+              {"case_outcomes", Json::Array{}},
+              {"feedback", Json::Array{}},
+              {"proposed_strategy", Json{{"reason", "综合32题后保留必要步骤"}}},
+              {"prior_search_rejections", Json::Array{
+                  Json{{"reason", std::string(1000, 'r')}}}}};
+  for (unsigned i = 0; i < 24; ++i)
+    review["experiences"].push(Json{{"memory_id", i ? "other-" + std::to_string(i)
+                                                    : "shared-review-memory"},
+                                     {"content", std::string(460, 'e')}});
+  for (unsigned i = 0; i < 10; ++i) {
+    Json facts = Json::Array{};
+    for (unsigned j = 0; j < 6; ++j)
+      facts.push(Json{{"task_id", "task-" + std::to_string((i * 6 + j) % 32)},
+                      {"reason", std::string(350, 'f')}});
+    review["intermediate_proposals"].push(
+        Json{{"id", "map-" + std::to_string(i)},
+             {"reason", std::string(500, 'd')}, {"task_facts", facts},
+             {"candidate_values", i == 5
+                  ? Json{{memory, Json{{"content", "reviewed"}}}}
+                  : Json::Object{}}});
+  }
+  for (unsigned i = 0; i < 32; ++i) {
+    Json applications{{"status", "observed"}, {"count", 3},
+                      {"points", Json::Array{}}};
+    for (unsigned j = 0; j < 3; ++j)
+      applications["points"].push(
+          Json{{"memory_id", "shared-review-memory"},
+               {"task_excerpt", std::string(110, 'q')},
+               {"state_excerpt", std::string(150, 's')}});
+    review["case_outcomes"].push(
+        Json{{"task_id", "task-" + std::to_string(i)},
+             {"verdict", i % 4 ? "failed" : "passed"},
+             {"execution_status", "completed"},
+             {"metrics", Json{{"tokens", 1000}, {"llm_calls", 5}}},
+             {"goal_completion", Json{{"issues", Json::Array{
+                 Json{{"id", "goal"}, {"status", "failed"},
+                      {"reason", std::string(320, 'g')}}}}}},
+             {"selected_experience_applications", applications}});
+    review["training_batch_summary"].push(
+        Json{{"task_id", "task-" + std::to_string(i)}, {"verdict", "failed"}});
+  }
+  const Json failed{{"task_id", "task-1"}, {"trial", Json{{"verdict", "failed"},
+                    {"evidence", Json{{"runs", Json::Array{}}}}}},
+                    {"task_input", std::string(5600, 'x')}};
+  const Json passed{{"task_id", "task-0"}, {"trial", Json{{"verdict", "passed"},
+                    {"evidence", Json{{"runs", Json::Array{}}}}}},
+                    {"task_input", std::string(5600, 'y')}};
+  review["feedback"] = Json::Array{failed, passed};
+  const auto original_requirements = review["controls"].dump();
+  const auto input_cases = review["case_outcomes"].items().size();
+  expect(reflection_input_bytes(review) > 65536,
+         "mixed review fixture did not reproduce an over-budget packet");
+  const auto compact = compact_full_pool_review(
+      review, Json{{"selected_proposals", Json{{memory, "map-5"}}}}, 65536);
+  expect(reflection_input_bytes(compact) <= 65536 &&
+             compact["case_outcomes"].items().size() == input_cases &&
+             compact["case_outcomes"].items().size() == 32 &&
+             compact["feedback"].dump() == review["feedback"].dump() &&
+             compact["controls"].dump() == original_requirements &&
+             compact["intermediate_proposals"].items().size() == 1 &&
+             compact["intermediate_proposals"].items().front().str("id") == "map-5" &&
+             compact["intermediate_proposals"].items().front()["task_facts"].null() &&
+             compact["case_outcomes"].items().front()["goal_completion"].object() &&
+             compact["case_outcomes"].items().front()
+                 ["selected_experience_applications"].num("count", 0) == 3,
+         "mixed full-pool review lost task goals, typed bounds or real contrast");
+}
+
+void full_pool_review_replays_saved_stages(const fs::path &reflection_dir,
+                                           std::size_t node) {
+  const auto prefix = std::to_string(node);
+  const auto first = Json::parse(read(reflection_dir / (prefix + ".pool-map-0.request.json")))["input"];
+  const auto reduce = Json::parse(read(reflection_dir / (prefix + ".pool-reduce-0.request.json")))["input"];
+  const auto selection = Json::parse(read(reflection_dir / (prefix + ".pool-reduce-0.draft.json")));
+  auto review = first;
+  review["phase"] = "pool_counterexample_review";
+  review["intermediate_proposals"] = reduce["intermediate_proposals"];
+  review["proposed_strategy"] = selection;
+  review["proposed_selection"] = selection["selected_proposals"];
+  review["case_outcomes"] = Json::Array{};
+  review["feedback"] = Json::Array{};
+  Json failed_case, successful_case;
+  std::set<std::string> ids;
+  std::map<std::string, Json> observed_failures;
+  for (std::size_t group_index = 0;; ++group_index) {
+    const auto path = reflection_dir /
+                      (prefix + ".pool-map-" + std::to_string(group_index) + ".request.json");
+    if (!fs::exists(path))
+      break;
+    const auto group = Json::parse(read(path))["input"];
+    for (const auto &row : group["feedback"].items()) {
+      const auto &trial = row["trial"];
+      const auto failures = observed_tool_failures(trial["evidence"]["runs"]);
+      observed_failures[row.str("task_id")] = failures;
+      Json outcome{{"task_id", row["task_id"]}, {"verdict", trial["verdict"]},
+                   {"execution_status", trial["execution_status"]},
+                   {"metrics", trial["metrics"]},
+                   {"observed_tool_failures", failures}};
+      if (trial["goal_completion"].object()) {
+        outcome["goal_completion"] = trial["goal_completion"];
+        if (outcome["goal_completion"]["issues"].array()) {
+          auto &issues = outcome["goal_completion"]["issues"].items();
+          if (issues.size() > 2)
+            issues.resize(2);
+          for (auto &issue : issues)
+            issue["reason"] = diagnostic_excerpt(issue.str("reason"), 256);
+        }
+      }
+      if (row["selected_experience_applications"].object())
+        outcome["selected_experience_applications"] =
+            row["selected_experience_applications"];
+      if (ids.insert(row.str("task_id")).second)
+        review["case_outcomes"].push(std::move(outcome));
+      auto example = row;
+      example["trial"]["observed_tool_failures"] = failures;
+      if (trial.str("verdict") == "passed" && successful_case.null())
+        successful_case = example;
+      if (trial.str("verdict") != "passed" && failed_case.null())
+        failed_case = example;
+    }
+  }
+  auto enriched_reduce = reduce;
+  for (auto &proposal : enriched_reduce["intermediate_proposals"].items())
+    if (proposal["task_facts"].array())
+      for (auto &fact : proposal["task_facts"].items()) {
+        const auto source = observed_failures.find(fact.str("task_id"));
+        if (source == observed_failures.end())
+          continue;
+        const auto &failures = source->second;
+        if (failures.str("status") == "scanned")
+          fact["observed_tool_failure_count"] = failures["count"];
+        else
+          fact["observed_tool_failure_status"] = "unavailable";
+      }
+  expect(reflection_input_bytes(enriched_reduce) <= 65536,
+         "saved Node2 reduce exceeds the model budget after tool provenance is added");
+  for (auto example : {failed_case, successful_case})
+    if (example.object()) {
+      if (example["trial"]["evidence"]["runs"].array())
+        example["trial"] = compact_control_reflection_detail(
+            example["trial"], review["selected_components"], 2);
+      review["feedback"].push(std::move(example));
+    }
+  review["counterexample_pair"] = Json{{"failure_present", failed_case.object()},
+                                          {"success_present", successful_case.object()}};
+  const auto before = reflection_input_bytes(review);
+  const auto compact = compact_full_pool_review(review, selection, 65536);
+  const auto after = reflection_input_bytes(compact);
+  expect(ids.size() == 32 && compact["case_outcomes"].items().size() == 32 &&
+             compact["feedback"].items().size() == 2 &&
+             compact["controls"].dump() == review["controls"].dump() &&
+             after <= 65536,
+         "saved mixed L1/control review lost full-pool facts or typed bounds");
+  std::cout << "saved full-pool review: tasks=" << ids.size()
+            << " before_bytes=" << before << " after_bytes=" << after << '\n';
 }
 
 // 每次反思只展示获选能力的说明；旧自定义纯文本模板完全兼容，非法标记明确报错。
@@ -7244,8 +8074,362 @@ void patience_assessment_state_machine_100_rounds() {
          "已迁移 checkpoint 恢复后重复改写 patience 计数");
 }
 
+// 恢复已有 L0 验证后，未提供 seed_report_file 也必须先评测 seed，
+// 再标注 Node0；accepted 但验证缺失的旧检查点遵循同一路径。
+void seed_validation_precedes_node_optimization() {
+  namespace te = trajectory::evolution;
+  const auto view = fs::path(__FILE__).parent_path().parent_path() /
+                    "experiments/business-coverage/datasets/gepa-view.json";
+  const auto dataset = te::read_evaluation_dataset(view);
+  Json baseline_values = Json::Object{};
+  std::vector<std::string> val_ids;
+  for (const auto &task : dataset.tasks())
+    if (task.split() == "val") {
+      val_ids.push_back(task.task_id());
+      baseline_values[task.task_id()] =
+          Json{{"fitness", 1}, {"quality", 1}, {"strict_pass_rate", 1},
+               {"invalid_loops", 0}, {"loop_method", "model_review"},
+               {"duration_ms", 100}, {"repetitions", 1}};
+    }
+  expect(!val_ids.empty(), "startup regression has no validation tasks");
+  struct ResetBoundary {
+    ~ResetBoundary() { te::evaluation_test_boundary = {}; }
+  } reset;
+  for (const auto *initial_status : {"seed", "accepted"}) {
+    char path[] = "/tmp/trajectory-gepa-seed-start-XXXXXX";
+    expect(::mkdtemp(path) != nullptr, "cannot create seed startup fixture");
+    struct Cleanup {
+      fs::path path;
+      ~Cleanup() { fs::remove_all(path); }
+    } cleanup{path};
+    Search search;
+    search.root = fs::path(path) / "search";
+    search.dataset_path = view;
+    search.seed = public_alias_fixture();
+    search.baseline = search.seed;
+    search.context = "seed-startup-fixture";
+    search.evaluation_context = "seed-evaluation-fixture";
+    search.candidate_evaluation_context = "seed-runtime-fixture";
+    search.config = Json{{"max_rounds", 1}, {"max_model_calls", 1},
+                         {"max_trials", 1000}, {"timeout_ms", 600000},
+                         {"cache_evaluations", false}, {"use_merge", false},
+                         {"objective", Json{{"invalid_loop_weight", 0}, {"token_weight", 0}}}};
+    search.evaluation = Json{{"repetitions", 1}, {"parallelism", 1},
+                             {"variants", Json::Array{Json{{"id", "candidate"}}}},
+                             {"judge", Json{{"assessment_mode", "objectives"}}}};
+    search.gate = Json::Object{};
+    search.tree = Json{{"schema_version", 2}, {"started_ms", now()},
+                       {"rounds", 0}, {"model_calls", 0}, {"trials_used", 0},
+                       {"evaluations", Json::Object{}},
+                       {"baseline_validation", baseline_values},
+                       {"nodes", Json::Array{Json{{"id", 0}, {"parent", nullptr},
+                                                    {"parents", Json::Array{}},
+                                                    {"kind", "seed"}, {"depth", 0},
+                                                    {"version", te::agent_version_id(search.seed.dump())},
+                                                    {"status", initial_status},
+                                                    {"validation", nullptr},
+                                                    {"selections", 0}}}}};
+    write(search.root / "tree.json", search.tree.dump());
+    write(search.root / "versions/0.json", search.seed.dump());
+    unsigned calls = 0;
+    te::evaluation_test_boundary = [&](const fs::path &output,
+                                       const te::TaskEvaluationOptions &options) {
+      ++calls;
+      const auto settings = Json::parse(options.config_json);
+      expect(settings["splits"].dump() == "[\"val\"]" &&
+                 settings["task_ids"].items().size() == val_ids.size() &&
+                 settings["variants"].items().size() == 1 &&
+                 settings["variants"].items()[0].str("version") ==
+                     te::agent_version_id(search.seed.dump()),
+             "seed startup evaluated L0 again or changed the validation task set");
+      Report report;
+      report.set_schema_version(1);
+      report.set_report_kind("task_evaluation.v1");
+      report.set_dataset_version(dataset.dataset_version());
+      report.set_evaluator_version("task-evaluator-v2-goals");
+      report.set_run_id("seed-startup-fixture");
+      report.set_complete(true);
+      *report.mutable_configuration() = proto<google::protobuf::Struct>(settings);
+      for (const auto &task_id : val_ids) {
+        auto *trial = report.add_trials();
+        trial->set_trial_id("seed-" + task_id);
+        trial->set_task_id(task_id);
+        trial->set_variant_id("candidate");
+        trial->set_split("val");
+        trial->set_repetition(1);
+        trial->set_execution_status("completed");
+        trial->set_verdict("passed");
+        trial->set_duration_ms(100);
+        *trial->mutable_evidence() = proto<google::protobuf::Struct>(
+            Json{{"loaded_version", te::agent_version_id(search.seed.dump())},
+                 {"loop_review", Json{{"status", "complete"}, {"count", 0}}}});
+        *trial->mutable_metrics() =
+            proto<google::protobuf::Struct>(Json{{"tokens", 100}, {"llm_calls", 1}});
+      }
+      const auto bytes = json(report).dump();
+      write(output / "report.json", bytes);
+      write(output / "manifest.json",
+            Json{{"complete", true}, {"run_id", report.run_id()},
+                 {"files", Json{{"report.json", hash(bytes)}}}}.dump());
+      return report;
+    };
+    search.cancelled = [&] {
+      return search.tree["nodes"].items()[0].str("status") == "accepted" &&
+             search.tree["nodes"].items()[0]["optimization"].object();
+    };
+    bool stopped_after_seed = false;
+    try {
+      search.run();
+    } catch (const Error &error) {
+      stopped_after_seed = std::string(error.what()) == "gepa_cancelled";
+    }
+    const auto persisted = Json::parse(read(search.root / "tree.json"));
+    expect(stopped_after_seed && calls == 1 &&
+               persisted["baseline_validation"].dump() == baseline_values.dump() &&
+               persisted["nodes"].items()[0].str("status") == "accepted" &&
+               persisted["nodes"].items()[0]["validation"].fields().size() == val_ids.size() &&
+               persisted["nodes"].items()[0]["optimization"].object(),
+           "cached L0 did not advance through seed validation before Node0 optimization");
+  }
+}
+
+void unchanged_experience_repair_is_bounded() {
+  Json input{{"parent_version", "parent"},
+             {"selected_components", Json::Array{"experience:weather"}},
+             {"components", Json{{"experience:weather", "Use only actual weather results."}}},
+             {"experiences", Json::Array{Json{{"memory_id", "weather"}, {"condition", "weather rain"}}}},
+             {"feedback", Json::Array{Json{{"task_id", "failure"}}, Json{{"task_id", "success"}},
+                                       Json{{"task_id", "extra"}, {"text", std::string(5000, 'x')}}}}};
+  Json draft{{"experiences", Json::Array{Json{{"memory_id", "weather"},
+                    {"content", "Use only actual weather results."}, {"trigger_pattern", "weather rain"}}}}};
+  const auto original = input.dump();
+  const auto repair = noop_experience_repair_packet(input, draft, 2048);
+  expect(repair.object() && repair.dump().size() <= 2048 &&
+             repair.str("phase") == "repair_experience_no_behavior_change" &&
+             repair["feedback"].items().size() == 2 &&
+             repair["feedback"].items()[1].str("task_id") == "success" &&
+             repair["attempted_experiences"].items().size() == 1,
+         "unchanged proposal repair lost its failure/success evidence or exceeded input budget");
+  expect(input.dump() == original, "no-op repair mutated the original evidence");
+  expect(noop_experience_repair_packet(input, Json{{"experiences", Json::Array{}}}, 2048).null(),
+         "a legitimate abstention was forced into a new proposal");
+  input["selected_components"] = Json::Array{"schedule_rules"};
+  expect(noop_experience_repair_packet(input, draft, 2048).null(),
+         "experience repair expanded control authorization");
+}
+
+void reflection_goal_diagnostic_keeps_missing_requirement() {
+  trajectory::evolution::dataset::v1::EvaluationTrial trial;
+  trial.set_verdict("failed");
+  trial.set_execution_status("completed");
+  const std::string head = "Already completed: hospital appointments. ";
+  const std::string tail = "Missing: the explicitly requested train times were never delivered.";
+  std::string middle;
+  for (unsigned i = 0; i < 300; ++i) middle += "成功项目";
+  const auto reason = head + middle + tail;
+  *trial.mutable_evidence() = proto<google::protobuf::Struct>(
+      Json{{"assessment", Json{{"quality", 0}, {"goals", Json::Array{
+          Json{{"id", "goal"}, {"status", "failed"}, {"reason", reason}}}}}}});
+  const auto view = feedback_trial(trial, Json::Object{});
+  const auto text = view["goal_completion"]["issues"].items().front().str("reason");
+  expect(text.size() <= 512 && text.find(head) == 0 &&
+             text.find(tail) != std::string::npos &&
+             text.find("[middle omitted]") != std::string::npos,
+         "reflection discarded the missing requirement behind the satisfied prefix");
+  expect(Json::parse(Json(text).dump()).text() == text,
+         "reflection diagnostic split a UTF-8 character");
+  expect(diagnostic_excerpt(tail, 512) == tail, "short diagnostic was changed");
+}
+
+void reflection_tool_failure_provenance() {
+  using trajectory::evolution::dataset::v1::EvaluationTrial;
+  const Json history = Json::Array{
+      Json{{"kind", "action.start"}, {"event_id", "model-start"},
+           {"action_id", "model"}, {"operation", "model_call"},
+           {"input", Json{{"messages", Json::Array{
+               Json{{"content", "Earlier run_skills returned invalid_arguments for skills: []"}}}}}},
+           {"attributes", Json{{"semantic", "model"}, {"executed", true}}}},
+      Json{{"kind", "action.end"}, {"event_id", "model-end"},
+           {"action_id", "model"}, {"status", "completed"},
+           {"output", Json{{"choices", Json::Array{
+               Json{{"message", Json{{"content", "invalid_arguments was in prior context"}}}}}}}},
+           {"attributes", Json{{"semantic", "model"}, {"executed", true}}}}};
+  const auto view = [&](const Json &events) {
+    EvaluationTrial trial;
+    trial.set_execution_status("completed");
+    trial.set_verdict("failed");
+    *trial.mutable_evidence() = proto<google::protobuf::Struct>(
+        Json{{"trace", Json{{"identity", Json{{"run_id", "test-run"}}},
+                             {"events", events}}}});
+    return std::make_pair(trial, feedback_trial(trial, Json::Object{}));
+  };
+  const auto historical = view(history);
+  expect(historical.second["observed_tool_failures"].str("status") == "scanned" &&
+             historical.second["observed_tool_failures"].num("count", 99) == 0 &&
+             historical.second["observed_tool_failures"]["examples"].items().empty(),
+         "model_call history was counted as a current tool failure");
+  expect(historical.second["evidence"]["runs"].items()[0]["actions"].items()[0]
+                 .str("semantic") == "model",
+         "model output evidence was deleted while filtering failure provenance");
+
+  auto real = history;
+  real.push(Json{{"kind", "action.start"}, {"event_id", "tool-start"},
+                 {"action_id", "tool"}, {"operation", "run_skills"},
+                 {"input", Json{{"skills", Json::Array{}}}},
+                 {"attributes", Json{{"semantic", "action"}, {"executed", true}}}});
+  real.push(Json{{"kind", "action.end"}, {"event_id", "tool-end"},
+                 {"action_id", "tool"}, {"status", "failed"},
+                 {"error", Json{{"code", "invalid_arguments"}}},
+                 {"attributes", Json{{"semantic", "action"}, {"executed", true},
+                                      {"observed_failure", true}}}});
+  const auto observed = view(real);
+  const auto &failure = observed.second["observed_tool_failures"];
+  const Json mixed = Json::Array{"experience:unused", "loop_rules"};
+  const auto controlled = control_feedback_trial(observed.first, mixed, Json::Object{});
+  const auto historical_control =
+      control_feedback_trial(historical.first, mixed, Json::Object{});
+  expect(controlled["observed_tool_failures"].dump() == failure.dump() &&
+             historical_control["observed_tool_failures"].str("status") == "scanned" &&
+             historical_control["observed_tool_failures"].num("count", 99) == 0,
+         "mixed control feedback lost actual failure provenance or invented historical failures");
+  expect(failure.num("count", 0) == 1 && failure.num("executed_count", 0) == 1 &&
+             failure.num("omitted", 99) == 0 &&
+             failure["examples"].items().size() == 1 &&
+             failure["examples"].items()[0].str("run_id") == "test-run" &&
+             failure["examples"].items()[0].str("event_id") == "tool-end" &&
+             failure["examples"].items()[0].str("operation") == "run_skills" &&
+             failure["examples"].items()[0].str("error_code") == "invalid_arguments" &&
+             failure["examples"].items()[0].str("skills_argument") == "empty_array",
+         "actual executed run_skills error lost its event/source or empty argument evidence");
+  const auto compact = compact_experience_feedback_trial(
+      observed.first, observed.second, Json::Array{"experience:unused"}, 1024);
+  expect(compact["observed_tool_failures"].num("count", 0) == 1,
+         "compact experience feedback lost the structured tool failure");
+  const Json facts = reflection_task_facts(
+      Json::Array{Json{{"task_id", "history"}, {"trial", historical.second}},
+                  Json{{"task_id", "actual"}, {"trial", observed.second}}},
+      Json::Array{"experience:unused"});
+  expect(facts.items().size() == 2 &&
+             facts.items()[0].num("observed_tool_failure_count", 99) == 0 &&
+             facts.items()[1].num("observed_tool_failure_count", 0) == 1 &&
+             compact["observed_tool_failures"]["examples"].items()[0]
+                     .str("event_id") == "tool-end",
+         "map/reduce task facts confused historical text with an executed tool error");
+  EvaluationTrial no_trace;
+  no_trace.set_execution_status("error");
+  const auto unobserved = feedback_trial(no_trace, Json::Object{});
+  const auto unavailable_facts = reflection_task_facts(
+      Json::Array{Json{{"task_id", "no-trace"}, {"trial", unobserved}}},
+      Json::Array{"experience:unused"});
+  expect(unobserved["observed_tool_failures"].str("status") == "unavailable" &&
+             unavailable_facts.items()[0].str("observed_tool_failure_status") == "unavailable" &&
+             !unavailable_facts.items()[0].has("observed_tool_failure_count"),
+         "missing trace was mislabeled as a scanned task with zero tool errors");
+}
+
+void reflection_real_tool_provenance(const fs::path &report_path) {
+  const auto report = proto<Report>(
+      Json::parse(read(report_path, trajectory::evolution::kMaxEvaluationReportBytes)));
+  bool saw_history_only = false, saw_real_empty = false, saw_passed_waste = false;
+  for (const auto &trial : report.trials()) {
+    if (trial.task_id() != "QA_ZS_WYYL_007" &&
+        trial.task_id() != "QA_JK_YDYL_008" && trial.task_id() != "SYS_DYT_03_102")
+      continue;
+    const auto failures = feedback_trial(trial, Json::Object{})["observed_tool_failures"];
+    const auto controlled = control_feedback_trial(
+        trial, Json::Array{"experience:unused", "loop_rules"}, Json::Object{});
+    expect(controlled["observed_tool_failures"].dump() == failures.dump(),
+           "real mixed control feedback dropped structured failure provenance");
+    expect(failures.str("status") == "scanned", "real parent trial has no scanned trace");
+    if (trial.task_id() == "QA_ZS_WYYL_007") {
+      bool historical_invalid_counted = false;
+      for (const auto &example : failures["examples"].items())
+        historical_invalid_counted |= example.str("operation") == "run_skills" ||
+                                     example.str("error_code") == "invalid_arguments";
+      expect(failures.num("count", 99) == 2 &&
+                 failures.num("executed_count", 0) == 2 &&
+                 !historical_invalid_counted &&
+                 failures["examples"].items()[0].str("operation") == "sim_web_search" &&
+                 failures["examples"].items()[0].str("error_code") == "snapshot_miss",
+             "real QA_ZS history became a run_skills error or real search errors were lost");
+      saw_history_only = true;
+    } else if (trial.task_id() == "QA_JK_YDYL_008") {
+      bool bound = false;
+      for (const auto &example : failures["examples"].items())
+        bound |= example.str("event_id") == "event-126" &&
+                 example.str("operation") == "run_skills" &&
+                 example.str("error_code") == "invalid_arguments" &&
+                 example.str("skills_argument") == "empty_array" &&
+                 !example.flag("executed", true) &&
+                 !example.str("run_id").empty();
+      expect(failures.num("count", 0) >= 1 && bound,
+             "real QA_JK rejected empty run_skills action lost run/event binding");
+      saw_real_empty = true;
+    } else {
+      expect(trial.verdict() == "passed" && failures.num("count", 0) >= 2,
+             "real passed SYS_DYT trial lost its actual tool waste");
+      saw_passed_waste = true;
+    }
+  }
+  expect(saw_history_only && saw_real_empty && saw_passed_waste,
+         "real parent report did not contain all three audited trials");
+}
+
 int main(int argc, char **argv) {
   try {
+    if (argc == 2 && std::string(argv[1]) == "reflection_goal_diagnostic") {
+      reflection_goal_diagnostic_keeps_missing_requirement();
+      unchanged_experience_repair_is_bounded();
+      std::cout << "reflection goal diagnostic passed\n";
+      return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "reflection_tool_failure_provenance") {
+      reflection_tool_failure_provenance();
+      action_feedback_keeps_iteration_assessment();
+      compact_control_reflection_preserves_typed_evidence();
+      std::cout << "reflection tool failure provenance passed\n";
+      return 0;
+    }
+    if (argc == 3 && std::string(argv[1]) == "reflection_real_tool_provenance") {
+      reflection_real_tool_provenance(argv[2]);
+      std::cout << "real reflection tool failure provenance passed\n";
+      return 0;
+    }
+    reflection_tool_failure_provenance();
+    reflection_goal_diagnostic_keeps_missing_requirement();
+    unchanged_experience_repair_is_bounded();
+    if (argc == 2 && std::string(argv[1]) == "seed_startup") {
+      seed_validation_precedes_node_optimization();
+      std::cout << "GEPA seed startup passed\n";
+      return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "reflection_control_compaction") {
+      compact_control_reflection_preserves_typed_evidence();
+      std::cout << "reflection control compaction passed\n";
+      return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "reflection_eight_tasks") {
+      control_packet_retains_eight_distinct_tasks();
+      std::cout << "reflection eight tasks passed\n";
+      return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "reflection_experience_support") {
+      experience_packet_counts_distinct_retained_tasks();
+      std::cout << "reflection experience support passed\n";
+      return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "reflection_evidence_quality") {
+      compact_control_reflection_preserves_typed_evidence();
+      control_packet_retains_eight_distinct_tasks();
+      experience_packet_counts_distinct_retained_tasks();
+      std::cout << "reflection evidence quality regressions passed\n";
+      return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "schedule_binding") {
+      schedule_sampling_hint_preserves_other_evidence();
+      std::cout << "schedule binding regression passed\n";
+      return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "objective_search_scores") {
       objective_search_scores();
       std::cout << "objective search score regression passed\n";
@@ -7270,9 +8454,20 @@ int main(int argc, char **argv) {
       std::cout << "typed control binding regressions passed\n";
       return 0;
     }
+    if (argc == 2 && std::string(argv[1]) == "full_pool_reflection") {
+      full_pool_reflection_covers_32_tasks_and_resumes();
+      full_pool_review_preserves_32_cases_with_mixed_controls();
+      std::cout << "full-pool reflection and resume regression passed\n";
+      return 0;
+    }
+    if (argc == 4 && std::string(argv[1]) == "full_pool_review_replay") {
+      full_pool_review_replays_saved_stages(argv[2], std::stoull(argv[3]));
+      return 0;
+    }
     // 可选只读复放：使用现有配置、数据集、父版本和完整报告重建所有组件的实际模型输入。
     // 不运行 Agent、不调用模型、不改报告或记忆，输出仅为字节数和结构检查结果。
-    if (argc == 6) {
+    if (argc == 6 || (argc == 7 && std::string(argv[6]) == "controls_only") ||
+        (argc == 8 && std::string(argv[6]) == "mixed_maps")) {
       Search search;
       search.config = load_gepa_config(argv[1]);
       const auto service = Json::parse(read(argv[2]));
@@ -7288,7 +8483,75 @@ int main(int argc, char **argv) {
       Json summary = Json::Array{};
       const auto limit = search.config.num("max_input_bytes", 65536);
       const auto available = search.components(search.seed);
+      if (argc == 8) {
+        const Json selected = Json::Array{argv[7], "loop_rules"};
+        expect(available.has(argv[7]), "real mixed replay memory is unavailable");
+        struct RealMixedMapModel final : legacy::ModelAdapter {
+          std::set<std::string> covered;
+          std::size_t calls = 0, largest = 0, limit = 65536;
+          bool reached_reduce = false;
+          std::string name() const override { return "real-mixed-replay"; }
+          std::string model_id() const override { return "local"; }
+          legacy::RawModelResponse evaluate(const legacy::ModelRequest &request) override {
+            const auto input = Json::parse(request.user_prompt);
+            expect(input.dump().size() <= limit, "real mixed request exceeds input budget");
+            largest = std::max(largest, input.dump().size());
+            legacy::RawModelResponse response;
+            if (input.str("phase") != "pool_diagnostic_map" &&
+                input.str("phase") != "pool_trajectory_segment") {
+              expect(input.str("phase").rfind("pool_diagnostic_reduce", 0) == 0,
+                     "real mixed replay stopped before the reduce boundary");
+              reached_reduce = true;
+              response.transport_ok = false;
+              response.error_code = "replay_map_complete";
+              return response;
+            }
+            ++calls;
+            expect(input["selected_components"].items().size() == 2,
+                   "real replay did not use the mixed component route");
+            for (const auto &row : input["feedback"].items()) {
+              covered.insert(row.str("task_id"));
+              expect(row["trial"]["observed_tool_failures"].object(),
+                     "real mixed model request lost structured failure provenance");
+            }
+            response.transport_ok = true;
+            response.body = R"({"reason":"Read-only replay; retain parent.","experiences":[]})";
+            return response;
+          }
+        };
+        char directory[] = "/tmp/trajectory-gepa-real-mixed-XXXXXX";
+        expect(::mkdtemp(directory), "cannot create real mixed replay directory");
+        struct Cleanup {
+          fs::path path;
+          ~Cleanup() { std::error_code ignored; fs::remove_all(path, ignored); }
+        } cleanup{directory};
+        search.root = directory;
+        search.tree = Json{{"started_ms", now()}, {"nodes", Json::Array{Json::Object{}}}};
+        auto model = std::make_shared<RealMixedMapModel>();
+        model->limit = limit;
+        search.model = model;
+        const auto original = report.SerializeAsString();
+        const auto packet = search.packet(search.seed, report, selected);
+        Json pending;
+        try {
+          (void)search.propose_full_pool(search.seed, packet, report, 0, pending);
+        } catch (const Error &error) {
+          expect(model->reached_reduce &&
+                     std::string(error.what()) == "gepa_reflection_transport_failed",
+                 "real mixed replay failed before all map requests completed");
+        }
+        expect(model->reached_reduce && model->covered.size() == 32 &&
+                   report.SerializeAsString() == original,
+               "real mixed replay missed tasks or changed source evidence");
+        std::cout << Json{{"covered_tasks", model->covered.size()},
+                          {"map_calls", model->calls}, {"largest_request_bytes", model->largest}}
+                         .dump() << '\n';
+        return 0;
+      }
       for (const auto &component : available.fields()) {
+        if (argc == 7 && component.first != "action_rules" &&
+            component.first != "loop_rules" && component.first != "schedule_rules")
+          continue;
         const auto packet = search.packet(search.seed, report, Json::Array{component.first});
         const auto prepared =
             observed_operation_bindings(packet, std::numeric_limits<std::size_t>::max());
@@ -7315,14 +8578,18 @@ int main(int argc, char **argv) {
           row["repair_bytes"] = rebuilt.dump().size();
         }
         summary.push(row);
+        if (argc == 7)
+          std::cout << row.dump() << std::endl;
       }
-      std::cout << summary.dump() << '\n';
+      if (argc == 6)
+        std::cout << summary.dump() << '\n';
       return 0;
     }
     expect(argc == 1, "复放参数应为：gepa配置、service配置、数据集、父版本、评测报告");
     // 保留原断言及执行顺序；异常只补用例名，避免通用协议错误无法定位。
     const auto run = [](const char *name, auto test) {
       try {
+        std::cerr << "运行用例：" << name << '\n';
         test();
       } catch (...) {
         std::cerr << "失败用例：" << name << '\n';
@@ -7347,6 +8614,8 @@ int main(int argc, char **argv) {
     run("judge_action_request_pairing", judge_action_request_pairing);
     run("selected_experience_receipt_attribution", selected_experience_receipt_attribution);
     run("experience_packet_attribution_isolation", experience_packet_attribution_isolation);
+    run("experience_packet_counts_distinct_retained_tasks",
+        experience_packet_counts_distinct_retained_tasks);
     run("compact_experience_feedback_budget", compact_experience_feedback_budget);
     run("experience_ablation_checkpoint_deduplication", experience_ablation_checkpoint_deduplication);
     run("observed_training_screening", observed_training_screening);
@@ -7364,6 +8633,10 @@ int main(int argc, char **argv) {
     run("prompt_resource_workflows", prompt_resource_workflows);
     run("loop_feedback_runtime_budget", loop_feedback_runtime_budget);
     run("missing_trial_control_evidence", missing_trial_control_evidence);
+    run("compact_control_reflection_preserves_typed_evidence",
+        compact_control_reflection_preserves_typed_evidence);
+    run("control_packet_retains_eight_distinct_tasks",
+        control_packet_retains_eight_distinct_tasks);
     run("reviewed_iteration_cap_evidence", reviewed_iteration_cap_evidence);
     run("reviewed_finalization_cap_evidence", reviewed_finalization_cap_evidence);
     run("required_iteration_floor_tests", required_iteration_floor_tests);
@@ -7372,12 +8645,18 @@ int main(int argc, char **argv) {
     run("pure_control_removal_preflight", pure_control_removal_preflight);
     run("reflection_component_views", reflection_component_views);
     run("reflection_prompt_component_contract", reflection_prompt_component_contract);
+    run("full_pool_reflection_covers_32_tasks_and_resumes",
+        full_pool_reflection_covers_32_tasks_and_resumes);
     run("reflection_sources_follow_current_parent", reflection_sources_follow_current_parent);
     run("observed_operation_binding_views", observed_operation_binding_views);
     run("reviewed_operation_budget_bindings", reviewed_operation_budget_bindings);
     run("typed_control_binding_updates", typed_control_binding_updates);
     run("repair_feedback_keeps_redispatch_opportunity", repair_feedback_keeps_redispatch_opportunity);
     run("reflection_transport_diagnostics", reflection_transport_diagnostics);
+    run("reflection_stage_coverage_accumulates_unique_tasks",
+        reflection_stage_coverage_accumulates_unique_tasks);
+    run("reflection_task_facts_are_bounded_and_grounded",
+        reflection_task_facts_are_bounded_and_grounded);
     run("cross_job_evaluation_cache", cross_job_evaluation_cache);
     run("fixed_holdout_baseline_cache", fixed_holdout_baseline_cache);
     std::cout << "GEPA evidence regressions passed\n";

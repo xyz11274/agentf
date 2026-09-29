@@ -150,9 +150,10 @@ def test_malformed_non_stream_response_becomes_llm_error(monkeypatch, body):
 
 
 class _ProviderErrorResponse:
-    def __init__(self, status_code):
+    def __init__(self, status_code, headers=None):
         self.status_code = status_code
         self.text = f"provider status {status_code}"
+        self.headers = headers or {}
 
     def json(self):
         return {"error": {"message": self.text}}
@@ -187,6 +188,34 @@ def test_retryable_provider_status_retries_then_succeeds(monkeypatch, status_cod
     assert client.last_attempts == 2
     assert client.last_retry_reasons == [f"http_{status_code}"]
     assert client.last_http_status == 200
+
+
+def test_rate_limit_retry_honors_retry_after_and_adds_jitter(monkeypatch):
+    responses = iter([
+        _ProviderErrorResponse(429, {"Retry-After": "3"}),
+        _FakeResponse(),
+    ])
+    sleeps = []
+
+    monkeypatch.delenv("AF_LLM_TIMEOUT", raising=False)
+    monkeypatch.delenv("AF_LLM_MAX_RETRIES", raising=False)
+    monkeypatch.setattr(client_module.requests, "post", lambda *_a, **_k: next(responses))
+    monkeypatch.setattr(client_module.time, "sleep", sleeps.append)
+    monkeypatch.setattr(client_module.random, "uniform", lambda _low, _high: 0.25)
+
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model",
+        base_url="https://llm.test/v1",
+        api_key="test",
+        max_retries=1,
+        retry_base_delay=1.0,
+        retry_jitter=0.25,
+        request_timeout=120,
+    )
+    result = client.chat_completion([{"role": "user", "content": "hello"}])
+
+    assert result["choices"][0]["message"]["content"] == "ok"
+    assert sleeps == [3.25]
 
 
 @pytest.mark.parametrize("status_code", [400, 401, 501])

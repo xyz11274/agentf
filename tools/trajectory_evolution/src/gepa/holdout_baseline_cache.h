@@ -218,8 +218,10 @@ public:
             Json::parse(read(root / "baseline-cache" / (legacy_key + ".json"), 1048576));
         auto legacy_identity = legacy["identity"];
         legacy_identity.fields().erase("candidate_evaluation_context");
-        auto expected_legacy_identity = identity;
-        expected_legacy_identity.fields().erase("candidate_evaluation_context");
+        const Json expected_legacy_identity{
+            {"evaluation_context", identity["evaluation_context"]},
+            {"baseline_version", identity["baseline_version"]},
+            {"dataset_version", identity["dataset_version"]}};
         require(
                 legacy_identity.dump() == expected_legacy_identity.dump() &&
                 legacy["identity"].str("baseline_version") == identity.str("baseline_version") &&

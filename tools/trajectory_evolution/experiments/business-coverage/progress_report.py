@@ -142,6 +142,19 @@ def _quality(trial: dict[str, Any]) -> float | None:
     if isinstance(assessment, dict):
         value = _number(assessment.get("quality"))
         if value is not None:
+            # Match task_evaluation.cpp: hard deterministic checks invalidate
+            # objective quality, while an ordinary model/business failure may
+            # still carry useful partial goal completion.
+            checks = trial.get("checks")
+            if isinstance(checks, list) and any(
+                isinstance(check, dict)
+                and check.get("check_id") != "model"
+                and str(check.get("status") or "").lower() == "failed"
+                for check in checks
+            ):
+                return 0.0
+            if (_number(assessment.get("critical_failures")) or 0.0) > 0:
+                return 0.0
             return value
     value = _number(trial.get("quality"))
     if value is not None:
@@ -185,35 +198,51 @@ def _invalid_loops(trial: dict[str, Any]) -> float | None:
     return None
 
 
-def _intent_counts(trial: dict[str, Any]) -> tuple[int, int, int] | None:
+def _measured_intent_rows(trial: dict[str, Any]) -> list[dict[str, Any]]:
     evidence = trial.get("evidence")
     observations = evidence.get("intent_observations") if isinstance(evidence, dict) else None
     if not isinstance(observations, list):
+        return []
+    result = []
+    for item in observations:
+        if not isinstance(item, dict) or item.get("status") not in {"measured", "complete"}:
+            continue
+        # Conditional and partial rows have no settled gold/dispatch pair.
+        if item.get("conditional") is True or item.get("complete") is not True:
+            continue
+        turn = _number(item.get("turn"))
+        if turn is None or turn < 1 or int(turn) != turn:
+            continue
+        expected, actual = item.get("expected_targets"), item.get("actual_targets")
+        if not isinstance(expected, list) or not expected or not isinstance(actual, list):
+            continue
+        if not all(isinstance(x, str) for x in expected + actual):
+            continue
+        if not all(isinstance(item.get(key), list) for key in ("matched", "extra", "missing")):
+            continue
+        result.append(item)
+    return result
+
+
+def _intent_counts(trial: dict[str, Any]) -> tuple[int, int, int] | None:
+    observations = _measured_intent_rows(trial)
+    if not observations:
         return None
     tp = fp = fn = 0
-    measured = False
     for item in observations:
-        if not isinstance(item, dict) or item.get("status") not in {
-            "measured", "complete", "partial", "conditional_review"
-        }:
-            continue
-        # These arrays are produced by the evaluator and are the only fields
-        # used for the micro-F1 shown here.
-        matched = item.get("matched")
-        extra = item.get("extra")
-        missing = item.get("missing")
-        if not all(isinstance(v, list) for v in (matched, extra, missing)):
-            continue
-        measured = True
-        tp += len(matched)
-        fp += len(extra)
-        fn += len(missing)
-    return (tp, fp, fn) if measured else None
+        expected = set(item["expected_targets"])
+        actual = set(item["actual_targets"])
+        # Derive the counts from the definite gold and observed dispatch,
+        # rather than trusting a possibly stale copied matched/missing list.
+        tp += len(expected & actual)
+        fp += len(actual - expected)
+        fn += len(expected - actual)
+    return tp, fp, fn
 
 
 def _explicit_level_counts(value: Any) -> dict[str, int]:
     """Extract actual applied L1/L2/L3 receipts, without treating config as use."""
-    counts = {"L1": 0, "L2": 0, "L3": 0}
+    counts = {"L1": 0, "L2": 0, "L2_action": 0, "L2_schedule": 0, "L3": 0}
 
     def walk(item: Any, context: dict[str, Any] | None = None) -> None:
         if isinstance(item, list):
@@ -273,7 +302,7 @@ def _level_counts(value: Any) -> tuple[dict[str, int], bool]:
     declarations or rejected applications as successful L1/L2/L3 use.  The
     boolean lets callers distinguish a measured zero from missing telemetry.
     """
-    counts = {"L1": 0, "L2": 0, "L3": 0}
+    counts = {"L1": 0, "L2": 0, "L2_action": 0, "L2_schedule": 0, "L3": 0}
     seen = False
     seen_events: set[tuple[Any, ...]] = set()
 
@@ -304,6 +333,10 @@ def _level_counts(value: Any) -> tuple[dict[str, int], bool]:
                     seen = True
                     if status == "applied":
                         counts[level] += 1
+                        if boundary == "actions":
+                            counts["L2_action"] += 1
+                        elif boundary == "schedule":
+                            counts["L2_schedule"] += 1
 
     # Evidence also contains large output/state/trajectory fields.  Receipts
     # have one stable location, so avoid recursively walking those payloads on
@@ -341,6 +374,90 @@ def _trial_rows(report: dict[str, Any], split: str | None = None) -> list[dict[s
     return result
 
 
+def _dedupe_trial_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one checkpoint row per task (or trial when task_id is absent).
+
+    GEPA writes a row atomically under ``attempt-N/trials`` before it writes
+    ``report.json``.  A resumed attempt can leave a retry row for the same
+    task, so reporting the raw file count would overstate completed questions.
+    """
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        task_id = row.get("task_id")
+        key = ("task:" + str(task_id)) if task_id not in (None, "") else (
+            "trial:" + str(row.get("trial_id") or len(result)))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
+def _live_checkpoint_rows(tree_path: Path, evaluation_id: str,
+                          entry: dict[str, Any]) -> tuple[list[dict[str, Any]], int | None, Path | None]:
+    """Read only the small per-task checkpoint files for an unfinished eval.
+
+    The evaluator intentionally removes ``trials/*.json`` after publishing a
+    canonical report.  Therefore this path is used only while ``report.json``
+    is absent; it makes the minute-by-minute report show e.g. 31/32 real tasks
+    instead of the internal GEPA trial budget (or an incorrect 0/100).
+    """
+    report = entry.get("report")
+    report_path: Path | None = None
+    if isinstance(report, str) and report and not Path(report).is_absolute():
+        candidate = tree_path.parent / Path(report)
+        if candidate.name == "report.json":
+            report_path = candidate
+    evaluations_dir = tree_path.parent / "evaluations" / str(evaluation_id)
+    attempt_dirs = [path for path in evaluations_dir.glob("attempt-*") if path.is_dir()]
+    if not attempt_dirs:
+        if report_path is not None and report_path.exists():
+            return [], None, report_path
+        return [], None, None
+    requested = _number(entry.get("attempt"))
+    report_attempt = None
+    if report_path is not None and report_path.parent.name.startswith("attempt-"):
+        try:
+            report_attempt = int(report_path.parent.name.removeprefix("attempt-"))
+        except ValueError:
+            report_attempt = None
+    # A resumed evaluation can keep the prior attempt's report pointer while a
+    # newer attempt is writing checkpoints. Only treat that report as final if
+    # it belongs to the requested attempt (or no newer attempt was requested).
+    if report_path is not None and report_path.exists() and (
+            requested is None or report_attempt is None or int(requested) <= report_attempt):
+        return [], None, report_path
+    if requested is not None:
+        requested_dir = evaluations_dir / f"attempt-{int(requested)}"
+        if requested_dir.is_dir():
+            attempt_dirs = [requested_dir]
+        elif report_path is not None and report_path.exists():
+            return [], None, report_path
+    attempt_dir = max(attempt_dirs, key=lambda path: path.stat().st_mtime)
+    trial_dir = attempt_dir / "trials"
+    if not trial_dir.is_dir():
+        return [], None, attempt_dir
+    rows: list[dict[str, Any]] = []
+    for path in sorted(trial_dir.glob("*.json")):
+        row = _read(path)
+        if row is not None and str(row.get("split", "")).lower() == str(entry.get("split", "")).lower():
+            rows.append(row)
+    task_ids = entry.get("task_ids")
+    planned = len(task_ids) if isinstance(task_ids, list) and task_ids else None
+    if planned is None:
+        manifest = _read(attempt_dir / "manifest.json")
+        if isinstance(manifest, dict):
+            for key in ("planned_tasks", "task_count", "trials_reserved"):
+                value = _number(manifest.get(key))
+                if value is not None and value > 0:
+                    planned = int(value)
+                    break
+    return _dedupe_trial_rows(rows), planned, attempt_dir
+
+
 def _aggregate(trials: list[dict[str, Any]], planned: int | None = None,
                summary: dict[str, Any] | None = None) -> dict[str, Any]:
     qualities = [v for v in (_quality(t) for t in trials) if v is not None]
@@ -351,8 +468,16 @@ def _aggregate(trials: list[dict[str, Any]], planned: int | None = None,
     # Intent evidence is part of the judge packet.  Do not let a packet that
     # failed its judge/contract validation improve the aggregate F1 either.
     valid_trials = [t for t in trials if _trial_error_code(t) is None]
-    intent = [_intent_counts(t) for t in valid_trials]
-    intent = [x for x in intent if x is not None]
+    intent_by_trial = [_intent_counts(t) for t in valid_trials]
+    intent = [x for x in intent_by_trial if x is not None]
+    intent_turn_keys = sorted({f"{trial.get('task_id', '')}#{int(row['turn'])}"
+                               for trial in valid_trials
+                               for row in _measured_intent_rows(trial)})
+    # ``intent`` counts observation rows, while coverage must be reported at
+    # task level.  A task may emit several intent observations across turns.
+    # The evaluator row is one task, so count rows with any measured evidence
+    # separately from the observation-row count used for F1.
+    intent_task_measured = sum(value is not None for value in intent_by_trial)
     tp, fp, fn = (sum(x[i] for x in intent) for i in range(3)) if intent else (0, 0, 0)
     f1 = (2 * tp / (2 * tp + fp + fn)) if intent and (2 * tp + fp + fn) else None
     summary = summary or {}
@@ -360,11 +485,11 @@ def _aggregate(trials: list[dict[str, Any]], planned: int | None = None,
         fallback = summary.get("invalid_loop_assessment")
         if isinstance(fallback, dict) and _number(fallback.get("mean")) is not None:
             loops = [float(fallback["mean"])]
-    if not intent and (not trials or valid_trials):
+    if not intent and not trials:
         fallback = summary.get("multi_intent_observation")
         if isinstance(fallback, dict) and _number(fallback.get("f1")) is not None:
             f1 = float(fallback["f1"])
-    counts = {"L1": 0, "L2": 0, "L3": 0}
+    counts = {"L1": 0, "L2": 0, "L2_action": 0, "L2_schedule": 0, "L3": 0}
     level_evidence = False
     for trial in trials:
         values, receipt_evidence = _level_counts(trial.get("evidence", {}))
@@ -412,7 +537,9 @@ def _aggregate(trials: list[dict[str, Any]], planned: int | None = None,
         "tokens": _mean(tokens),
         "llm_calls": _mean(calls),
         "intent_f1": f1,
-        "intent_measured": len(intent),
+        "intent_measured": len(intent_turn_keys),
+        "intent_task_measured": intent_task_measured,
+        "intent_turn_keys": intent_turn_keys,
         "level_counts": counts if level_evidence else None,
     }
 
@@ -596,6 +723,40 @@ def _variant_versions(report: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def _baseline_validation_trials(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project GEPA's compact ``baseline_validation`` cache into L0 rows.
+
+    The cache is keyed by the exact validation task and contains the same
+    metrics as the baseline report.  It is the authoritative fallback when a
+    resumed workspace has not retained the baseline report; it must never be
+    mixed with candidate rows or used as holdout evidence.
+    """
+    baseline = tree.get("baseline_validation")
+    if not isinstance(baseline, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for task_id, metrics in baseline.items():
+        if not isinstance(metrics, dict):
+            continue
+        row: dict[str, Any] = {
+            "task_id": str(task_id),
+            "split": "val",
+            "variant_id": "baseline_validation",
+            "quality": metrics.get("quality"),
+            "invalid_loops": metrics.get("invalid_loops"),
+            "duration_ms": metrics.get("duration_ms"),
+            "metrics": {
+                "tokens": metrics.get("tokens"),
+                "llm_calls": metrics.get("llm_calls"),
+            },
+        }
+        strict = _number(metrics.get("strict_pass_rate"))
+        if strict is not None:
+            row["verdict"] = "passed" if strict >= 1.0 else "failed"
+        rows.append(row)
+    return rows
+
+
 def _holdout_report_labels(report: dict[str, Any], reference: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """按冻结版本把一份报告拆为 L0/parent/current 三个播报桶。"""
     trials = _trial_rows(report, "holdout")
@@ -743,6 +904,10 @@ def _active_node_context(tree: dict[str, Any]) -> dict[str, Any]:
         "current_version": str(current.get("version") or ""),
         "parent_version": str(parent.get("version") or ""),
         "baseline_version": str(tree.get("baseline_version") or ""),
+        "current_reflection_feedback_count": current.get("reflection_feedback_count"),
+        "current_reflection_input_bytes": current.get("reflection_input_bytes"),
+        "parent_reflection_feedback_count": parent.get("reflection_feedback_count"),
+        "parent_reflection_input_bytes": parent.get("reflection_input_bytes"),
     }
 
 
@@ -756,15 +921,38 @@ def _selection_snapshot(output: Path) -> dict[str, Any]:
     gepa = output / "gepa"
     result = {"scope": "GEPA validation/selection（50题）", "reports": 0,
               "current_node": "当前节点", "parent_node": "父节点",
-              "rows": {"L0": None, "parent": None, "current": None}}
+              "current_reflection_feedback_count": None,
+              "current_reflection_input_bytes": None,
+              "parent_reflection_feedback_count": None,
+              "parent_reflection_input_bytes": None,
+              "rows": {"L0": None, "parent": None, "current": None},
+              "pool_rows": {"parent": None, "current": None},
+              "live_evaluation": None}
     if not gepa.is_dir():
         return result
-    for tree_path in sorted(gepa.rglob("tree.json")):
+    status = _read(gepa / "status.json") or {}
+    progress = status.get("progress") if isinstance(status, dict) else None
+    active_job_id = progress.get("job_id") if isinstance(progress, dict) else None
+    tree_paths: list[Path] = []
+    if isinstance(active_job_id, str) and active_job_id and Path(active_job_id).name == active_job_id:
+        active_tree = gepa / "workspace" / "agent-evaluation" / active_job_id / "search" / "tree.json"
+        if active_tree.is_file():
+            tree_paths = [active_tree]
+    else:
+        # Old jobs and completed attempts may remain beside the live workspace.
+        # With no status pointer, select by filesystem recency, never path order.
+        tree_paths = sorted(gepa.rglob("tree.json"),
+                            key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        tree_paths = tree_paths[:1]
+    for tree_path in tree_paths:
         tree = _read(tree_path) or {}
         context = _active_node_context(tree)
-        # Prefer the newest tree, which is the only live GEPA tree in normal
-        # operation; a later tree wins if a resumed workspace has leftovers.
-        result.update({k: context[k] for k in ("current_node", "parent_node")})
+        # The status pointer above is authoritative when present. Otherwise the
+        # newest tree is the best available fallback for a resumed workspace.
+        result.update({k: context[k] for k in (
+            "current_node", "parent_node",
+            "current_reflection_feedback_count", "current_reflection_input_bytes",
+            "parent_reflection_feedback_count", "parent_reflection_input_bytes")})
         versions = {"L0": context["baseline_version"],
                     "parent": context["parent_version"],
                     "current": context["current_version"]}
@@ -774,87 +962,192 @@ def _selection_snapshot(output: Path) -> dict[str, Any]:
         # the reports until the label is known: a complete merged report is
         # authoritative, while partial reports are unioned by task identity.
         report_groups: dict[str, list[dict[str, Any]]] = {key: [] for key in versions}
+        pool_report_groups: dict[str, list[dict[str, Any]]] = {key: [] for key in versions}
         evaluations = tree.get("evaluations")
         if not isinstance(evaluations, dict):
             continue
-        for entry in evaluations.values():
-            if not isinstance(entry, dict) or str(entry.get("split", "")) not in {"val", "validation"}:
+        live_candidates: list[dict[str, Any]] = []
+        for evaluation_id, entry in evaluations.items():
+            if not isinstance(entry, dict):
+                continue
+            split = str(entry.get("split", "")).lower()
+            if split not in {"val", "validation", "train"}:
                 continue
             report = entry.get("report")
-            if not isinstance(report, str) or not report or Path(report).is_absolute():
+            path = None
+            data = None
+            if isinstance(report, str) and report and not Path(report).is_absolute():
+                relative = Path(report)
+                if not any(part in {"", ".", ".."} for part in relative.parts):
+                    path = tree_path.parent / relative
+                    data = _read(path)
+            if data:
+                variants = _variant_versions(data)
+                trials = _trial_rows(data, "val" if split in {"val", "validation"} else "train")
+                if trials:
+                    version = str(entry.get("version") or "")
+                    label = next((key for key, value in versions.items()
+                                  if value and value == version), None)
+                    if label is None:
+                        # A candidate-only report may omit the tree version on older
+                        # resumes; resolve it from the report's variant declaration.
+                        declared = {str(value) for value in variants.values() if value}
+                        label = next((key for key, value in versions.items()
+                                      if value and value in declared), None)
+                    if label is not None:
+                        task_ids = {str(task_id) for task_id in entry.get("task_ids", [])
+                                    if task_id not in (None, "")}
+                        task_ids.update(str(trial.get("task_id")) for trial in trials
+                                        if trial.get("task_id") not in (None, ""))
+                        groups = (report_groups if split in {"val", "validation"}
+                                  else pool_report_groups)
+                        groups[label].append({
+                            "trials": trials,
+                            "task_ids": task_ids,
+                            "status": str(entry.get("status", "")).lower(),
+                        })
+                        if split in {"val", "validation"}:
+                            result["reports"] += 1
+                # Once report.json exists, trials are intentionally gone.  Do
+                # not re-read an old checkpoint directory or double-count it.
                 continue
-            relative = Path(report)
-            if any(part in {"", ".", ".."} for part in relative.parts):
-                continue
-            path = tree_path.parent / relative
-            data = _read(path)
-            if not data:
-                continue
-            variants = _variant_versions(data)
-            trials = _trial_rows(data, "val")
-            if not trials:
+
+            # No canonical report yet: use the per-task checkpoints to expose
+            # live progress.  This is deliberately a separate row from the
+            # validation aggregates because a train seed evaluation is not a
+            # validation score and must not affect GEPA ranking.
+            checkpoint_rows, planned_count, attempt_dir = _live_checkpoint_rows(
+                tree_path, str(evaluation_id), entry)
+            if not checkpoint_rows:
                 continue
             version = str(entry.get("version") or "")
             label = next((key for key, value in versions.items()
                           if value and value == version), None)
-            if label is None:
-                # A candidate-only report may omit the tree version on older
-                # resumes; resolve it from the report's variant declaration.
-                declared = {str(value) for value in variants.values() if value}
-                label = next((key for key, value in versions.items()
-                              if value and value in declared), None)
-            if label is None:
-                continue
-            task_ids = {str(task_id) for task_id in entry.get("task_ids", [])
-                        if task_id not in (None, "")}
-            task_ids.update(str(trial.get("task_id")) for trial in trials
-                            if trial.get("task_id") not in (None, ""))
-            report_groups[label].append({
-                "trials": trials,
-                "task_ids": task_ids,
-                "status": str(entry.get("status", "")).lower(),
+            live_candidates.append({
+                "split": split,
+                "status": str(entry.get("status", "running")),
+                "label": label or ("current" if split == "train" else None),
+                "task_ids": sorted({str(task_id) for task_id in entry.get("task_ids", [])
+                                    if task_id not in (None, "")}),
+                "completed": len({str(row.get("task_id")) for row in checkpoint_rows
+                                   if row.get("task_id") not in (None, "")}),
+                "planned": planned_count or len(checkpoint_rows),
+                "metrics": _aggregate(checkpoint_rows, planned_count),
+                "evaluation_id": str(evaluation_id),
+                "attempt_dir": str(attempt_dir) if attempt_dir else "",
             })
-            result["reports"] += 1
-        for label, groups in report_groups.items():
-            if not groups:
-                continue
-            all_task_ids = set().union(*(group["task_ids"] for group in groups))
-            # Once a complete report covers the whole planned task union,
-            # prefer it over its smaller source batches.  This prevents a
-            # merged report from being silently averaged with its inputs.
-            complete = [group for group in groups
-                        if group["status"] in {"complete", "completed", "finished", "done"}
-                        and all_task_ids
-                        and len(group["task_ids"]) >= len(all_task_ids)]
-            if complete:
-                selected = max(complete, key=lambda group: len(group["trials"]))
-                rows[label] = selected["trials"]
-                continue
-            seen: set[str] = set()
-            for group in groups:
-                for trial in group["trials"]:
-                    task_id = trial.get("task_id")
-                    key = str(task_id) if task_id not in (None, "") else "#" + str(len(rows[label]))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    rows[label].append(trial)
-        planned = {
-            label: len(set().union(*(group["task_ids"] for group in groups)))
-            for label, groups in report_groups.items()
-            if groups and any(group["task_ids"] for group in groups)
-        }
+        def merge_groups(groups_map: dict[str, list[dict[str, Any]]],
+                         target: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+            for label, groups in groups_map.items():
+                if not groups:
+                    continue
+                all_task_ids = set().union(*(group["task_ids"] for group in groups))
+                # Once a complete report covers the whole planned task union,
+                # prefer it over its smaller source batches.
+                complete = [group for group in groups
+                            if group["status"] in {"complete", "completed", "finished", "done"}
+                            and all_task_ids
+                            and len(group["task_ids"]) >= len(all_task_ids)]
+                if complete:
+                    target[label] = max(complete, key=lambda group: len(group["trials"]))["trials"]
+                    continue
+                seen: set[str] = set()
+                for group in groups:
+                    for trial in group["trials"]:
+                        task_id = trial.get("task_id")
+                        key = str(task_id) if task_id not in (None, "") else "#" + str(len(target[label]))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        target[label].append(trial)
+            return {
+                label: len(set().union(*(group["task_ids"] for group in groups)))
+                for label, groups in groups_map.items()
+                if groups and any(group["task_ids"] for group in groups)
+            }
+
+        planned = merge_groups(report_groups, rows)
+        # Pool comparisons are paired by the exact task set used for the
+        # current candidate.  A cumulative parent score over several batches
+        # is useful for diagnostics but must never occupy the same-task column.
+        current_groups = pool_report_groups.get("current", [])
+        live_current = [item for item in live_candidates if item.get("label") == "current"]
+        live_parent = [item for item in live_candidates if item.get("label") == "parent"]
+        current_task_ids = (set(live_current[-1].get("task_ids", []))
+                            if live_current else set())
+        # Before a child artifact is materialized, the parent's active pool
+        # batch is the only authoritative task set.  Use it for the paired
+        # parent-pool column while leaving the child column pending.
+        if not current_task_ids and live_parent:
+            current_task_ids = set(live_parent[-1].get("task_ids", []))
+        if not current_task_ids and current_groups:
+            current_group = max(current_groups, key=lambda group: (
+                group["status"] in {"complete", "completed", "finished", "done"},
+                len(group["task_ids"])))
+            current_task_ids = set(current_group["task_ids"])
+
+        def paired_pool(label: str) -> dict[str, Any] | None:
+            if not current_task_ids:
+                return None
+            matches = [group for group in pool_report_groups.get(label, [])
+                       if set(group["task_ids"]) == current_task_ids]
+            if not matches:
+                return None
+            selected = max(matches, key=lambda group: (
+                group["status"] in {"complete", "completed", "finished", "done"},
+                len(group["trials"])))
+            return _aggregate(selected["trials"], len(current_task_ids))
+
+        pool_rows = {"parent": paired_pool("parent"), "current": paired_pool("current")}
+        # A resumed/trimmed workspace may keep GEPA's compact baseline cache
+        # while dropping the baseline report.  Reconstruct only the L0 row;
+        # candidate/parent metrics still require their own reports.
+        if not rows["L0"]:
+            rows["L0"] = _baseline_validation_trials(tree)
+        if rows["L0"] and "L0" not in planned:
+            planned["L0"] = len(rows["L0"])
         result["rows"] = {
             label: (_aggregate(values, planned.get(label)) if values else None)
             for label, values in rows.items()
         }
+        # The frozen baseline artifact is an L0 policy.  Absence of applied
+        # receipts here means that L1/L2/L3 were not enabled, not that the
+        # baseline metrics are missing.  Keep the comparison table explicit
+        # and never copy a parent node's receipt counts into the L0 column.
+        baseline = result["rows"].get("L0")
+        if isinstance(baseline, dict) and baseline.get("level_counts") is None:
+            baseline["level_counts"] = {"L1": 0, "L2": 0, "L3": 0}
+        result["pool_rows"] = {
+            label: (values if isinstance(values, dict) else None)
+            for label, values in pool_rows.items()
+        }
+        if live_candidates:
+            # Prefer the checkpoint with the most completed questions, then the
+            # newest attempt.  This remains stable while parallel workers write.
+            result["live_evaluation"] = max(
+                live_candidates,
+                key=lambda item: (item["completed"], item["attempt_dir"]),
+            )
+            live = result["live_evaluation"]
+            label = live.get("label")
+            if label in {"parent", "current"}:
+                # A live checkpoint is already bound to the current task set;
+                # preserve it only for that paired column.
+                result["pool_rows"][label] = live["metrics"]
     return result
 
 
-def snapshot(output: Path = DEFAULT_OUTPUT) -> dict[str, Any]:
-    training = _training_snapshot(output)
+def snapshot(output: Path = DEFAULT_OUTPUT, gepa_only: bool = False) -> dict[str, Any]:
+    # Fast monitoring mode deliberately reads only the active GEPA tree and its
+    # referenced live evaluation checkpoints; it avoids historical training and
+    # holdout scans. The full report remains the default.
+    training = ({"status": "skipped", "phase": "skipped", "batch": "-",
+                 "completed": 0, "planned": 0, "reports": 0, "metrics": None}
+                if gepa_only else _training_snapshot(output))
     selection = _selection_snapshot(output)
-    holdout = _holdout_snapshot(output)
+    holdout = ({"reports": 0, "rows": {"L0": None, "parent": None, "current": None},
+                "sources": {}, "skipped": True}
+               if gepa_only else _holdout_snapshot(output))
     comparison = (holdout["rows"] if holdout.get("reports") else selection["rows"])
     comparison_scope = ("真实 holdout" if holdout.get("reports")
                         else selection.get("scope", "GEPA validation/selection"))
@@ -881,18 +1174,27 @@ def markdown(data: dict[str, Any]) -> str:
     scope = data.get("comparison_scope", "GEPA validation/selection")
     parent_name = selection.get("parent_node", "父节点")
     current_name = selection.get("current_node", "当前节点")
-    lines = [
-        f"时间：{time.strftime('%Y-%m-%d %H:%M:%S %z')}",
+    pool_rows = selection.get("pool_rows", {})
+    parent_pool = pool_rows.get("parent") if isinstance(pool_rows, dict) else None
+    current_pool = pool_rows.get("current") if isinstance(pool_rows, dict) else None
+    current_value = comparison.get("current") or current_pool
+    current_scope = " pool" if comparison.get("current") is None and current_pool else ""
+    training_line = (
+        "训练全量扫描：已跳过（GEPA快速模式）" if training.get("status") == "skipped" else
         f"L0训练诊断（非GEPA基线）：{training['status']} / {training['phase']} / batch {training['batch']}；"
         f"训练子集（canonical report）{training['completed']}/{training['planned']}，"
-        f"reports={training['reports']}（排除 attempt 重试）",
+        f"reports={training['reports']}（排除 attempt 重试）"
+    )
+    lines = [
+        f"时间：{time.strftime('%Y-%m-%d %H:%M:%S %z')}",
+        training_line,
         f"当前比较口径：{scope}；父节点={parent_name}；当前节点={current_name}；"
         f"真实 holdout={'已生成' if data.get('holdout', {}).get('reports') else '待开始'}",
         "",
-        f"| 指标 | L0 | 父节点（{parent_name}） | 当前节点（{current_name}） |",
-        "|---|---:|---:|---:|",
+        f"| 指标 | L0 | 父节点 pool | 父节点（{parent_name}） | 当前节点（{current_name}{current_scope}） |",
+        "|---|---:|---:|---:|---:|",
     ]
-    rows = [comparison.get(label) for label in ("L0", "parent", "current")]
+    rows = [comparison.get("L0"), parent_pool, comparison.get("parent"), current_value]
     metrics = (
         ("完成数", lambda row: f"{row['completed']}/{row['planned']}" if row else "待生成"),
         ("质量（评分/未评分）", lambda row: _quality_cell(row) if row else "待生成"),
@@ -903,13 +1205,44 @@ def markdown(data: dict[str, Any]) -> str:
         ("平均时延 ms", lambda row: _fmt(row.get("latency_ms")) if row else "待生成"),
         ("平均 tokens", lambda row: _fmt(row.get("tokens")) if row else "待生成"),
         ("平均 llm_calls", lambda row: _fmt(row.get("llm_calls")) if row else "待生成"),
-        ("意图 F1", lambda row: _fmt(row.get("intent_f1")) if row else "待生成"),
+        ("意图识别 F1", lambda row: _intent_cell(row) if row else "待生成"),
         ("L1 实际应用次数", lambda row: _level_value(row, "L1")),
-        ("L2 动作/编排实际应用次数", lambda row: _level_value(row, "L2")),
+        ("L2 动作实际应用次数", lambda row: _level_value(row, "L2_action")),
+        ("L2 编排实际应用次数", lambda row: _level_value(row, "L2_schedule")),
         ("L3 实际应用次数", lambda row: _level_value(row, "L3")),
+        ("反思详细证据题数", lambda row: "暂无"),
+        ("反思输入字节数", lambda row: "暂无"),
     )
     for name, render in metrics:
-        lines.append(f"| {name} | " + " | ".join(render(row) for row in rows) + " |")
+        values = [render(row) for row in rows]
+        if name == "意图识别 F1":
+            parent_reference = parent_pool if current_scope else comparison.get("parent")
+            values = [_intent_cell(row, current_value if index < 3 else parent_reference)
+                      if row else "待生成" for index, row in enumerate(rows)]
+        elif name == "反思详细证据题数":
+            values[2] = _fmt(selection.get("parent_reflection_feedback_count"))
+            values[3] = _fmt(selection.get("current_reflection_feedback_count"))
+        elif name == "反思输入字节数":
+            values[2] = _fmt(selection.get("parent_reflection_input_bytes"))
+            values[3] = _fmt(selection.get("current_reflection_input_bytes"))
+        lines.append(f"| {name} | " + " | ".join(values) + " |")
+    live = selection.get("live_evaluation")
+    if isinstance(live, dict):
+        # This is a checkpoint count, not GEPA's internal trial budget.  Keep
+        # it in the same node-horizontal table so partial work is visible even
+        # before report.json is published and the trial directory is removed.
+        completed = int(live.get("completed", 0))
+        planned = int(live.get("planned", 0))
+        split = str(live.get("split") or "evaluation")
+        lines.append(
+            "| 当前评测 checkpoint完成题数（" + split + "） | " +
+            " | ".join(
+                (f"{completed}/{planned}题（进行中）" if index == {
+                    "L0": 0, "parent": 1, "current": 3
+                }.get(live.get("label"), 2) else "暂无")
+                for index in range(4)
+            ) + " |"
+        )
     if not data.get("holdout", {}).get("reports"):
         lines.extend(["", "当前表为 GEPA 搜索/选择指标；真实 holdout 尚未开始，未用 validation 冒充 holdout。"])
     return "\n".join(lines)
@@ -936,6 +1269,26 @@ def _quality_cell(row: dict[str, Any]) -> str:
     return f"{_fmt(row.get('quality'))} ({row.get('scored', 0)}/{row.get('unscored', 0)}){suffix}"
 
 
+def _intent_cell(row: dict[str, Any], peer: dict[str, Any] | None = None) -> str:
+    """Show F1 together with its measured-task denominator.
+
+    ``intent_f1`` is observation-only: a missing intent observation is not a
+    correct prediction.  Keeping the denominator beside the score prevents a
+    one-task (or one-turn) result from being read as full-set accuracy.
+    """
+    measured_rows = int(row.get("intent_measured", 0) or 0)
+    measured = int(row.get("intent_task_measured", measured_rows) or 0)
+    completed = int(row.get("completed", 0) or 0)
+    value = _fmt(row.get("intent_f1"))
+    if value == "暂无":
+        return f"暂无（可测 {measured}/{completed} 题；观测行 {measured_rows}）"
+    suffix = "；样本不足" if measured < completed else ""
+    if peer is not None and (not row.get("intent_turn_keys") or
+                             row.get("intent_turn_keys") != peer.get("intent_turn_keys")):
+        suffix += "；可测轮不同，不可比较"
+    return f"{value}（可测 {measured}/{completed} 题；观测行 {measured_rows}{suffix}）"
+
+
 def _strict_cell(row: dict[str, Any]) -> str:
     passed = row.get("strict_passed")
     return f"{_fmt(passed)}/{row.get('judged', row.get('scored', 0))}"
@@ -957,12 +1310,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--json", action="store_true", help="输出 JSON 快照")
+    parser.add_argument("--gepa-only", action="store_true",
+                        help="快速读取活动 GEPA 树/评测检查点；跳过全量训练与历史 holdout 扫描")
     parser.add_argument("--watch", nargs="?", const=60.0, type=float,
                         help="持续播报；默认每 60 秒一次")
     args = parser.parse_args(argv)
     while True:
         started = time.monotonic()
-        data = snapshot(args.output)
+        data = snapshot(args.output, gepa_only=args.gepa_only)
         if args.json:
             print(json.dumps(data, ensure_ascii=False, separators=(",", ":")), flush=True)
         else:

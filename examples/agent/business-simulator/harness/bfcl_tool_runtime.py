@@ -114,11 +114,13 @@ def _execute_persistent(state: dict, row: dict, call: str, record: dict,
                 with snapshot.open("rb") as stream:
                     instances = pickle.load(stream)
             except (EOFError, OSError, pickle.PickleError, AttributeError,
-                    ImportError, ValueError):
-                # A killed worker may leave a partial snapshot. Restart this
-                # row's deterministic fixture from its initial configuration;
-                # never let one damaged cache take down the whole experiment.
-                instances = {}
+                    ImportError, ValueError) as exc:
+                # The snapshot is the authoritative task state. Falling back
+                # to initial_config would silently roll back prior tool calls
+                # and produce a false strict failure (or, worse, a false pass).
+                # Surface a task-scoped error so the evaluator can classify it
+                # as an execution failure and preserve the evidence.
+                raise RuntimeError("bfcl_fixture_state_corrupt") from exc
         # Loading the authoritative snapshot also prevents stale module globals
         # from another invocation from winning over this trial's private state.
         for class_name, instance_name in instance_names.items():
@@ -126,24 +128,10 @@ def _execute_persistent(state: dict, row: dict, call: str, record: dict,
                 setattr(multi_turn_utils, instance_name, instances[class_name])
             else:
                 multi_turn_utils.__dict__.pop(instance_name, None)
-        # Skill workers may ask for the same call again while composing a
-        # summary. Preserve the first deterministic observation and keep the
-        # duplicate out of the BFCL call sequence.
-        existing_result = None
-        call_log = Path(state["call_log"])
-        if call_log.is_file():
-            for line in call_log.read_text(encoding="utf-8").splitlines():
-                try:
-                    prior = json.loads(line)
-                except (TypeError, ValueError):
-                    continue
-                if (prior.get("status") == "completed"
-                        and int(prior.get("turn", -1)) == int(state.get("turn", 0))
-                        and str(prior.get("call", "")) == call):
-                    existing_result = prior.get("result", "")
-                    break
-        if existing_result is not None:
-            return _visible_result(existing_result)
+        # Every model-emitted call is a real fixture operation. In particular,
+        # a sequence such as cd('archive') -> cd('..') -> cd('archive') must
+        # execute all three mutations in order; caching same-turn text here
+        # would hide state transitions and corrupt the official call sequence.
         results, instances = multi_turn_utils.execute_multi_turn_func_call(
             [call], row["initial_config"], row["involved_classes"],
             model_name, str(row["id"]),

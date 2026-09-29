@@ -129,6 +129,7 @@ def environment(*, require_model: bool = True) -> dict[str, str]:
     env.setdefault("AF_LLM_THINKING_MODE", "disabled")
     env.setdefault("AF_LLM_TIMEOUT", "120")
     env.setdefault("AF_LLM_MAX_RETRIES", "4")
+    env.setdefault("AF_LLM_RETRY_JITTER", "0.25")
     env.setdefault("BFCL_POINT_TIMEOUT_MS", "1000")
     env.setdefault("BFCL_BASELINE_PATH", "/root/lai-code/baselines/gorilla/berkeley-function-call-leaderboard")
     interpreter = Path(env.get("AGENTFLOW_PYTHON", "/root/miniconda3/envs/agentflow-dev/bin/python3"))
@@ -197,7 +198,7 @@ def _evaluation_config(task_ids: list[str], revision: str, parallelism: int) -> 
             },
             "pass_env": [
                 "AF_LLM_API_KEY", "AF_LLM_BASE_URL", "AF_LLM_MODEL", "AF_LLM_TIMEOUT",
-                "AF_LLM_MAX_RETRIES", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
+                "AF_LLM_MAX_RETRIES", "AF_LLM_RETRY_JITTER", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
                 "BFCL_POINT_TIMEOUT_MS", "BFCL_BASELINE_PATH", "AGENTFLOW_DAEMON",
                 "PYTHONPATH", "LD_LIBRARY_PATH",
             ],
@@ -397,9 +398,18 @@ def _terminal_output(trial: dict) -> dict:
 def metrics_from_trials(trials: list[dict]) -> dict:
     completed = [trial for trial in trials if trial.get("execution_status") == "completed"]
     outputs = [_terminal_output(trial) for trial in completed]
-    strict = sum(bool(value.get("bfcl_valid")) for value in outputs)
+    # A trial with verdict=error has execution cost, but no reliable score or
+    # loop observation.  Keep it in the cost totals while excluding it from
+    # quality/loop aggregates.  In particular, an evaluation trace mismatch
+    # may still contain a stale final output; treating that output as a scored
+    # failure would make the native judge error vote in BFCL quality.
+    scored = [(trial, output) for trial, output in zip(completed, outputs)
+              if trial.get("verdict") != "error" and isinstance(output.get("bfcl_valid"), bool)]
+    scored_outputs = [output for _, output in scored]
+    strict = sum(bool(value.get("bfcl_valid")) for value in scored_outputs)
     def average(name: str):
-        values = [float(item[name]) for item in outputs if isinstance(item.get(name), (int, float))]
+        values = [float(item[name]) for item in scored_outputs
+                  if isinstance(item.get(name), (int, float))]
         return sum(values) / len(values) if values else None
     evidence_metrics = [trial.get("evidence", {}).get("metrics", {}) for trial in completed]
     tokens = sum(int(item.get("tokens", 0) or 0) for item in outputs)
@@ -408,13 +418,19 @@ def metrics_from_trials(trials: list[dict]) -> dict:
     calls = sum(int(item.get("model_calls", 0) or 0) for item in outputs)
     if not calls:
         calls = sum(int(item.get("llm_calls", 0) or 0) for item in evidence_metrics)
-    latency = average("latency_ms")
+    # Latency is a cost signal, so include errored executions when available;
+    # only quality and loop observations use the scored subset.
+    latency_values = [float(item["latency_ms"]) for item in outputs
+                      if isinstance(item.get("latency_ms"), (int, float))]
+    latency = (sum(latency_values) / len(latency_values)) if latency_values else None
     if latency is None:
         latency = (sum(float(t.get("duration_ms", 0) or 0) for t in completed) / len(completed)
                    if completed else None)
     return {
         "completed": len(completed), "strict_passed": strict,
-        "quality": strict / len(completed) if completed else None,
+        "scored": len(scored_outputs),
+        "errored": len(completed) - len(scored_outputs),
+        "quality": strict / len(scored_outputs) if scored_outputs else None,
         "avg_invalid_loop": average("invalid_loop_count"),
         "avg_latency_ms": latency,
         "tokens": tokens, "avg_tokens": tokens / len(completed) if completed else None,
@@ -496,6 +512,37 @@ def _compact_batch(destination: Path) -> None:
             shutil.rmtree(path)
         elif path.is_file():
             path.unlink()
+
+
+def _isolated_learning_input(destination: Path, report: dict) -> tuple[Path, Path | None]:
+    """Build a throw-away report that excludes judge/transport error trials.
+
+    The capture report remains the canonical cost and audit record.  Native
+    ``learn`` imports every admissible trace it receives, so passing the
+    canonical report would publish errored traces into private memory even
+    though their score is excluded above.  Re-sign only the temporary report
+    and leave the original report/manifest untouched.
+    """
+    trials = report.get("trials") or []
+    eligible = [trial for trial in trials if trial.get("verdict") != "error"]
+    if len(eligible) == len(trials):
+        return destination, None
+    isolated = destination / ".learning-input"
+    if isolated.exists():
+        shutil.rmtree(isolated)
+    isolated.mkdir(parents=True)
+    filtered = dict(report)
+    filtered["trials"] = eligible
+    save(isolated / "report.json", filtered)
+    manifest = read(destination / "manifest.json")
+    manifest["files"] = dict(manifest.get("files") or {})
+    manifest["files"]["report.json"] = hashlib.sha256(
+        (isolated / "report.json").read_bytes()).hexdigest()
+    save(isolated / "manifest.json", manifest)
+    report_pb = destination / "report.pb"
+    if report_pb.is_file():
+        shutil.copy2(report_pb, isolated / "report.pb")
+    return isolated, isolated
 
 
 def compact_completed_outputs() -> dict:
@@ -589,16 +636,34 @@ def run_training(*, retry_failed: bool = False) -> dict:
                                                                 for done in learned) + len(value.get("trials", [])),
                          metrics=metrics_from_trials(value.get("trials", [])))
             save(STATUS, state)
-            learning = subprocess.run([str(BINARY), "learn", "--config", plan["service"],
-                                       "--training-evaluation", str(destination), "--dataset", str(DATASET)],
-                                      cwd=ROOT, env=env, text=True, capture_output=True)
+            learning_destination, isolated_input = _isolated_learning_input(destination, value)
             try:
-                learned_status = json.loads(learning.stdout)
-            except ValueError:
-                raise RuntimeError("bfcl_learning_status_missing") from None
-            save(destination / "learning-status.json", learned_status)
-            if not learning_result_usable(learned_status, learning.returncode):
-                raise RuntimeError("bfcl_learning_failed")
+                if value.get("trials") and not any(
+                        trial.get("verdict") != "error" for trial in value["trials"]):
+                    # A batch containing only errors has no admissible memory
+                    # evidence.  It is still a completed capture and its
+                    # tokens/calls remain in the canonical report metrics.
+                    learning = subprocess.CompletedProcess([], 0, json.dumps({
+                        "shared_status": "completed",
+                        "run_outcomes": {"errored_trials": 0},
+                        "training_no_admissible_trials": True,
+                    }), "")
+                else:
+                    learning = subprocess.run(
+                        [str(BINARY), "learn", "--config", plan["service"],
+                         "--training-evaluation", str(learning_destination),
+                         "--dataset", str(DATASET)],
+                        cwd=ROOT, env=env, text=True, capture_output=True)
+                try:
+                    learned_status = json.loads(learning.stdout)
+                except ValueError:
+                    raise RuntimeError("bfcl_learning_status_missing") from None
+                save(destination / "learning-status.json", learned_status)
+                if not learning_result_usable(learned_status, learning.returncode):
+                    raise RuntimeError("bfcl_learning_failed")
+            finally:
+                if isolated_input is not None and isolated_input.exists():
+                    shutil.rmtree(isolated_input)
             learned.add(batch["name"])
             _compact_batch(destination)
             state.update(status="running", phase="batch_completed", learned_batches=sorted(learned),

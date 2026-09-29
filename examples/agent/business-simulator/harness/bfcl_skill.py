@@ -119,14 +119,32 @@ def _all_functions(row: Mapping[str, Any]) -> dict[str, dict]:
 
 
 def _request_text(row: Mapping[str, Any], turn: int) -> str:
-    """Return only the current public user request for the skill prompt."""
+    """Return the active public request, including BFCL schema refresh turns.
+
+    Official multi-turn BFCL rows encode a function refresh as an empty turn:
+    the prior request remains active while ``missed_functions`` adds tools.
+    The skill must therefore retain that request instead of treating the turn
+    as a no-op.  This reads only user messages and never checker output.
+    """
     turns = row.get("turns") or []
     if not isinstance(turns, list) or turn < 0 or turn >= len(turns):
         return ""
     values = [str(item.get("content", "")) for item in (turns[turn] or [])
               if isinstance(item, Mapping) and item.get("role") == "user"
               and item.get("content")]
-    return "\n".join(values)
+    if values:
+        return "\n".join(values)
+    for prior_turn in reversed(turns[:turn]):
+        prior = [str(item.get("content", "")) for item in (prior_turn or [])
+                 if isinstance(item, Mapping) and item.get("role") == "user"
+                 and item.get("content")]
+        if prior:
+            return (
+                "[BFCL function refresh] Continue the previous request using "
+                "the currently available functions.\nPrevious request:\n" +
+                "\n".join(prior)
+            )
+    return ""
 
 
 def _neutralize_request_labels(text: str, aliases: Mapping[str, str]) -> str:

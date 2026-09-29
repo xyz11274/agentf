@@ -78,7 +78,8 @@ class GepaFeedbackProgressTests(unittest.TestCase):
                                   acceptance='strict_improvement', objective=objective),
                 'view.json': dict(source_version='dataset-v1'),
                 'evolution-memory.json': dict(entries=[dict(candidate=dict(
-                    status='EVOLUTION_CANDIDATE_STATUS_PROPOSED'))]),
+                    status='EVOLUTION_CANDIDATE_STATUS_PROPOSED',
+                    support_dialogue_count='2', support_episode_count='2'))]),
             }
             saved = {}
             for name, value in dict(ROOT=root, CONFIG=config, PLAN=config.parent / 'plan.json',
@@ -118,12 +119,14 @@ class GepaFeedbackProgressTests(unittest.TestCase):
             self.assertEqual(saved[config / 'agent-evaluation.json']['gate'], dict(
                 max_quality_drop=0, min_invalid_loop_reduction=0.15,
                 max_latency_ratio=1.0, max_token_ratio=1.0))
+            self.assertEqual(saved[config / 'agent-evaluation.json']['max_jobs_per_hour'], 32)
+            self.assertNotIn('max_jobs_per_hour', saved[config / 'evaluation.json'])
             self.assertEqual(defaults['agent-evaluation.json']['gate'], gate)
             self.assertEqual(plan['split_counts'], splits)
             self.assertEqual(plan['search_limits'], dict(
                 timeout_ms=50 * 3600000, max_rounds=100,
                 max_model_calls=256, max_trials=12000, patience=0))
-            self.assertEqual(plan['evaluation_parallelism'], 4)
+            self.assertEqual(plan['evaluation_parallelism'], 16)
             self.assertEqual(plan['runtime_hashes'], {'runtime': 'fixture-hash'})
             self.assertEqual(defaults['gepa.json']['acceptance'], 'strict_improvement')
 
@@ -181,7 +184,7 @@ class GepaFeedbackProgressTests(unittest.TestCase):
             self.assertTrue((published / "latest.json").is_file())
 
     def test_fresh_entry_freezes_formal_budget_but_generic_capacity_accepts_100_rounds(self):
-        """本次 fresh 固定 50 轮；通用程序仍接受并验证 100 轮容量。"""
+        """本次 fresh 固定 30 轮；通用程序仍接受并验证 100 轮容量。"""
         publication = {"version": "agent-version-v1:" + "a" * 64}
         plan = {"stage": "GEPA L3 search and final holdout"}
         with tempfile.TemporaryDirectory() as folder, patch.object(
@@ -195,6 +198,8 @@ class GepaFeedbackProgressTests(unittest.TestCase):
         preflight.assert_called_once_with()
         reset.assert_called_once_with()
         prepare.assert_called_once_with(None, None, **offline_gepa.FRESH_SEARCH_LIMITS)
+        self.assertEqual(offline_gepa.FRESH_SEARCH_LIMITS['max_rounds'], 30)
+        self.assertEqual(offline_gepa.FRESH_SEARCH_LIMITS['max_trials'], 6500)
         ready.assert_called_once_with()
         run.assert_called_once()
         self.assertEqual(result, dict(status="published", plan=plan, publication=publication))
@@ -203,6 +208,13 @@ class GepaFeedbackProgressTests(unittest.TestCase):
             max_trials=12000, patience=0), dict(
                 timeout_ms=50 * 3600000, max_rounds=100,
                 max_model_calls=256, max_trials=12000, patience=0))
+
+    def test_grouped_reflection_budget_bounds(self):
+        self.assertEqual(offline_gepa.FRESH_SEARCH_LIMITS["max_model_calls"], 1024)
+        self.assertEqual(offline_gepa.search_limits(max_model_calls=1024),
+                         {"max_model_calls": 1024})
+        with self.assertRaisesRegex(RuntimeError, "gepa_max_model_calls_invalid"):
+            offline_gepa.search_limits(max_model_calls=1025)
 
     def test_fresh_lifecycle_lock_is_reentrant_and_blocks_other_open_description(self):
         """同一 fresh 内发布可嵌套复用锁，其他进程语义的文件描述符不能进入。"""
@@ -401,15 +413,20 @@ class GepaFeedbackProgressTests(unittest.TestCase):
             stack.enter_context(patch.object(offline_gepa, "STATUS", status_file))
             stack.enter_context(patch.object(offline_gepa, "run", side_effect=execute))
             stack.enter_context(patch.object(offline_gepa, "progress", side_effect=progress))
+            best = {"best_node": 7, "comparison_status": "completed"}
+            build_best = stack.enter_context(patch(
+                "best_strategy.build_best", return_value=best))
             publication = {"source_job": "job", "version": "agent-version-v1:" + "b" * 64}
             with redirect_stdout(io.StringIO()):
                 result = offline_gepa.run_to_publication(publisher=lambda: publication)
-            self.assertEqual(result, publication)
+            self.assertEqual(result, {**publication, "architect_strategy": best})
+            build_best.assert_called_once_with("job", run_full_comparison=True)
             self.assertEqual(calls, [("", False), ("job", False)])
             self.assertEqual(json.loads(gepa_file.read_text())["max_rounds"], 50)
             terminal = json.loads(status_file.read_text())
             self.assertEqual(terminal["status"], "published")
             self.assertEqual(terminal["publication"], publication)
+            self.assertEqual(terminal["architect_strategy"], best)
 
     def test_fresh_runner_retries_only_proven_empty_initial_launch(self):
         """建树前的瞬时退出可重启；成功观察 job 后仍只运行这一棵树。"""
@@ -439,11 +456,54 @@ class GepaFeedbackProgressTests(unittest.TestCase):
                 stack.enter_context(patch.object(offline_gepa, name, value))
             stack.enter_context(patch.object(offline_gepa, "run", side_effect=execute))
             stack.enter_context(patch.object(offline_gepa, "progress", side_effect=progress))
+            best = {"best_node": 1, "comparison_status": "completed"}
+            build_best = stack.enter_context(patch(
+                "best_strategy.build_best", return_value=best))
             publication = {"source_job": "only-job"}
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(offline_gepa.run_to_publication(
-                    publisher=lambda: publication), publication)
+                    publisher=lambda: publication),
+                    {**publication, "architect_strategy": best})
+            build_best.assert_called_once_with("only-job", run_full_comparison=True)
             self.assertEqual(calls, ["", ""])
+
+    def test_rejected_completed_final_holdout_builds_showcase_without_publication(self):
+        """Formal rejection after completed holdout still emits a non-release showcase."""
+        with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
+            workspace = Path(folder)
+            job_id = "rejected-complete-job"
+            job_root = workspace / "agent-evaluation" / job_id
+            (job_root / "search").mkdir(parents=True)
+            state_file = workspace / "agent-evaluation/state.json"
+            state_file.write_text(json.dumps({"jobs": {job_id: {"status": "rejected"}}}))
+            (job_root / "search/tree.json").write_text(json.dumps({
+                "status": "completed", "active": None, "batch": None,
+                "final_holdout": {"status": "completed", "candidates": [
+                    {"node": 2, "version": "v2", "status": "complete"},
+                    {"node": 3, "version": "v3", "status": "complete"},
+                    {"node": 4, "version": "v4", "status": "complete"},
+                ]},
+            }))
+            config, stage2 = workspace / "config", workspace / "gepa"
+            config.mkdir(); stage2.mkdir()
+            status_file = stage2 / "status.json"
+            status_file.write_text(json.dumps({"status": "finished"}))
+            for name, value in dict(WORKSPACE=workspace, CONFIG=config, STAGE2=stage2,
+                                    STATUS=status_file).items():
+                stack.enter_context(patch.object(offline_gepa, name, value))
+            stack.enter_context(patch.object(offline_gepa, "run", return_value=1))
+            stack.enter_context(patch.object(offline_gepa, "progress", return_value=dict(
+                job_id=job_id, job_status="rejected", tree_status="completed")))
+            best = {"status": "best_available", "selection": {"node": 3}}
+            build_best = stack.enter_context(patch(
+                "best_strategy.build_best", return_value=best))
+            publisher = stack.enter_context(patch("offline_publish.publish"))
+            result = offline_gepa.run_to_publication(
+                publisher=lambda: publisher())
+            self.assertEqual(result, {"status": "best_available", "best_strategy": best,
+                                      "formal_release": False, "publication_skipped": True})
+            build_best.assert_called_once_with(job_id, run_full_comparison=True)
+            publisher.assert_not_called()
 
     def test_fresh_runner_fails_fast_on_initial_config_error(self):
         """建树前的确定性配置错误应立即暴露，旧日志不应误判本次退出。"""

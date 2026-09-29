@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import time
 from collections.abc import Callable
 from typing import Any
@@ -148,6 +149,7 @@ class OpenAiCompatibleClient(LlmClient):
         retry_base_delay: float = 2.0,
         connect_timeout: int = 5,
         request_timeout: int = 120,
+        retry_jitter: float = 0.25,
     ):
         # Strip internal AISF prefix — upstream APIs (DashScope, OpenAI, etc.)
         # do not understand the "aisf/" routing convention.
@@ -168,6 +170,10 @@ class OpenAiCompatibleClient(LlmClient):
         self.api_key = api_key
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
+        # Small per-attempt jitter prevents parallel workers from retrying in
+        # lockstep after a provider capacity/rate-limit response.  Keep this
+        # transport-local and opt-out via env for deterministic test clients.
+        self.retry_jitter = max(0.0, float(retry_jitter))
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
         # Per-call transport telemetry. TraceRecorder creates one client for
@@ -181,6 +187,7 @@ class OpenAiCompatibleClient(LlmClient):
         # Env override
         self.max_retries = int(os.environ.get("AF_LLM_MAX_RETRIES", str(self.max_retries)))
         self.retry_base_delay = float(os.environ.get("AF_LLM_RETRY_BASE_DELAY", str(self.retry_base_delay)))
+        self.retry_jitter = max(0.0, float(os.environ.get("AF_LLM_RETRY_JITTER", str(self.retry_jitter))))
         self.connect_timeout = int(os.environ.get("AF_LLM_CONNECT_TIMEOUT", str(self.connect_timeout)))
         self.request_timeout = int(os.environ.get("AF_LLM_TIMEOUT", str(self.request_timeout)))
 
@@ -458,6 +465,15 @@ class OpenAiCompatibleClient(LlmClient):
                 retriable = _is_transient_http_error(e)
                 if not _data_received and attempt < max_attempts - 1 and retriable:
                     backoff = min(self.retry_base_delay * (2 ** attempt), 8.0)
+                    retry_after = (
+                        e.retry_after if isinstance(e, _ApiError) else None
+                    )
+                    if retry_after is not None:
+                        backoff = max(backoff, retry_after)
+                    if self.retry_jitter and backoff > 0:
+                        backoff += random.uniform(
+                            0.0, min(self.retry_jitter, backoff)
+                        )
                     retry_reason = (f"http_{e.status_code}" if isinstance(e, _ApiError)
                                     and e.status_code is not None else type(e).__name__)
                     self.last_retry_reasons.append(retry_reason)
@@ -502,18 +518,32 @@ def _api_error_from_response(resp, status_code: int) -> "_ApiError":
     except Exception:
         err_msg = str(getattr(resp, "text", ""))[:200]
     err_msg = _safe_text(err_msg)
+    retry_after = None
+    if status_code == 429:
+        response_headers = getattr(resp, "headers", {}) or {}
+        raw_retry_after = response_headers.get("Retry-After")
+        try:
+            if raw_retry_after is not None:
+                retry_after = max(0.0, float(raw_retry_after))
+        except (TypeError, ValueError):
+            # Date-form Retry-After is provider-specific; exponential retry
+            # remains the safe fallback when it cannot be parsed locally.
+            retry_after = None
     return _ApiError(
         f"API error (HTTP {status_code}): {err_msg}",
         status_code=status_code,
+        retry_after=retry_after,
     )
 
 
 class _ApiError(Exception):
     """Provider API error with explicit retry classification."""
 
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(self, message: str, status_code: int | None = None,
+                 retry_after: float | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.retry_after = retry_after
 
     @property
     def retriable(self) -> bool:

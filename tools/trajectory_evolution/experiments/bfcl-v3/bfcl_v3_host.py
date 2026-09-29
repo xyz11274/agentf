@@ -244,6 +244,49 @@ class AgentRunner:
         if not AGENT_DAEMON.is_file():
             raise RuntimeError("agentflowd_not_built")
         config = _json.loads((self.agent_package / "daemon.json").read_text(encoding="utf-8"))
+        # Load the same native runtime hook used by production agents.  The
+        # business package normally ships only session logging; BFCL's private
+        # overlay therefore materialises the hook modules and a per-trial
+        # policy config before the daemon loads harness hooks.
+        hook_dir = self.agent_package / "harness" / "hooks"
+        hook_dir.mkdir(parents=True, exist_ok=True)
+        integration_dir = ROOT / "tools/trajectory_evolution/integrations/agentflow"
+        for hook_name in ("runtime_hook.py", "shadow_hook.py"):
+            source = integration_dir / hook_name
+            if source.is_file():
+                shutil.copy2(source, hook_dir / hook_name)
+        evolution_exe = Path(os.environ.get(
+            "TRAJECTORY_EVOLUTION_EXECUTABLE",
+            str(ROOT / "build/evolution-no-hooks-install/bin/trajectory_evolution"),
+        ))
+        runtime_config_path = self.root / "evolution-runtime.json"
+        runtime_config_path.write_text(_json.dumps({
+            "schema_version": 1,
+            "mode": "active",
+            # agentflowd binds AF_AGENT_PACKAGE_DIR to the private overlay
+            # (whose basename is ``agent-package``).  Keep the runtime
+            # identity bound to that package so the native hook cannot accept
+            # another daemon's DataBus events.
+            "agent_id": self.agent_package.name,
+            "memory_path": str(self.root / "evolution-memory"),
+            "executable": str(evolution_exe),
+            "rpc_timeout_ms": 1000,
+            "process_timeout_ms": 5000,
+            "shadow_options": {"max_policy_entries": 64, "max_advice_items": 3,
+                                "max_advice_bytes": 4096, "max_query_bytes": 32768,
+                                "max_memory_bytes": 16777216, "max_snapshot_bytes": 262144,
+                                "max_match_terms": 128, "min_matched_terms": 1},
+            # The hook receives coordinator events with scope ``coordinator``
+            # and the generated BFCL skill events with scope
+            # ``skill:bfcl-functions``.  The public RPC uses this fixed user
+            # identity; omitting it makes the hook silently return before
+            # querying the native policy service.
+            "options": {"target_scopes": ["coordinator", "skill:bfcl-functions"],
+                        "allowed_users": ["bfcl-agent"],
+                        "allowed_conversations": [],
+                        "max_context_bytes": 4096},
+            "experience_template_file": str(ROOT / "tools/trajectory_evolution/config/prompts/runtime-experience.txt"),
+        }, ensure_ascii=False), encoding="utf-8")
         with _socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -281,6 +324,7 @@ class AgentRunner:
             ]),
             # Keep the agent's own tools in an isolated in-memory/scratch mode.
             "BUSINESS_EXECUTION_MODE": "simulation",
+            "AF_EVOLUTION_RUNTIME_CONFIG": str(runtime_config_path),
         })
         log = (self.root / "daemon.log").open("w", encoding="utf-8")
         self.proc = subprocess.Popen(
@@ -333,7 +377,17 @@ class AgentRunner:
         send_turn(self.client, "business-simulator", user_id, dialogue_key, run_key, payload)
         result = wait_turn_response(self.client, time.time() + 900)
         if result.get("error") or result.get("timed_out"):
-            raise RuntimeError("agent_turn_failed")
+            # Keep only a stable provider failure class.  Trial.receive maps
+            # this to a task-scoped external failure so it cannot become a
+            # BFCL capability failure or enter learning memory.
+            detail = str(result.get("error") or "agent_turn_failed").lower()
+            if result.get("timed_out") or "timeout" in detail:
+                code = "external_model_timeout"
+            elif "429" in detail or "capacity" in detail or "rate" in detail:
+                code = "external_model_http_429"
+            else:
+                code = "external_model_failed"
+            raise RuntimeError(code)
         cumulative = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         llm_calls = 0
         # AgentFlow's RPC response intentionally contains no provider usage;
@@ -663,6 +717,7 @@ class Trial:
         self.tokens = 0
         self.model_calls = 0
         self.invalid_loops = 0
+        self.external_error_code = ""
         self.policy_applied = {"L1": 0, "L2": 0, "L3": 0}
         self._last_call_keys: set[str] = set()
         self.live_model_name = "bfcl-live-" + uuid.uuid4().hex[:12]
@@ -750,11 +805,30 @@ class Trial:
                                "level": self.level, "capabilities": ["model", "actions", "loop"],
                                "conversation_id": task.get("conversation_id")})
             self.run_context = run.get("context", {})
-        for message in user_messages:
-            self.messages.append({"role": "user", "content": message.get("content", "")})
-        # Empty BFCL turns are schema refresh points. They intentionally carry
-        # no new user request and therefore must produce no function calls.
-        skipped = not user_messages
+        if user_messages:
+            for message in user_messages:
+                self.messages.append({"role": "user", "content": message.get("content", "")})
+        else:
+            # In BFCL multi-turn rows an empty ``miss_func`` turn is a schema
+            # refresh: newly available functions are added while the previous
+            # user request remains active.  It is still a model turn.  Keep
+            # the continuation explicit without exposing checker output or
+            # ground truth to the agent.
+            previous = ""
+            for prior in reversed(self.messages):
+                if prior.get("role") == "user" and prior.get("content"):
+                    previous = str(prior["content"])
+                    break
+            refreshed = ", ".join(str(item["name"]) for item in functions)
+            self.messages.append({
+                "role": "user",
+                "content": (
+                    "[BFCL function refresh] Continue the previous request using "
+                    "the currently available functions. Newly available schemas: "
+                    + refreshed + "\nPrevious request:\n" + previous
+                ),
+            })
+        skipped = False
         message = {"content": ""}
         usage = {}
         start = time.monotonic()
@@ -794,7 +868,11 @@ class Trial:
                 self.model_calls += int(usage.get("llm_calls", 1) or 1)
             except Exception as error:
                 message, usage = {"content": ""}, {}
-                self.invalid_loops += 1
+                error_code = str(error)[:64]
+                if error_code.startswith("external_model_"):
+                    self.external_error_code = error_code
+                else:
+                    self.invalid_loops += 1
                 self.calls.append([])
                 if os.environ.get("BFCL_DEBUG_ERRORS") == "1":
                     try:
@@ -804,7 +882,7 @@ class Trial:
                         pass
                 self.turn_outputs.append("")
                 self._point({"phase": "after", "kind": "model", "context": model_point.get("context", self.run_context),
-                             "executed": False, "input": public_input, "output": {"error_code": str(error)[:64]}})
+                             "executed": False, "input": public_input, "output": {"error_code": error_code}})
             else:
                 calls, content = decode_message(message)
                 skill_records = _logged_call_records(self.agent.call_log, turn, str(self.row["id"]))
@@ -875,7 +953,8 @@ class Trial:
             output.update(self.finish())
         final_run_context = self.run_context
         self._point({"phase": "after", "kind": "run", "context": self.run_context,
-                     "output": _safe_obj(output), "business_status": "succeeded"})
+                     "output": _safe_obj(output),
+                     "business_status": "failed" if self.external_error_code else "succeeded"})
         if final:
             receipts = self._receipt_counts(final_run_context)
             applied = receipts.get("applied", 0)
@@ -887,6 +966,16 @@ class Trial:
         return output
 
     def finish(self) -> dict:
+        if self.external_error_code:
+            return {"bfcl_valid": None, "strict_passed": None,
+                    "error_code": self.external_error_code,
+                    "invalid_loop_count": None,
+                    "latency_ms": round((time.monotonic_ns() - self.started_ns) / 1e6, 3),
+                    "model_calls": self.model_calls, "tokens": self.tokens,
+                    "level": self.level,
+                    "l1_applied": self.policy_applied.get("L1", 0),
+                    "l2_applied": self.policy_applied.get("L2", 0),
+                    "l3_applied": self.policy_applied.get("L3", 0)}
         expected = self.row["ground_truth"]
         # BFCL's checker expects turns -> response steps -> call expressions.
         # The AgentFlow response is one step per turn, so retain that middle
