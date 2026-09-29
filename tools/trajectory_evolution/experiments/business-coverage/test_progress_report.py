@@ -27,8 +27,8 @@ def _trial(task, split, variant, quality, verdict="failed"):
             "loop_review": {"wasted_iterations": [{"id": "w"}]},
             "intent_observations": [{
                 "status": "measured", "complete": True, "conditional": False,
-                "turn": 1, "expected_targets": ["x"], "actual_targets": ["x"],
-                "matched": ["x"], "extra": [], "missing": []
+                "turn": 1, "expected_targets": ["x", "y"], "actual_targets": ["x", "y"],
+                "matched": ["x", "y"], "extra": [], "missing": []
             }],
         },
     }
@@ -485,8 +485,8 @@ class ProgressReportTest(unittest.TestCase):
         child = _trial("a", "val", "child", .5)
         child["evidence"]["intent_observations"].append({
             "status": "measured", "complete": True, "conditional": False,
-            "turn": 2, "expected_targets": ["y"], "actual_targets": ["y"],
-            "matched": ["y"], "extra": [], "missing": [],
+            "turn": 2, "expected_targets": ["y", "z"], "actual_targets": ["y", "z"],
+            "matched": ["y", "z"], "extra": [], "missing": [],
         })
         old = progress_report._aggregate([parent], planned=1)
         new = progress_report._aggregate([child], planned=1)
@@ -499,6 +499,21 @@ class ProgressReportTest(unittest.TestCase):
         missing = progress_report._aggregate([no_gold], planned=1)
         self.assertIsNone(missing["intent_f1"])
         self.assertEqual(missing["intent_task_measured"], 0)
+
+    def test_multi_intent_f1_counts_measured_misses_and_excludes_single_targets(self):
+        trial = _trial("a", "train", "L0", .5)
+        rows = trial["evidence"]["intent_observations"]
+        rows[0].update(complete=False, actual_targets=["x", "alternative"],
+                       matched=["x"], extra=["alternative"], missing=["y"])
+        rows.append({"status": "measured", "complete": True, "conditional": False,
+                     "turn": 2, "expected_targets": ["x"], "actual_targets": ["x"],
+                     "matched": ["x"], "extra": [], "missing": []})
+        result = progress_report._aggregate([trial], planned=1)
+        self.assertEqual(result["intent_f1"], .5)
+        self.assertEqual(result["intent_turn_keys"], ["a#1"])
+        self.assertEqual(result["intent_task_measured"], 1)
+        rows[0].update(actual_targets=[], matched=[], extra=[], missing=["x", "y"])
+        self.assertEqual(progress_report._aggregate([trial], planned=1)["intent_f1"], 0.)
 
 
 if __name__ == "__main__":
