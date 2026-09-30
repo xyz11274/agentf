@@ -1,0 +1,3 @@
+{"event": "native_start", "phase": "smoke", "attempt": 1, "tasks": 2, "trials": 4, "parallelism": 8}
+{"event": "native_done", "phase": "smoke", "complete": true, "trials": 4, "exit_code": 1}
+{"event": "native_start", "phase": "full", "attempt": 1, "tasks": 200, "trials": 400, "parallelism": 8}

@@ -1,0 +1,12 @@
+{
+  "status": "published_by_user",
+  "candidate_id": "seed_relearn_scoped_004",
+  "version": "agent-version-v1:64bc4542a60ec5b0438c400c20c426485f1fecf464682bf4fff804095a688dec",
+  "release_basis": "user_selected_fixed_business_acceptance_300",
+  "formal_gepa_gate_passed": false,
+  "independent_holdout": false,
+  "full400_goal_met": false,
+  "comparison": "comparison.json",
+  "dataset": "business-acceptance-300.jsonl",
+  "strategy": "strategy.json"
+}

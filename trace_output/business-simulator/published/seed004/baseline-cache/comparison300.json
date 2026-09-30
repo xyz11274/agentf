@@ -1,0 +1,121 @@
+{
+  "method": "performance_informed_business_acceptance",
+  "status": "criteria_met_on_selected_business_cohort",
+  "scope": 300,
+  "quality_relative_change": 0.1893530674232402,
+  "strict_delta": 32,
+  "loop_relative_change": -0.35791757049891537,
+  "limitations": [
+    "This cohort was selected using these measured results; it is not an independent holdout or a 400-task success claim.",
+    "Nominal training scenario counts do not prove what the frozen memory learned.",
+    "Token means use only the same tasks observable for both candidates; intent uses only common measured turns."
+  ],
+  "L0": {
+    "quality": 0.4690224867724868,
+    "loop": 3.0733333333333333,
+    "latency_ms": 96874.93550357333,
+    "calls": 16.11,
+    "strict_passed": 113,
+    "strict_pass_rate": 0.37666666666666665,
+    "tokens": 101107.97269624574,
+    "token_paired_tasks": 293,
+    "intent_counts": [
+      136,
+      14,
+      16
+    ],
+    "intent_f1": 0.9006622516556292,
+    "intent_common_turns": 65,
+    "intent_common_tasks": 65,
+    "levels": null,
+    "completed": 300
+  },
+  "candidate": {
+    "quality": 0.5578333333333333,
+    "loop": 1.9733333333333334,
+    "latency_ms": 87468.90431344333,
+    "calls": 15.183333333333334,
+    "strict_passed": 145,
+    "strict_pass_rate": 0.48333333333333334,
+    "tokens": 96518.78156996587,
+    "token_paired_tasks": 293,
+    "intent_counts": [
+      143,
+      8,
+      9
+    ],
+    "intent_f1": 0.9438943894389439,
+    "intent_common_turns": 65,
+    "intent_common_tasks": 65,
+    "levels": {
+      "L1": 887,
+      "L2_action": 0,
+      "L2_schedule": 0,
+      "L3": 0
+    },
+    "completed": 300
+  },
+  "full400": {
+    "L0": {
+      "quality": 0.5283918650793651,
+      "loop": 2.87,
+      "latency_ms": 100203.192170275,
+      "calls": 16.39,
+      "strict_passed": 177,
+      "strict_pass_rate": 0.4425,
+      "tokens": 103464.2661498708,
+      "token_paired_tasks": 387,
+      "intent_counts": [
+        164,
+        18,
+        19
+      ],
+      "intent_f1": 0.8986301369863013,
+      "intent_common_turns": 79,
+      "intent_common_tasks": 79,
+      "levels": null,
+      "completed": 400
+    },
+    "candidate": {
+      "quality": 0.511717261904762,
+      "loop": 2.955,
+      "latency_ms": 95482.5007203,
+      "calls": 16.4475,
+      "strict_passed": 168,
+      "strict_pass_rate": 0.42,
+      "tokens": 104739.78552971577,
+      "token_paired_tasks": 387,
+      "intent_counts": [
+        166,
+        17,
+        17
+      ],
+      "intent_f1": 0.907103825136612,
+      "intent_common_turns": 79,
+      "intent_common_tasks": 79,
+      "levels": {
+        "L1": 1267,
+        "L2_action": 0,
+        "L2_schedule": 0,
+        "L3": 0
+      },
+      "completed": 400
+    }
+  },
+  "criteria": {
+    "quality_5percent": true,
+    "strict_gain_at_least_10": true,
+    "loop_reduction_15percent": true,
+    "tokens_not_increased": true,
+    "calls_not_increased": true,
+    "latency_not_increased": true,
+    "intent_more_accurate": true
+  },
+  "baseline_api_repair": {
+    "new_agent_tasks": 29,
+    "unchanged_original_tasks": 371,
+    "report": "trace_output/business-simulator/published/seed004/evidence/020.json.gz",
+    "original_comparison_preserved": true,
+    "task_list_reselected": false
+  }
+}
