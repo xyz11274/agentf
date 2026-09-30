@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <stdexcept>
 
@@ -321,6 +322,41 @@ void test_parallel_and_repeat_rules() {
          "explicit cross-producer cause lost");
 }
 
+void test_tool_action_contract_provenance() {
+  auto trace = repeated();
+  (*event(trace, "a1").mutable_input()
+        ->mutable_struct_value()
+        ->mutable_fields())["action"].set_string_value("detail");
+  (*event(trace, "a2").mutable_input()
+        ->mutable_struct_value()
+        ->mutable_fields())["action"].set_string_value("recommend");
+
+  const auto output = te::evaluate_trace(trace);
+  std::map<std::string, const ep::ToolEvidence *> by_call;
+  for (const auto &assessment : output.report.assessments()) {
+    for (const auto &tool : assessment.evidence().tools())
+      by_call.emplace(tool.call_event_id(), &tool);
+  }
+  expect(by_call.count("a1") == 1 && by_call.count("a2") == 1,
+         "trace action events were not mapped to tool evidence");
+  expect(by_call.at("a1")->action_contract_observed() &&
+             by_call.at("a1")->action_name() == "detail",
+         "typed action name was not copied from TraceEvent.input");
+  expect(by_call.at("a2")->action_contract_observed() &&
+             by_call.at("a2")->action_name() == "recommend",
+         "different action on the same operation was conflated");
+
+  const auto no_action = te::evaluate_trace(repeated());
+  bool observed_empty_action = false;
+  for (const auto &assessment : no_action.report.assessments()) {
+    for (const auto &tool : assessment.evidence().tools())
+      observed_empty_action = observed_empty_action ||
+          (tool.action_contract_observed() && tool.action_name().empty());
+  }
+  expect(observed_empty_action,
+         "observed tool input without an action key must differ from legacy missing provenance");
+}
+
 // 回归用例：test_capabilities。
 // 关键断言：expect(report.effective_level() == v1::L0 && report.verified_level() == v1::L0,；此处只验证测试构造的场景。
 void test_capabilities() {
@@ -570,6 +606,7 @@ int main() {
     test_blackbox_and_roundtrip();
     test_validation_and_order();
     test_parallel_and_repeat_rules();
+    test_tool_action_contract_provenance();
     test_model_actions_are_not_tools();
     test_capabilities();
     test_real_content_and_sanitization();

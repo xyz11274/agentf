@@ -448,11 +448,72 @@ std::string retryability_for(const ep::EpisodeEvidencePacket &packet,
   return *values.begin();
 }
 
+// Typed facts come from cited tool events, never from similarity of the advice.
+// Missing historical facts are not a wildcard for a specific tool/action.
+std::string observed_support_contract(const ep::EvolutionCandidate &candidate) {
+  if (candidate.support_evidence().empty()) return {};
+  std::set<std::string> facts;
+  for (const auto &evidence : candidate.support_evidence()) {
+    if (evidence.tool_actions().empty()) return {};
+    for (const auto &action : evidence.tool_actions()) facts.insert(action.SerializeAsString());
+  }
+  std::string material;
+  for (const auto &fact : facts) {
+    material += std::to_string(fact.size()) + ':' + fact;
+  }
+  return material.empty() ? std::string{} : fingerprint(material);
+}
+
+bool support_contracts_compatible(const ep::EvolutionCandidate &left,
+                                  const ep::EvolutionCandidate &right) {
+  const auto a = observed_support_contract(left), b = observed_support_contract(right);
+  if (!a.empty() && !b.empty()) return a == b;
+  // Legacy unscoped diagnostic synthesis keeps its existing contract. Scoped
+  // historical entries stay available, but unknown facts cannot transfer new
+  // support to a different condition/action on the strength of model wording.
+  if (a.empty() && b.empty() &&
+      left.generator_version() != kScopedExperienceGeneratorVersion &&
+      right.generator_version() != kScopedExperienceGeneratorVersion) return true;
+  return normalize_text(left.trigger_pattern()) == normalize_text(right.trigger_pattern()) &&
+         normalize_text(left.proposed_change()) == normalize_text(right.proposed_change());
+}
+
+std::string support_group_key(const ep::EvolutionCandidate &candidate) {
+  const auto contract = observed_support_contract(candidate);
+  if (!contract.empty()) return "observed:" + contract;
+  if (candidate.generator_version() != kScopedExperienceGeneratorVersion) return "legacy";
+  return "unobserved:" + fingerprint(normalize_text(candidate.trigger_pattern()) + '\0' +
+                                    normalize_text(candidate.proposed_change()));
+}
+
+void add_support_contract_json(JsonValue *output, const ep::EvolutionCandidate &candidate,
+                               Allocator &allocator) {
+  const auto contract = observed_support_contract(candidate);
+  output->AddMember("support_contract_observed", !contract.empty(), allocator);
+  JsonValue actions(rapidjson::kArrayType);
+  std::set<std::string> seen;
+  for (const auto &evidence : candidate.support_evidence()) {
+    for (const auto &action : evidence.tool_actions()) {
+      const auto bytes = protobuf_json(action, false);
+      if (!seen.insert(bytes).second) continue;
+      rapidjson::Document value;
+      value.Parse(bytes.data(), bytes.size());
+      JsonValue copy;
+      copy.CopyFrom(value, allocator);
+      actions.PushBack(copy, allocator);
+    }
+  }
+  output->AddMember("observed_tool_actions", actions, allocator);
+}
+
 // 组合候选的目标、作用域和内容特征，供同批次去重使用。
 std::string candidate_key(const ep::EvolutionCandidate &candidate) {
-  return std::to_string(static_cast<int>(candidate.target_type())) + '|' +
+  std::string key = std::to_string(static_cast<int>(candidate.target_type())) + '|' +
          candidate.generator_version() + '|' + normalize_text(candidate.target_scope()) + '|' +
          normalize_text(candidate.trigger_pattern()) + '|' + candidate.proposal_fingerprint();
+  const auto contract = observed_support_contract(candidate);
+  if (!contract.empty()) key += "|support:" + contract;
+  return key;
 }
 
 // 生成候选的稳定身份，连接反思、入库决定与策略来源。
@@ -500,6 +561,22 @@ ep::CandidateEvidence make_evidence(ep::CandidateEvidenceKind kind,
   set_strings(evidence.mutable_evidence_event_ids(), event_ids);
   evidence.set_verdict(verdict);
   evidence.set_confidence(std::clamp(confidence, 0.0, 1.0));
+  const std::set<std::string> cited(event_ids.begin(), event_ids.end());
+  std::set<std::string> contracts;
+  for (const auto &assessment : report.assessments()) {
+    for (const auto &tool : assessment.evidence().tools()) {
+      if (!tool.action_contract_observed() ||
+          (!cited.count(tool.call_event_id()) && !cited.count(tool.result_event_id()))) continue;
+      ep::ToolActionContract action;
+      action.set_tool_name(tool.tool_name());
+      action.set_action_name(tool.action_name());
+      action.set_status(tool.status());
+      action.set_error_class(tool.error_class());
+      action.set_retryability(tool.retryability());
+      if (contracts.insert(action.SerializeAsString()).second)
+        evidence.add_tool_actions()->CopyFrom(action);
+    }
+  }
   evidence.set_evidence_id(evidence_id(evidence));
   return evidence;
 }
@@ -1037,7 +1114,7 @@ make_meta_request(const google::protobuf::RepeatedPtrField<ep::EvolutionCandidat
     }
     const std::string compatibility_group =
         (is_scoped_experience(candidate) ? "scoped-experience-v1:" : "") + target + ":" +
-        candidate.target_scope();
+        candidate.target_scope() + ':' + support_group_key(candidate);
     allowed_seed_groups[compatibility_group].push_back(candidate.candidate_id());
     seed.AddMember("trigger_pattern", JsonValue(candidate.trigger_pattern().c_str(), allocator),
                    allocator);
@@ -1045,6 +1122,7 @@ make_meta_request(const google::protobuf::RepeatedPtrField<ep::EvolutionCandidat
                    allocator);
     seed.AddMember("proposed_change", JsonValue(candidate.proposed_change().c_str(), allocator),
                    allocator);
+    add_support_contract_json(&seed, candidate, allocator);
     // 支持门槛和来源在本地管理，模型只负责内容归并。
     seed.AddMember("contradictions", candidate.contradiction_count(), allocator);
     for (const auto &event_id : candidate_event_ids(candidate)) {
@@ -1182,7 +1260,8 @@ validate_meta_response(const RawModelResponse &response,
     const std::string scope = selected.front()->target_scope();
     if (!std::all_of(selected.begin(), selected.end(), [&](const auto *seed) {
           return seed->target_type() == target && seed->target_scope() == scope &&
-                 same_experience_contract(*seed, *selected.front());
+                 same_experience_contract(*seed, *selected.front()) &&
+                 support_contracts_compatible(*seed, *selected.front());
         })) {
       output.error_code = "incompatible_seed_group";
       return output;
@@ -1469,11 +1548,14 @@ std::string candidate_content_fingerprint(const ep::EvolutionCandidate &candidat
 
 // 组合经验作用域、目标与规范内容，形成跨批次比较的语义身份。
 std::string semantic_identity_key(const ep::EvolutionCandidate &candidate) {
-  return std::string(is_scoped_experience(candidate) ? "scoped-experience-v1|" : "") +
+  std::string key = std::string(is_scoped_experience(candidate) ? "scoped-experience-v1|" : "") +
          std::to_string(static_cast<int>(candidate.target_type())) + '|' +
          normalize_text(candidate.target_scope()) + '|' +
          normalize_text(candidate.trigger_pattern()) + '|' +
          normalize_text(candidate.proposed_change());
+  const auto contract = observed_support_contract(candidate);
+  if (!contract.empty()) key += "|support:" + contract;
+  return key;
 }
 
 // 构造轻量字节片段集合，供词面召回使用，不当作完整语义判断。
@@ -1528,7 +1610,8 @@ bool structurally_compatible(const ep::EvolutionCandidate &incoming,
                              const ep::EvolutionCandidate &existing) {
   return incoming.target_type() == existing.target_type() &&
          same_experience_contract(incoming, existing) &&
-         normalize_text(incoming.target_scope()) == normalize_text(existing.target_scope());
+         normalize_text(incoming.target_scope()) == normalize_text(existing.target_scope()) &&
+         support_contracts_compatible(incoming, existing);
 }
 
 // 校验候选身份和作用域，避免将来源不完整的经验写入正式记忆。
@@ -1749,6 +1832,7 @@ JsonValue candidate_summary_json(const ep::EvolutionCandidate &candidate, Alloca
   output.AddMember("proposed_change", JsonValue(candidate.proposed_change().c_str(), allocator),
                    allocator);
   output.AddMember("scoped_contract", candidate.generator_version() == kScopedExperienceGeneratorVersion, allocator);
+  add_support_contract_json(&output, candidate, allocator);
   if (!candidate.error_class().empty())
     output.AddMember("error_class", JsonValue(candidate.error_class().c_str(), allocator),
                      allocator);
@@ -2141,10 +2225,11 @@ EvolutionBatchOutput TrajectoryEvolutionPipeline::synthesize_reports(
         throw EvaluationError("meta reflection requires prompt templates");
       }
       using CandidateGroup = google::protobuf::RepeatedPtrField<ep::EvolutionCandidate>;
-      std::map<std::tuple<int, std::string, bool>, CandidateGroup> seed_groups;
+      std::map<std::tuple<int, std::string, bool, std::string>, CandidateGroup> seed_groups;
       for (const auto &candidate : batch->candidates()) {
         const auto key = std::make_tuple(static_cast<int>(candidate.target_type()),
-                                         candidate.target_scope(), is_scoped_experience(candidate));
+                                         candidate.target_scope(), is_scoped_experience(candidate),
+                                         support_group_key(candidate));
         seed_groups[key].Add()->CopyFrom(candidate);
       }
 
@@ -2638,7 +2723,9 @@ run_memory_match(const ep::EvolutionCandidate &incoming, const ep::EvolutionMemo
                                      [&](const auto &entry) { return entry.memory_id() == output.memory_id; });
     if (match == memory.entries().end() || !structurally_compatible(incoming, match->candidate())) {
       output.valid = false;
-      output.error_code = "cross_contract_duplicate";
+      output.error_code = match != memory.entries().end() &&
+                                  !support_contracts_compatible(incoming, match->candidate())
+                              ? "support_contract_mismatch" : "cross_contract_duplicate";
     }
   }
   if (output.valid && output.relation != ep::MEMORY_MATCH_RELATION_UNRESOLVED &&
@@ -2666,7 +2753,8 @@ run_memory_match(const ep::EvolutionCandidate &incoming, const ep::EvolutionMemo
       // that response valid, so keep the candidate and finish this review in
       // the terminal unresolved state instead of spending model calls on an
       // unproductive repair loop.
-      const bool terminal_protocol_error = output.error_code == "cross_contract_duplicate";
+      const bool terminal_protocol_error = output.error_code == "cross_contract_duplicate" ||
+                                          output.error_code == "support_contract_mismatch";
       (*record)["state"] = terminal_protocol_error ||
                                      record->num("attempts", 0) >= context->options->memory_review_max_attempts
                                  ? "unresolved" : "pending";

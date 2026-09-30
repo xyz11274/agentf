@@ -237,6 +237,16 @@ legacy::AnalysisReport analyze_trace(const ValidatedTrace &validated) {
     legacy::ToolActionSummary action;
     action.tool_call_id = event.action_id();
     action.tool_name = event.operation();
+    if (event.has_input() && event.input().has_struct_value()) {
+      const auto &input_fields = event.input().struct_value().fields();
+      const auto action_field = input_fields.find("action");
+      if (action_field == input_fields.end()) {
+        action.action_contract_observed = true;
+      } else if (action_field->second.kind_case() == google::protobuf::Value::kStringValue) {
+        action.action_name = action_field->second.string_value();
+        action.action_contract_observed = true;
+      }
+    }
     action.status = end.status();
     action.arguments_fingerprint = event.has_input() ? fingerprint(event.input()) : "";
     action.result_fingerprint = end.has_output() ? fingerprint(end.output()) : "";

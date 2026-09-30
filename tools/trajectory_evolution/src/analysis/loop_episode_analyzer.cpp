@@ -1624,6 +1624,8 @@ JsonValue tool_action_json(const ToolActionSummary &tool, Allocator &allocator) 
   output.AddMember("retryability", make_string(tool.retryability, allocator), allocator);
   output.AddMember("call_event_id", make_string(tool.call_event_id, allocator), allocator);
   output.AddMember("result_event_id", make_string(tool.result_event_id, allocator), allocator);
+  output.AddMember("action_name", make_string(tool.action_name, allocator), allocator);
+  output.AddMember("action_contract_observed", tool.action_contract_observed, allocator);
   return output;
 }
 

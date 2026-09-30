@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <google/protobuf/util/message_differencer.h>
 #include <fnmatch.h>
 #include <map>
 #include <mutex>
@@ -1033,7 +1034,7 @@ struct Evaluator {
     bounded(judge, "max_batch_turns", 4, 1, 33);
     bounded(judge, "max_evidence_lookups", 2, 0, 4);
     bounded(judge, "evidence_field_bytes", 2048, 256, 65536);
-    bounded(judge, "answer_field_bytes", 4096, 256, 65536);
+    bounded(judge, "answer_field_bytes", 32768, 256, 65536);
     judge_prompt = read_file(resolve(judge.str("prompt")), 262144);
     if (judge.str("assessment_mode", "legacy") == "objectives")
       judge_prompt +=
@@ -1088,6 +1089,7 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
     if (judge.str("assessment_mode", "legacy") == "objectives")
       model_sources += "\njudge-summary-consistency-v1";
     model_sources += "\nturn-acceptance-v2:judge-contract-v3:action-requests-v1";
+    model_sources += "\nfinal-answer-visibility-v2";
     // 一致性核验正文参与身份；启用或替换后不能静默复用旧口径成绩。
     if (!consistency_prompt.empty())
       model_sources += "\njudge-consistency-v1\n" + consistency_prompt;
@@ -1304,7 +1306,7 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
     if (!scope.null())
       integration::bound_judge_payload(
           visible, "", config["judge"].num("evidence_field_bytes", 2048),
-          config["judge"].num("answer_field_bytes", 4096));
+          config["judge"].num("answer_field_bytes", 32768));
     const auto original = visible.dump();
     view.Parse(original.data(), original.size());
     view.RemoveMember("intent_observations");
@@ -1569,7 +1571,7 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
                    {"response_bytes", body.size()}};
           throw Error("invalid_json");
         }
-        const auto value = Json::convert(document);
+        auto value = Json::convert(document);
         safe(value);
         if (!scope.null() && value.has("evidence_requests")) {
           integration::keys(value, {"evidence_requests"});
@@ -1612,8 +1614,8 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
                           pointer(evidence, integration::original_judge_path(
                                                 ref.text(), model_evidence, evidence)),
                       "evaluation_goal_evidence_invalid");
-          // 预览不足时模型可能直接给出未知而不申请补查。共享原有补查预算，
-          // 只补当前未知目标的答案或工具结果；不重复主 Agent，不自动改判通过。
+          // 预览不足时模型也可能直接判通过或失败。共享原有补查预算，
+          // 补齐当前目标答案，工具结果仍仅对未知目标补查；不重复主 Agent。
           bool lookup_budget = false;
           if (lookups < max_lookups) {
             std::lock_guard<std::mutex> lock(judge_mutex);
@@ -1627,8 +1629,21 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
             if (std::none_of(lookup_allowed.items().begin(), lookup_allowed.items().end(),
                              [](const Json &p) { return p.text() == "/context_evidence"; }))
               lookup_allowed.push("/context_evidence");
-            const auto references = integration::result_previews_for_unknown_goals(
+            // A confident verdict does not prove that a clipped answer was
+            // inspected. Complete the user-visible answer before accepting
+            // passed/failed as well as uncertain; tool-only lookups retain the
+            // existing unknown-goal policy and bounded request count.
+            auto references = integration::answer_previews_for_unknown_goals(
+                model_evidence, scope, rows, true);
+            const auto unknown_references = integration::result_previews_for_unknown_goals(
                 model_evidence, evidence, scope, rows);
+            for (const auto &ref : unknown_references.items()) {
+              if (references.items().size() >= 4)
+                break;
+              if (std::none_of(references.items().begin(), references.items().end(),
+                               [&](const Json &r) { return r.str("path") == ref.str("path"); }))
+                references.push(ref);
+            }
             for (const auto &ref : references.items()) {
               const auto path = ref.str("path");
               if (std::any_of(resolved.items().begin(), resolved.items().end(),
@@ -1657,6 +1672,35 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
               allowed = std::move(lookup_allowed);
               continue;
             }
+          }
+          // If the answer cannot fit or lookup/model-call budget is exhausted,
+          // unseen text is unknown evidence, not a missing business outcome.
+          // Keep normal protocol/loop validation below; only goals and turns
+          // whose own answer remains clipped lose a definite verdict.
+          std::set<std::size_t> unseen_turns;
+          for (std::size_t i = 0; i < rows.items().size(); ++i) {
+            auto one_scope = scope;
+            one_scope["goals"] = Json::Array{scope["goals"].items()[i]};
+            const Json one_row = Json::Array{rows.items()[i]};
+            if (integration::answer_previews_for_unknown_goals(
+                    model_evidence, one_scope, one_row, true).items().empty())
+              continue;
+            auto &goal = value["goal_verdicts"].items()[i];
+            goal["status"] = "uncertain";
+            goal["reason"] = "实际用户可见答复尚未完整进入裁判；已省略内容不能视为未完成。";
+            unseen_turns.insert(scope["goals"].items()[i]["turn"].integer() -
+                                scope["turn_begin"].integer() + 1);
+          }
+          if (!unseen_turns.empty()) {
+            for (auto &turn : value["turn_verdicts"].items())
+              if (unseen_turns.count(turn["turn"].integer())) {
+                turn["verdict"] = "uncertain";
+                turn["reason"] = "该轮完整答复超出当前证据预算，不能根据预览作确定判分。";
+              }
+            value["verdict"] = "uncertain";
+            value["reason"] = "完整答复仍有不可见部分，保留未知并等待补全证据。";
+            evidence["answer_visibility"] = Json{{"status", "incomplete"},
+                                                   {"affected_turns", unseen_turns.size()}};
           }
         } else if (!per_turn.null()) {
           if (review_loops)
@@ -2344,7 +2388,9 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
                 "evaluation_run_limit");
         std::vector<ValidatedTrace> validations;
         std::set<std::string> execution_ids;
-        Json outputs = Json::Array{}, run_ids = Json::Array{};
+        Json run_ids = Json::Array{};
+        google::protobuf::ListValue outputs;
+        const auto response_output = integration::proto<google::protobuf::Value>(response["output"]);
         std::string execution_status = "completed";
         for (const auto &trace : traces.items()) {
           auto validated = validate_trace(parse_trace_json(trace.dump()));
@@ -2373,19 +2419,26 @@ evidence 是本批实际执行证据，loop_reviews 每项的 evidence 绑定所
               const auto state = event.outcome().execution_status();
               if (!multiple) {
                 require(state == status, "evaluation_trace_outcome_mismatch");
-                require(integration::json(event.output()).dump() == response["output"].dump(),
+                require(google::protobuf::util::MessageDifferencer::Equals(
+                            event.output(), response_output),
                         "evaluation_trace_output_mismatch");
               }
               if (state == "cancelled" || (state == "failed" && execution_status == "completed"))
                 execution_status = state;
-              outputs.push(integration::json(event.output()));
+              *outputs.add_values() = event.output();
             }
           validations.push_back(std::move(validated));
         }
         if (multiple) {
           require(execution_status == status, "evaluation_trace_outcome_mismatch");
-          require(response["output"].dump() ==
-                      Json{{"turns", outputs}, {"final", outputs.items().back()}}.dump(),
+          // Compare both sides in the trace's native Value representation. A
+          // protobuf JSON round trip can change a double in the JSON parser.
+          google::protobuf::Value trace_output;
+          auto &fields = *trace_output.mutable_struct_value()->mutable_fields();
+          *fields["turns"].mutable_list_value() = outputs;
+          fields["final"] = outputs.values(outputs.values_size() - 1);
+          require(google::protobuf::util::MessageDifferencer::Equals(
+                      response_output, trace_output),
                   "evaluation_trace_output_mismatch");
           evidence["traces"] = traces;
           evidence["execution_run_ids"] = run_ids;

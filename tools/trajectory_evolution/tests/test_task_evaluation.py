@@ -274,6 +274,21 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     status = "uncertain" if not full_answer or Provider.behavior in ("goal_preview_unknown", "goal_tool_preview_unknown") else (
                         "failed" if Provider.behavior in ("goal_preview_failed", "goal_tool_preview_failed") else "passed"
                     )
+                if Provider.behavior.startswith("goal_answer_visibility"):
+                    # 与正式模型一样只读取本次请求实际给出的答案，不能偷看原始轨迹。
+                    offset = int(goal["turn"] - scope["turn_begin"])
+                    answer = packet["evidence"]["output"]["turns"][offset]["answer"]
+                    path = f"/output/turns/{offset}/answer"
+                    for ref in packet["evidence"].get("context_evidence", []):
+                        if ref.get("source") == "current" and ref.get("path") == path:
+                            answer = ref.get("value")
+                    required = ("真正缺失的验收证据" if Provider.behavior.endswith("_missing")
+                                else "中段验收证据完整")
+                    if isinstance(answer, str):
+                        status = "passed" if required in answer else "failed"
+                    else:
+                        # 故意对不完整预览作确定判定，验证宿主会补查而非直接采信。
+                        status = "passed" if Provider.behavior.endswith("_passed") else "failed"
                 if (
                     Provider.behavior in ("goal_recovery", "goal_critical")
                     and scope["turn_end"] == 1
@@ -644,19 +659,21 @@ class TrialTests(unittest.TestCase):
         self.config["checks"] = {}
 
     def test_objective_default_answer_budget_is_independent_of_tool_preview(self):
-        """未设置答复预算时采用已声明的 4096 字节默认值，不跟随工具预览缩到 256 字节。"""
+        """默认 32768 字节答复预算保留中段事实，不跟随工具预览缩到 256 字节。"""
         self.objective_mode(turns=1)
         self.entry_mode("--long-answer")
         self.config["judge"].update(evidence_field_bytes=256)
         self.assertNotIn("answer_field_bytes", self.config["judge"])
-        self.evaluate()
+        Provider.behavior = "goal_answer_visibility"
+        report = self.evaluate()
         packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
         answer = packet["evidence"]["output"]["turns"][0]["answer"]
-        self.assertTrue(answer["preview_only"])
-        self.assertGreater(answer["original_bytes"], 4096)
-        self.assertGreaterEqual(len(answer["preview"].encode()), 4090)
-        self.assertLessEqual(len(answer["preview"].encode()), 4096)
-        self.assertEqual(answer["path"], "/output/turns/0/answer")
+        self.assertIsInstance(answer, str)
+        self.assertIn("中段验收证据完整", answer)
+        self.assertGreater(len(answer.encode()), 4096)
+        self.assertLessEqual(len(answer.encode()), 32768)
+        self.assertEqual(report["summary"]["model_calls"], 1)
+        self.assertNotIn("context_evidence", packet["evidence"])
 
     def test_objective_repeated_final_answer_is_shared_without_losing_turns(self):
         """聚合输出只共享完全相同的值；还原后每轮答案、原始轨迹和最终答复保持一致。"""
@@ -1274,7 +1291,7 @@ class TrialTests(unittest.TestCase):
     def test_objective_unknown_preview_uses_bounded_answer_lookup(self):
         """补查只提供事实；通过、失败、持续未知及预算不足均须保持真实判定。"""
         self.objective_mode(turns=1)
-        self.config["judge"]["evidence_field_bytes"] = 256
+        self.config["judge"].update(evidence_field_bytes=256, answer_field_bytes=4096)
         for name, behavior, flag, lookups, calls, verdict, code in (
             ("resolved", "goal_preview", "--long-answer", 2, 2, "passed", 0),
             ("failed", "goal_preview_failed", "--long-answer", 2, 2, "failed", 1),
@@ -1310,6 +1327,86 @@ class TrialTests(unittest.TestCase):
                         if e["kind"] == "run.end"]
                 self.assertEqual(len(ends), 1)
                 self.assertIn("中段验收证据完整", ends[0]["output"]["answer"])
+
+    def test_objective_confident_failed_preview_is_rechecked_against_full_answer(self):
+        """中段事实被裁剪时，即使首次裁判明确失败，也必须先补齐答案再判定。"""
+        self.objective_mode(turns=1, criteria=[dict(
+            id="middle", expected_behavior="答复必须包含中段验收证据完整。")])
+        self.entry_mode("--long-answer")
+        self.config["judge"].update(evidence_field_bytes=256, answer_field_bytes=1024)
+        Provider.behavior = "goal_answer_visibility"
+        report = self.evaluate()
+        self.assertEqual(report["summary"]["model_calls"], 2)
+        self.assertEqual(len(REQUESTS) - self.start_requests, 2)
+        packets = [json.loads(r["messages"][1]["content"])
+                   for r in REQUESTS[self.start_requests:]]
+        preview = packets[0]["evidence"]["output"]["turns"][0]["answer"]
+        self.assertTrue(preview["preview_only"])
+        self.assertNotIn("中段验收证据完整", preview["preview"])
+        self.assertNotIn("context_evidence", packets[0]["evidence"])
+        refs = packets[1]["evidence"]["context_evidence"]
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0]["path"], "/output/turns/0/answer")
+        self.assertIn("中段验收证据完整", refs[0]["value"])
+        trial = report["trials"][0]
+        self.assertEqual(trial["verdict"], "passed")
+        traces = trial["evidence"].get("traces") or [trial["evidence"]["trace"]]
+        ends = [e for t in traces for e in t["events"] if e["kind"] == "run.end"]
+        self.assertEqual(len(ends), 1)
+        self.assertEqual(refs[0]["value"], ends[0]["output"]["answer"])
+
+    def test_objective_full_answer_does_not_hide_a_real_missing_requirement(self):
+        """补齐答案只改变可见证据；原文仍没有要求的内容时继续判失败。"""
+        self.objective_mode(turns=1, criteria=[dict(
+            id="missing", expected_behavior="答复必须包含真正缺失的验收证据。")])
+        self.entry_mode("--long-answer")
+        self.config["judge"].update(evidence_field_bytes=256, answer_field_bytes=1024)
+        Provider.behavior = "goal_answer_visibility_missing"
+        report = self.evaluate(code=1)
+        self.assertEqual(report["summary"]["model_calls"], 2)
+        self.assertEqual(report["trials"][0]["verdict"], "failed")
+        packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
+        refs = packet["evidence"]["context_evidence"]
+        self.assertEqual(len(refs), 1)
+        self.assertNotIn("真正缺失的验收证据", refs[0]["value"])
+        self.assertIn("中段验收证据完整", refs[0]["value"])
+
+    def test_objective_incomplete_answer_cannot_keep_definite_verdict_without_lookup(self):
+        """补查预算耗尽不能采信基于不完整答案的确定通过或失败。"""
+        self.objective_mode(turns=1)
+        self.config["judge"].update(evidence_field_bytes=256, answer_field_bytes=1024)
+        for initial in ("failed", "passed"):
+            for budget, flag, lookups, model_calls in (
+                ("no-lookup", "--long-answer", 0, 80),
+                ("call-budget", "--long-answer", 2, 1),
+                ("oversize", "--huge-answer", 2, 80),
+            ):
+                with self.subTest(initial=initial, budget=budget):
+                    self.entry_mode(flag)
+                    self.config["judge"].update(
+                        max_evidence_lookups=lookups, max_model_calls=model_calls)
+                    Provider.behavior = "goal_answer_visibility_" + initial
+                    start = len(REQUESTS)
+                    report = self.evaluate(code=3, name=f"{initial}-{budget}")
+                    self.assertEqual(report["trials"][0]["verdict"], "uncertain")
+                    self.assertEqual(report["summary"]["model_calls"], 1)
+                    self.assertEqual(len(REQUESTS) - start, 1)
+                    packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
+                    self.assertTrue(packet["evidence"]["output"]["turns"][0]["answer"]["preview_only"])
+                    self.assertNotIn("context_evidence", packet["evidence"])
+
+    def test_objective_short_answer_failure_does_not_add_model_calls(self):
+        """短答案已完整可见时，真实失败仍只需要一次裁判调用。"""
+        self.objective_mode(turns=1)
+        self.entry_mode()
+        Provider.behavior = "goal_answer_visibility"
+        report = self.evaluate(code=1)
+        self.assertEqual(report["trials"][0]["verdict"], "failed")
+        self.assertEqual(report["summary"]["model_calls"], 1)
+        self.assertEqual(len(REQUESTS) - self.start_requests, 1)
+        packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
+        self.assertNotIn("context_evidence", packet["evidence"])
+        self.assertIsInstance(packet["evidence"]["output"]["turns"][0]["answer"], str)
 
     # 新评分模式仍兼容两种 loop 裁判响应，总观测轮数不能取“无效轮次列表”的长度。
     def test_objective_loop_review_keeps_actual_observation_count(self):
@@ -4361,6 +4458,58 @@ class TrialTests(unittest.TestCase):
         for mode in ("good", "trace_wrong_id", "trace_open"):
             self.mode(mode)
             self.evaluate(code=3, name=mode)
+
+    def test_trace_output_fraction_precision_and_exact_mismatch(self):
+        """数值不经单边 JSON 往返；相邻 double 和结构差异仍必须拒绝。"""
+        host = self.root / "fraction_host.py"
+        source = (SOURCE / "tests/evaluation_host.py").read_text()
+        source = source.replace(
+            "print(json.dumps(response, ensure_ascii=False))",
+            """import copy
+import math
+number = float(sys.argv[2])
+output = {"function_f1": number, "nested": [None, True, {"label": "ok"}]}
+response["trace"]["events"][-1]["output"] = copy.deepcopy(output)
+change = sys.argv[3]
+if change == "adjacent":
+    output["function_f1"] = math.nextafter(number, math.inf)
+elif change == "missing":
+    del output["nested"]
+elif change == "type":
+    output["nested"][1] = 1
+response["output"] = output
+print(json.dumps(response, ensure_ascii=False))""",
+        )
+        host.write_text(source)
+        self.config["require_trace"] = True
+        for index, number in enumerate((0.4166666666666667, 0.7272727272727273)):
+            for change in ("same", "adjacent", "missing", "type"):
+                with self.subTest(number=number, change=change):
+                    self.config["variants"][0]["command"] = [
+                        sys.executable, "-B", str(host), "trace", str(number), change]
+                    report = self.evaluate(code=0 if change == "same" else 3,
+                                           name=f"fraction-{index}-{change}")
+                    trial = report["trials"][0]
+                    if change == "same":
+                        self.assertEqual(trial["verdict"], "passed", trial)
+                    else:
+                        self.assertEqual(trial["error_code"],
+                                         "evaluation_trace_output_mismatch")
+        self.assertEqual(len(REQUESTS), self.start_requests)
+
+    def test_entry_multiturn_fraction_output_precision(self):
+        """真实多轮采集保留两个 BFCL 触发值，不调用模型。"""
+        self.entry_mode("--fraction-output")
+        report = self.evaluate()
+        trial = report["trials"][0]
+        self.assertEqual(trial["verdict"], "passed", trial)
+        evidence = trial["evidence"]
+        self.assertEqual(len(evidence["traces"]), 2)
+        self.assertEqual(len(evidence["output"]["turns"]), 2)
+        for turn, expected in zip(evidence["output"]["turns"],
+                                  (0.4166666666666667, 0.7272727272727273)):
+            self.assertAlmostEqual(turn["function_f1"], expected)
+        self.assertEqual(len(REQUESTS), self.start_requests)
 
     # 回归用例：test_execution_status_does_not_replace_business_acceptance。
     # 关键断言：self.assertEqual(report["trials"][0]["execution_status"], "failed")；此处只验证测试构造的场景。

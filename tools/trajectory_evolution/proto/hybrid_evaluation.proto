@@ -76,6 +76,16 @@ message ToolEvidence {
   string result_fingerprint = 7;
   string call_event_id = 8;
   string result_event_id = 9;
+  string action_name = 10;
+  bool action_contract_observed = 11;
+}
+
+message ToolActionContract {
+  string tool_name = 1;
+  string action_name = 2;
+  string status = 3;
+  string error_class = 4;
+  string retryability = 5;
 }
 
 message EvaluationEvidence {
@@ -342,6 +352,7 @@ message CandidateEvidence {
   repeated string evidence_event_ids = 7;
   SemanticVerdict verdict = 8;
   double confidence = 9;
+  repeated ToolActionContract tool_actions = 10;
 }
 
 message EvolutionCandidate {

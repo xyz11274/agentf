@@ -35,21 +35,22 @@ import time
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
-OUTPUT = ROOT / "trace_output/bfcl-v3"
+from bfcl_paths import (OUTPUT, SOURCE, TRAINING_DATASET, COLDSTART_DEPLOYMENT,
+                        SPLIT_ID, LOCK_TAG)
+
 TRAINING = OUTPUT / "training"
 GEPA = OUTPUT / "gepa"
 PUBLISHED = OUTPUT / "published"
 # Dataset and immutable deployment inputs live beside this experiment code,
 # never inside trace_output.  trace_output is reserved for regenerable
 # evidence, checkpoints, memory and publication receipts.
-DATASET = HERE / "datasets/training-reviewed"
-DEPLOYMENT_ROOT = HERE / "coldstart-deployment"
+DATASET = TRAINING_DATASET
+DEPLOYMENT_ROOT = COLDSTART_DEPLOYMENT
 DEPLOYMENT = DEPLOYMENT_ROOT / "runtime"
 PLAN = DEPLOYMENT_ROOT / "plan.json"
 STATUS = TRAINING / "status.json"
-FULL_LOCK = OUTPUT.parent / ".bfcl-v3-full.lock"
+FULL_LOCK = OUTPUT.parent / ("." + LOCK_TAG + "-full.lock")
 BINARY = ROOT / "build/trajectory-evolution/trajectory_evolution"
-SOURCE = HERE / "datasets/source"
 HOST = HERE / "bfcl_v3_host.py"
 
 sys.path.insert(0, str(HERE))
@@ -116,11 +117,17 @@ def environment(*, require_model: bool = True) -> dict[str, str]:
     env = os.environ.copy()
     _load_env_file(ROOT / "examples/agent/business-simulator/.env", env)
     if env.get("AF_LLM_API_KEY"):
-        env.setdefault("OPENAI_API_KEY", env["AF_LLM_API_KEY"])
+        env["OPENAI_API_KEY"] = env["AF_LLM_API_KEY"]
     if env.get("AF_LLM_MODEL"):
-        env.setdefault("OPENAI_MODEL", env["AF_LLM_MODEL"])
+        env["OPENAI_MODEL"] = env["AF_LLM_MODEL"]
     if env.get("AF_LLM_BASE_URL"):
-        env.setdefault("OPENAI_BASE_URL", env["AF_LLM_BASE_URL"])
+        env["OPENAI_BASE_URL"] = env["AF_LLM_BASE_URL"]
+    for proxy_name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
+                       "all_proxy", "BUSINESS_BROWSER_PROXY"):
+        env.pop(proxy_name, None)
+    env["NO_PROXY"] = env["no_proxy"] = "*"
+    if env.get("AF_LLM_BASE_URL"):
+        env["TRAJECTORY_MODEL_ENDPOINT_OVERRIDE"] = env["AF_LLM_BASE_URL"].rstrip("/") + "/chat/completions"
     if require_model and not all(env.get(name) for name in
                                  ("AF_LLM_API_KEY", "AF_LLM_MODEL", "AF_LLM_BASE_URL")):
         raise RuntimeError("bfcl_model_environment_missing")
@@ -233,17 +240,20 @@ def _evaluation_config(task_ids: list[str], revision: str, parallelism: int) -> 
 
 
 def prepare(*, clean: bool) -> dict:
+    if clean and SPLIT_ID:
+        raise RuntimeError("bfcl_seen_split_use_start_or_resume")
     if clean:
         _remove_exact(OUTPUT, ROOT / "trace_output/bfcl-v3")
         _remove_exact(DATASET, HERE / "datasets/training-reviewed")
         _remove_exact(DEPLOYMENT_ROOT, HERE / "coldstart-deployment")
     if PLAN.is_file() and DATASET.is_dir() and STATUS.is_file():
         return read(PLAN)
-    if OUTPUT.exists() or DATASET.exists() or DEPLOYMENT_ROOT.exists():
+    if OUTPUT.exists() or (DATASET.exists() and not SPLIT_ID) or DEPLOYMENT_ROOT.exists():
         raise RuntimeError("bfcl_partial_prepare_requires_fresh_or_resume")
     env = environment()
     TRAINING.mkdir(parents=True)
-    materialize(DATASET)
+    if not DATASET.is_dir():
+        materialize(DATASET, source=SOURCE)
     subprocess.run([str(BINARY), "dataset", "check", str(DATASET), "--require-reviewed"],
                    cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
     DEPLOYMENT.mkdir(parents=True)
@@ -256,6 +266,7 @@ def prepare(*, clean: bool) -> dict:
         thinking_mode="disabled", timeout_ms=120000, max_retries=4,
         max_output_tokens=16384, sessionlog_max_output_tokens=16384,
     )
+    runtime["evolution"]["memory_review_parallelism"] = 16
     save(DEPLOYMENT / "runtime.json", runtime)
     service = read(ROOT / "tools/trajectory_evolution/config/boundary-service.json")
     service.update(application_id="bfcl-v3", data_dir=str((TRAINING / "evolution").relative_to(ROOT)),
@@ -302,6 +313,8 @@ def prepare(*, clean: bool) -> dict:
                         "config": str(path.relative_to(ROOT))})
     plan = {
         "schema_version": 1,
+        "split_id": SPLIT_ID or "legacy",
+        "source": str(SOURCE.relative_to(ROOT)),
         "mode": "BFCL v3 train400 -> memory -> GEPA search150/selection50 -> holdout200",
         "dataset": str(DATASET.relative_to(ROOT)),
         "source_zip_sha256": read(SOURCE / "manifest.json")["source_zip_sha256"],
@@ -817,6 +830,10 @@ def _resume_gepa_or_start() -> dict:
     if not bfcl_gepa.PLAN.is_file():
         if bfcl_gepa.STATUS.is_file() or bfcl_gepa.WORKSPACE.exists():
             raise RuntimeError("gepa_resume_plan_missing")
+        if SPLIT_ID:
+            with bfcl_gepa.lifecycle_lock():
+                bfcl_gepa.prepare(**bfcl_gepa.FRESH_SEARCH_LIMITS)
+                return bfcl_gepa.run_to_publication()
         return bfcl_gepa.fresh()
     runner = read(bfcl_gepa.STATUS) if bfcl_gepa.STATUS.is_file() else {}
     if runner.get("status") == "published":
@@ -834,6 +851,7 @@ def _resume_gepa_or_start() -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--start", action="store_true", help="Start isolated seen split, or resume its existing checkpoint")
     group.add_argument("--fresh", action="store_true")
     group.add_argument("--resume", action="store_true")
     group.add_argument("--status", action="store_true")
@@ -844,7 +862,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         print(json.dumps(check(), ensure_ascii=False, indent=2)); return 0
     with full_lifecycle_lock():
-        if args.fresh:
+        if args.start:
+            if not SPLIT_ID:
+                raise RuntimeError("bfcl_start_requires_isolated_split")
+            if not (PLAN.is_file() and STATUS.is_file()):
+                prepare(clean=False)
+        elif args.fresh:
             prepare(clean=True)
         elif not (PLAN.is_file() and STATUS.is_file() and DATASET.is_dir()):
             raise RuntimeError("resume_checkpoint_missing")

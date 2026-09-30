@@ -63,6 +63,8 @@ ep::HybridEvaluationReport make_rule_report(const std::string &user,
   auto *tool = packet->add_tools();
   tool->set_tool_call_id("call-" + episode);
   tool->set_tool_name("generate_video");
+  tool->set_action_contract_observed(true);
+  tool->set_action_name("generate");
   tool->set_error_class("unsupported_model");
   tool->set_retryability("non_retryable");
   tool->set_call_event_id("event-" + episode);
@@ -1782,12 +1784,114 @@ void test_memory_review_commit_recovery_applies_cached_decisions() {
     expect(entry.relations_size() > 0, "cached completed work skipped uncommitted relationship");
 }
 
+ep::HybridEvaluationReport typed_support_report(const std::string &id,
+                                                const std::string &tool_name,
+                                                const std::string &action_name,
+                                                const std::string &trigger,
+                                                const std::string &proposal) {
+  auto report = make_reflection_report("training", "conversation-" + id, "run-" + id,
+                                       "episode-" + id, proposal);
+  auto *packet = report.mutable_assessments(0)->mutable_evidence();
+  packet->set_scope("agent:business-simulator/actor:default");
+  packet->set_action(tool_name);
+  auto *tool = packet->mutable_tools(0);
+  tool->set_tool_name(tool_name);
+  tool->set_action_name(action_name);
+  tool->set_action_contract_observed(true);
+  tool->set_status("completed");
+  tool->clear_error_class();
+  tool->clear_retryability();
+  auto *advice = report.mutable_reflection()->add_experience_details();
+  advice->set_target_scope(packet->scope());
+  advice->set_trigger_pattern(trigger);
+  advice->set_proposed_change(proposal);
+  advice->add_evidence_event_ids(tool->call_event_id());
+  return report;
+}
+
+void test_typed_support_contracts_preserve_semantic_merging() {
+  auto detail = typed_support_report("detail", "sim_movie_query", "detail",
+      "电影详情查询已返回完整结果时", "基于已返回详情直接回复，避免重复补查。");
+  auto same_action = typed_support_report("same", "sim_movie_query", "detail",
+      "通过详情接口查到足够信息之后", "已有信息足够回答时结束查询并汇总。");
+  auto recommend = typed_support_report("recommend", "sim_movie_query", "recommend",
+      "电影推荐已返回所需列表时", "已有推荐结果足够时直接回复，不再重复查询。");
+  auto health = typed_support_report("health", "sim_health_advice", "reminder_query",
+      "提醒列表完整返回时", "直接报告提醒列表，不再重复查询。");
+  trajectory::EvolutionOptions options;
+  options.enable_meta_reflection = true;
+  auto adapter = std::make_shared<MetaAdapter>();
+  trajectory::TrajectoryEvolutionPipeline meta({}, options, adapter);
+  const auto positive = meta.synthesize_reports({detail, same_action});
+  expect(adapter->calls == 1 && positive.report.candidates_size() == 1 &&
+             positive.report.candidates(0).support_dialogue_count() == 2,
+         "same actual tool/action with different wording must retain semantic aggregation");
+  expect(positive.report.candidates(0).support_evidence(0).tool_actions_size() == 1,
+         "typed observed action was not persisted with candidate evidence");
+  for (const auto *other : {&recommend, &health}) {
+    const auto before = adapter->calls;
+    const auto negative = meta.synthesize_reports({detail, *other});
+    expect(adapter->calls == before && negative.report.candidates_size() == 2,
+           "specific tool/action mismatch reached semantic support merging");
+    for (const auto &candidate : negative.report.candidates())
+      expect(candidate.support_dialogue_count() == 1 &&
+                 candidate.status() == ep::EVOLUTION_CANDIDATE_STATUS_INSUFFICIENT_SUPPORT,
+             "incompatible event support was promoted to qualified evidence");
+  }
+
+  // Even identical advice text must not merge before the meta boundary when
+  // the source tool/action differs. RELATED may link them but never lend support.
+  auto identical = health;
+  identical.mutable_reflection()->mutable_experience_details(0)->set_trigger_pattern(
+      detail.reflection().experience_details(0).trigger_pattern());
+  identical.mutable_reflection()->mutable_experience_details(0)->set_proposed_change(
+      detail.reflection().experience_details(0).proposed_change());
+  trajectory::TrajectoryEvolutionPipeline synth;
+  expect(synth.synthesize_reports({detail, identical}).report.candidates_size() == 2,
+         "pre-meta candidate identity collapsed different source actions");
+
+  for (const auto &relation : {std::string("DUPLICATE"), std::string("RELATED")}) {
+    for (const auto *other : {&recommend, &health}) {
+      TempDirectory temporary;
+      const auto path = temporary.path() / "typed-memory.pb";
+      const auto first = synth.synthesize_reports({detail}).report;
+      const auto second = synth.synthesize_reports({*other}).report;
+      trajectory::TrajectoryEvolutionPipeline::update_memory_file(first, path);
+      auto matcher = std::make_shared<MemoryMatchAdapter>(relation);
+      trajectory::TrajectoryEvolutionPipeline curator({}, {}, matcher);
+      const auto result = curator.curate_memory_file(second, path);
+      const auto memory = trajectory::TrajectoryEvolutionPipeline::load_memory(path);
+      expect(memory.entries_size() == 2, "curator collapsed specific action contracts");
+      for (const auto &entry : memory.entries())
+        expect(entry.candidate().support_dialogue_count() == 1,
+               "DUPLICATE/RELATED borrowed support from a different actual action");
+      if (relation == "DUPLICATE") {
+        bool rejected = false;
+        for (const auto &decision : result.result.decisions())
+          rejected |= decision.error_code() == "support_contract_mismatch";
+        expect(rejected, "curator did not record the observed contract mismatch");
+      }
+    }
+  }
+  TempDirectory positive_memory;
+  const auto path = positive_memory.path() / "same-action.pb";
+  trajectory::TrajectoryEvolutionPipeline::update_memory_file(
+      synth.synthesize_reports({detail}).report, path);
+  auto matcher = std::make_shared<MemoryMatchAdapter>("DUPLICATE");
+  trajectory::TrajectoryEvolutionPipeline curator({}, {}, matcher);
+  (void)curator.curate_memory_file(synth.synthesize_reports({same_action}).report, path);
+  const auto memory = trajectory::TrajectoryEvolutionPipeline::load_memory(path);
+  expect(memory.entries_size() == 1 && memory.entries(0).candidate().support_dialogue_count() == 2,
+         "curator rejected true same-action support solely because wording differed");
+}
+
 } // 结束当前匿名命名空间。
 
 // 回归用例：main。
 // 重点核验字段或诊断：output_token_limit_reached、invalid_api_response；异常路径不能被当成成功。
 int main() {
   try {
+    test_typed_support_contracts_preserve_semantic_merging();
     test_persistent_memory_review_cache();
     test_memory_review_retry_is_item_scoped();
     test_parallel_memory_error_repair_is_bounded_and_cached();

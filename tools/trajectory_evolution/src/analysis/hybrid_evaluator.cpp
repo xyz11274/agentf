@@ -328,6 +328,9 @@ void parse_tools(const JsonValue &episode, const std::string &context,
     target->set_result_fingerprint(member_string(tool, "result_fingerprint", tool_context));
     target->set_call_event_id(member_string(tool, "call_event_id", tool_context));
     target->set_result_event_id(member_string(tool, "result_event_id", tool_context));
+    target->set_action_name(member_string(tool, "action_name", tool_context));
+    target->set_action_contract_observed(
+        member_bool(tool, "action_contract_observed", false, tool_context));
   }
 }
 

@@ -207,8 +207,9 @@ def _measured_intent_rows(trial: dict[str, Any]) -> list[dict[str, Any]]:
     for item in observations:
         if not isinstance(item, dict) or item.get("status") not in {"measured", "complete"}:
             continue
-        # Conditional and partial rows have no settled gold/dispatch pair.
-        if item.get("conditional") is True or item.get("complete") is not True:
+        # `complete` means all expected targets were matched, not that the
+        # observation is usable. Keep measured misses in the FN denominator.
+        if item.get("conditional") is True:
             continue
         turn = _number(item.get("turn"))
         if turn is None or turn < 1 or int(turn) != turn:
@@ -217,6 +218,10 @@ def _measured_intent_rows(trial: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(expected, list) or not expected or not isinstance(actual, list):
             continue
         if not all(isinstance(x, str) for x in expected + actual):
+            continue
+        # Match the native multi_intent_observation summary: single-target
+        # turns must not dilute failures in the multi-target sample.
+        if len(set(expected)) < 2:
             continue
         if not all(isinstance(item.get(key), list) for key in ("matched", "extra", "missing")):
             continue
