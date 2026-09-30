@@ -185,6 +185,8 @@ def receive(message):
         "state": {"value": message["initial"]["value"]},
         "turn": turn,
     }
+    if "--fraction-output" in sys.argv:
+        output["function_f1"] = (0.4166666666666667, 0.7272727272727273)[turn]
     # 单轮裁剪回归专用：有效证据位于中段，头尾预览都无法看见。
     if "--long-answer" in sys.argv or "--huge-answer" in sys.argv:
         padding = 45000 if "--huge-answer" in sys.argv else 9000

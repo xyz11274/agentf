@@ -22,7 +22,7 @@ import bfcl_experiment as _bfcl_experiment  # noqa: E402
 
 
 def snapshot():
-    data = _business_report.snapshot(ROOT / "trace_output/bfcl-v3")
+    data = _business_report.snapshot(_bfcl_experiment.OUTPUT)
     # The generic reporter intentionally ignores benchmark-specific terminal
     # output.  Merge the authoritative BFCL host aggregates so training
     # diagnostics expose intent/F1 and host loop counts without changing the
@@ -34,7 +34,7 @@ def snapshot():
     if host:
         training = data.setdefault("training", {})
         try:
-            plan = json.loads((HERE / "coldstart-deployment" / "plan.json").read_text())
+            plan = json.loads(_bfcl_experiment.PLAN.read_text())
             training["planned"] = int((plan.get("counts") or {}).get("train", 400))
         except Exception:
             training["planned"] = 400
@@ -70,6 +70,8 @@ def markdown(data: dict) -> str:
         rows = [
             ("已完成题数", f"{training.get('completed', 0)}/{training.get('planned', 0)}"),
             ("已生成训练报告", training.get("reports", 0)),
+            ("有效评分题数", training.get("host_metrics", {}).get("scored", "暂无")),
+            ("错误题数", training.get("host_metrics", {}).get("errored", "暂无")),
             ("质量（训练诊断）", fmt(metrics.get("quality"))),
             ("严格通过数", fmt(metrics.get("strict_passed"))),
             ("平均无效 loop", fmt(metrics.get("invalid_loop"))),
@@ -78,7 +80,9 @@ def markdown(data: dict) -> str:
             ("平均时延 ms", fmt(metrics.get("latency_ms"))),
             ("意图识别率", fmt(metrics.get("intent_recognition_rate"))),
             ("意图 F1", fmt(metrics.get("intent_f1"))),
-            ("L1/L2/L3 实际应用", f"{levels.get('L1', 0)}/{levels.get('L2', 0)}/{levels.get('L3', 0)}"),
+            ("L1 实际应用", levels.get("L1", 0)),
+            ("L2 实际应用", levels.get("L2", 0)),
+            ("L3 实际应用", levels.get("L3", 0)),
         ]
         lines = [
             f"时间：{time.strftime('%Y-%m-%d %H:%M:%S %z')}",

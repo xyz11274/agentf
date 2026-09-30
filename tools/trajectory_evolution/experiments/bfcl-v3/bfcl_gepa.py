@@ -27,24 +27,23 @@ from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
-OUTPUT = ROOT / "trace_output/bfcl-v3"
+from bfcl_paths import (OUTPUT, SOURCE, TRAINING_DATASET, GEPA_VIEW, GEPA_SOURCE,
+                        GEPA_DEPLOYMENT, COLDSTART_DEPLOYMENT, SPLIT_ID, LOCK_TAG)
+
 TRAINING = OUTPUT / "training"
 GEPA = OUTPUT / "gepa"
 PUBLISHED = OUTPUT / "published"
-SOURCE = HERE / "datasets/source"
 BINARY = ROOT / "build/trajectory-evolution/trajectory_evolution"
-TRAINING_DATASET = HERE / "datasets/training-reviewed"
-DATASET = HERE / "datasets/gepa-view.json"
-GEPA_SOURCE = HERE / "datasets/gepa-source"
+DATASET = GEPA_VIEW
 WORKSPACE = GEPA / "workspace"
 STAGE1 = TRAINING
 STAGE2 = GEPA
-DEPLOYMENT_ROOT = HERE / "gepa-deployment"
+DEPLOYMENT_ROOT = GEPA_DEPLOYMENT
 CONFIG = DEPLOYMENT_ROOT / "runtime"
 PLAN = DEPLOYMENT_ROOT / "plan.json"
 STATUS = GEPA / "status.json"
 USER = "bfcl-training"
-LIFECYCLE_LOCK = OUTPUT.parent / ".bfcl-v3-gepa.lock"
+LIFECYCLE_LOCK = OUTPUT.parent / ("." + LOCK_TAG + "-gepa.lock")
 
 # The copied lifecycle code below intentionally uses these two small adapters;
 # no business path or business state is imported or mutated.
@@ -99,9 +98,11 @@ coverage = _CoverageCompat()
 layout = _LayoutCompat()
 
 FRESH_SEARCH_LIMITS = {"timeout_hours": 50, "max_rounds": 50, "max_model_calls": 128, "max_trials": 2400, "patience": 0}
+if SPLIT_ID:
+    FRESH_SEARCH_LIMITS.update(max_rounds=30, max_model_calls=1024, max_trials=6500)
 FRESH_MAX_RECOVERIES = 16
 FRESH_RETRYABLE_JOB_STATES = {"error", "interrupted", "inconclusive", "cancelled", "pending", "running"}
-FRESH_INITIAL_CONFIG_ERRORS = {"gepa_config_invalid", "gepa_strategy_invalid", "gepa_improvement_invalid", "gepa_objective_invalid", "gepa_quality_weight_required", "gepa_configuration_path_required", "gepa_memory_feedback_identity_invalid"}
+FRESH_INITIAL_CONFIG_ERRORS = {"gepa_config_invalid", "gepa_strategy_invalid", "gepa_improvement_invalid", "gepa_objective_invalid", "gepa_quality_weight_required", "gepa_configuration_path_required", "gepa_memory_feedback_identity_invalid", "shared_state_invalid_or_limit"}
 
 
 _lifecycle_handle = None
@@ -378,7 +379,7 @@ def memory_hashes(source: Path) -> dict[str, str]:
 
 
 def _copy_runtime_base() -> None:
-    source = HERE / "coldstart-deployment" / "runtime"
+    source = COLDSTART_DEPLOYMENT / "runtime"
     if not source.is_dir():
         raise RuntimeError("bfcl_training_runtime_missing")
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
@@ -387,7 +388,7 @@ def _copy_runtime_base() -> None:
 
 def _host_command() -> list[str]:
     host = HERE / "bfcl_v3_host.py"
-    return ["python3", os.path.relpath(host, CONFIG), "--evolution-entry"]
+    return ["python3", "{config_dir}/" + os.path.relpath(host, CONFIG), "--evolution-entry"]
 
 
 def _agent_revision() -> str:
@@ -415,8 +416,9 @@ def _prepare_gepa_config(source: Path, dataset: dict, env: dict[str, str],
 
     service_file = CONFIG / "service.json"
     service = read(service_file)
+    # Shared experience IDs and state are bound to the training application.
+    # GEPA isolates its workspace, while retaining that authoritative identity.
     service.update(
-        application_id="bfcl-v3-gepa",
         data_dir=str(WORKSPACE.relative_to(ROOT)),
         memory_source_dir=str(source.relative_to(ROOT)),
         max_level="L3", auto_evaluate=True, auto_approve_experiences=True,
@@ -504,6 +506,8 @@ def _prepare_gepa_config(source: Path, dataset: dict, env: dict[str, str],
                       "token_weight": max(float(objective.get("token_weight", 0.05)), 0.1),
                       "latency_weight": max(float(objective.get("latency_weight", 0.0)), 0.15),
                       "invalid_loop_scale": 1, "token_scale": 10000, "latency_scale_ms": 60000})
+    if SPLIT_ID:
+        base_gepa.update(reflection_strategy="combee", max_feedback_trials=8)
     base_gepa.update(limits)
     for kind, path in reports.items():
         if path is not None:
@@ -545,6 +549,7 @@ def prepare(seed_report: Path | None = None, baseline_report: Path | None = None
     config_files = {str(path.relative_to(CONFIG)): digest(path) for path in CONFIG.rglob("*") if path.is_file()}
     plan = {
         "stage": "BFCL GEPA L3 search -> selection50 -> holdout200 -> publish",
+        "split_id": SPLIT_ID or "legacy",
         "source_memory": str(source.relative_to(ROOT)), "source_memory_hashes": memory,
         "source_dataset": str(GEPA_SOURCE.relative_to(ROOT)), "source_dataset_version": view["source_version"],
         "dataset_view": str(DATASET.relative_to(ROOT)), "dataset_view_hash": digest(DATASET),
@@ -931,9 +936,9 @@ def reset_fresh_outputs() -> None:
         raise RuntimeError("gepa_fresh_cleanup_scope_invalid")
     if GEPA.exists():
         shutil.rmtree(GEPA)
-    for path, expected in ((DATASET, HERE / "datasets/gepa-view.json"),
-                           (GEPA_SOURCE, HERE / "datasets/gepa-source"),
-                           (DEPLOYMENT_ROOT, HERE / "gepa-deployment")):
+    for path, expected in ((DATASET, GEPA_VIEW),
+                           (GEPA_SOURCE, GEPA_SOURCE),
+                           (DEPLOYMENT_ROOT, GEPA_DEPLOYMENT)):
         if path.is_symlink() or (path.exists() and path.resolve() != expected.resolve()):
             raise RuntimeError("gepa_fresh_cleanup_path_invalid:" + str(path))
         if path.is_dir():
@@ -1137,7 +1142,10 @@ def run(retry_job: str = "", timeout_hours: float | None = None,
                     state["error"] = "gepa_job_incomplete"
                 state["exit_code"] = child.returncode
     except Exception as exc:
-        state.update(status="failed", error=type(exc).__name__ + ":" + str(exc))
+        # A requested stop can reset an in-flight retry HTTP request. Preserve
+        # that stop so the recovery supervisor cannot immediately restart it.
+        state.update(status="paused" if stopped_by else "failed",
+                     error=type(exc).__name__ + ":" + str(exc))
         raise
     finally:
         try:
@@ -1159,6 +1167,21 @@ def run(retry_job: str = "", timeout_hours: float | None = None,
     if stopped_by:
         return 128 + stopped_by
     return 0 if state["status"] in ("candidate_ready", "finished") else 1
+
+
+def _record_best_observed(job_id: str) -> dict:
+    """Run the non-gating BFCL showcase and record its result separately."""
+    try:
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        from bfcl_best_strategy import build_best_observed
+        delivery = build_best_observed(job_id)
+    except Exception as exc:
+        delivery = {"status": "error", "reason": type(exc).__name__}
+    terminal = coverage.read(STATUS) if STATUS.is_file() else {}
+    terminal["best_observed_delivery"] = delivery
+    coverage.save(STATUS, terminal)
+    return delivery
 
 
 def run_to_publication(publisher=None,
@@ -1220,13 +1243,30 @@ def run_to_publication(publisher=None,
             or current.get("job_status") != "passed"
             or current.get("memory_feedback", {}).get("status") not in ("empty", "committed")
             or not current.get("published_in_offline_workspace")):
+        # Formal publication remains governed by the checks above. On an
+        # explicitly rejected terminal GEPA job, create a separate BFCL
+        # validation-frozen diagnostic bundle so architect review still has
+        # the best observed candidate and an L0 comparison. This path never
+        # promotes a candidate or changes the official gate.
+        if (current.get("job_id") == job_id and
+                current.get("job_status") in ("rejected", "passed")):
+            _record_best_observed(job_id)
         raise RuntimeError("gepa_fresh_candidate_not_publishable")
     if publisher is None:
         from bfcl_publish import publish as publisher
-    publication = publisher()
+    try:
+        publication = publisher()
+    except Exception:
+        # A gate-passing tree can still fail during publication. Preserve the
+        # official error while writing the independent diagnostic deliverable.
+        _record_best_observed(job_id)
+        raise
     runner.update(status="published", publication=publication,
                   published_at=datetime.now(timezone.utc).isoformat())
     coverage.save(STATUS, runner)
+    # Keep the 400-task architecture comparison available even when the
+    # formal gate succeeds; it never controls or rewrites that decision.
+    _record_best_observed(job_id)
     return publication
 
 

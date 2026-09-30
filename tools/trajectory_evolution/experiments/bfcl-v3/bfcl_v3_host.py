@@ -765,7 +765,7 @@ class Trial:
                     "decision": "allow", "policy_applied": False, "degraded": True}
 
     def _receipt_counts(self, run_context: dict | None) -> dict:
-        """Read authoritative applied receipts after the run is closed.
+        """Read authoritative settled receipts while the run is still open.
 
         ``point`` responses contain the action decision, while the verified
         application status is emitted by the boundary service when the host
@@ -850,18 +850,29 @@ class Trial:
                 "[BFCL available functions; use only these schemas]\n" + schema_hint +
                 "\n[BFCL request]\n" + self.messages[-1]["content"]
             )
-            model_input = {"messages": self.messages, "functions": functions,
-                           "function_call": "auto"}
+            # Only the system prompt is bound to the evolution boundary.
+            # BFCL schemas contain credential-shaped fields and private fixture
+            # values; they remain in the actual Agent request, not its trace.
+            model_input = {**public_input, "system": self.messages[0]["content"]}
             self.agent.set_bfcl_context(
                 self.row, turn=turn,
                 available_names=[f["name"] for f in functions],
                 live_model_name=self.live_model_name,
             )
             model_point = self._point({"phase": "before", "kind": "model", "context": self.run_context,
-                                       "name": "bfcl-model", "input": public_input})
+                                       "name": "bfcl-model", "input": model_input,
+                                       "binding": {"pointer": "/system", "mode": "text"}})
+            # L1-L3 need a real injection target and a matching receipt.
+            # Keep the dialogue's stored history free of repeatedly injected
+            # advice; only this request uses the prepared message list.
+            prepared_input = model_point.get("input", model_input)
+            if not isinstance(prepared_input, dict) or not isinstance(prepared_input.get("system"), str):
+                prepared_input = model_input
+            prepared_messages = [dict(message) for message in self.messages]
+            prepared_messages[0]["content"] = prepared_input["system"]
             try:
                 text, response = self.agent.ask(
-                    self.messages, user_id="bfcl-agent", dialogue_id=str(self.row["id"]),
+                    prepared_messages, user_id="bfcl-agent", dialogue_id=str(self.row["id"]),
                     turn=turn,
                 )
                 message, usage = {"content": text}, response.get("usage") or {}
@@ -882,7 +893,7 @@ class Trial:
                         pass
                 self.turn_outputs.append("")
                 self._point({"phase": "after", "kind": "model", "context": model_point.get("context", self.run_context),
-                             "executed": False, "input": public_input, "output": {"error_code": error_code}})
+                             "executed": False, "actual_input": prepared_input, "output": {"error_code": error_code}})
             else:
                 calls, content = decode_message(message)
                 skill_records = _logged_call_records(self.agent.call_log, turn, str(self.row["id"]))
@@ -904,7 +915,7 @@ class Trial:
                 # next BFCL turn must see the prior assistant/tool exchange.
                 self.messages.append({"role": "assistant", "content": content})
                 self._point({"phase": "after", "kind": "model", "context": model_point.get("context", self.run_context),
-                             "executed": True, "input": public_input, "output": _safe_text(content),
+                             "executed": True, "actual_input": prepared_input, "output": _safe_text(content),
                              "metrics": {"input_tokens": usage.get("prompt_tokens", usage.get("input_tokens", 0)),
                                          "output_tokens": usage.get("completion_tokens", usage.get("output_tokens", 0))}})
                 self.calls.append(calls)
@@ -951,17 +962,22 @@ class Trial:
                   "turn": turn, "bfcl_valid": None, "strict_passed": None}
         if final:
             output.update(self.finish())
-        final_run_context = self.run_context
-        self._point({"phase": "after", "kind": "run", "context": self.run_context,
-                     "output": _safe_obj(output),
-                     "business_status": "failed" if self.external_error_code else "succeeded"})
+        return self._close_turn(output, final=final)
+
+    def _close_turn(self, output: dict, *, final: bool) -> dict:
+        # Action/model/loop receipts are settled before this boundary.  The
+        # status endpoint also serves open runs; freeze these metrics before
+        # run.end so the returned output exactly matches the recorded output.
         if final:
-            receipts = self._receipt_counts(final_run_context)
+            receipts = self._receipt_counts(self.run_context)
             applied = receipts.get("applied", 0)
-            if applied:
-                level = str(self.level).upper()
-                if level in self.policy_applied:
-                    output[level.lower() + "_applied"] = applied
+            level = str(self.level).upper()
+            if applied and level in self.policy_applied:
+                output[level.lower() + "_applied"] = applied
+        output = _safe_obj(output)
+        self._point({"phase": "after", "kind": "run", "context": self.run_context,
+                     "output": output,
+                     "business_status": "failed" if self.external_error_code else "succeeded"})
         self.run_context = None
         return output
 

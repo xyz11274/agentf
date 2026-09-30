@@ -15,7 +15,15 @@ search 150、selection 50、最终 holdout 200；产物只写入
 新划分复用原 ZIP，原分片与成绩保留。原生 `train.jsonl` 是训练400题加
 search150题的容器；实际训练必须只取 `source/train_ids.txt`，不能将550题
 都送入初始训练。旧训练记忆已看过部分新评测题，新实验必须从新train400
-重建记忆。当前运行入口和检查点仍对应旧实验，本次数据准备不启动实验。
+重建记忆。旧入口和检查点仍对应旧实验；新实验使用下方独立入口与记忆目录。
+
+新划分已提供独立完整链路入口（16并发，新train400重建memory，GEPA30节点）：
+
+```bash
+bash tools/trajectory_evolution/experiments/bfcl-v3/run_bfcl_v3.sh seen-start
+```
+
+同一命令可安全接续已有新实验；`seen-resume` 同样接续，`seen-status` 查看播报，`seen-check` 做离线检查。tmux会话为 `bfcl-v3-seen`，产物为 `trace_output/bfcl-v3/seen-scenarios-v1/`，日志为 `trace_output/bfcl-v3/seen-scenarios-v1-runner.log`。运行时私下加载 business-simulator `.env`，清除代理；旧产物、旧memory和旧分片保留。初始训练严格使用新train400，原生train550中的search150不进入记忆重建。
 
 在全新目标目录重建该划分的方式（不会请求模型）：
 

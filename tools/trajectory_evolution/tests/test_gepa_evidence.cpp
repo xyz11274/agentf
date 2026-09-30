@@ -2120,6 +2120,55 @@ void asynchronous_target_replay() {
          "identical parent rejection was counted as new effect");
   expect(search.applied_changes(child, report(sequential, allowed))["task"].num("actions", 0) == 1,
          "real removal of the parent restriction was lost");
+  // Guard 取消只是移交执行；另一 step 的真实派发必须能证明删除约束的作用。
+  auto delegated_report = report(sequential, allowed);
+  auto delegated_evidence = json(delegated_report.trials(0).evidence());
+  auto &delegated_events = delegated_evidence["trace"]["events"].items();
+  delegated_events.pop_back();
+  const Json delegated_input{{"output", "A"}};
+  delegated_events.push_back(Json{{"kind", "action.start"}, {"action_id", "guard"},
+      {"step_id", "guard-step"}, {"execution_id", "coordinator"}, {"actor_id", "coordinator"},
+      {"operation", "generate"}, {"input", delegated_input},
+      {"attributes", Json{{"decision", "allow"}}}});
+  delegated_events.push_back(Json{{"kind", "action.end"}, {"action_id", "guard"},
+      {"step_id", "guard-step"}, {"execution_id", "coordinator"}, {"actor_id", "coordinator"},
+      {"status", "cancelled"}, {"input", delegated_input},
+      {"attributes", Json{{"executed", false}, {"extensions", Json{{"point_reference",
+          Json{{"key", "dispatch-one:guard:1"}}}}}}}});
+  delegated_events.push_back(Json{{"kind", "action.start"}, {"action_id", "dispatched-action"},
+      {"step_id", "step-dispatch-one"}, {"execution_id", "coordinator"}, {"actor_id", "coordinator"},
+      {"operation", "generate"}, {"input", delegated_input},
+      {"attributes", Json{{"type", "schedule.action"}, {"executed", true},
+          {"logical_action_id", "1"}, {"target_scope", "assistant"}}}});
+  delegated_events.push_back(Json{{"kind", "action.end"}, {"action_id", "dispatched-action"},
+      {"step_id", "step-dispatch-one"}, {"execution_id", "coordinator"}, {"actor_id", "coordinator"},
+      {"operation", "generate"}, {"status", "completed"},
+      {"attributes", Json{{"type", "schedule.action"}, {"executed", true},
+          {"logical_action_id", "1"}, {"target_scope", "assistant"}}}});
+  auto delegated_changes = [&](const Json &evidence) {
+    auto current = delegated_report;
+    *current.mutable_trials(0)->mutable_evidence() = proto<google::protobuf::Struct>(evidence);
+    return search.applied_changes(child, current);
+  };
+  expect(delegated_changes(delegated_evidence)["task"].num("actions", 0) == 1,
+         "executed delegated action lost its removed-guard attribution");
+  for (int invalid = 0; invalid < 9; ++invalid) {
+    auto evidence = delegated_evidence;
+    auto &events = evidence["trace"]["events"].items();
+    auto &start = events[events.size() - 2];
+    auto &end = events.back();
+    if (invalid == 0) start["attributes"]["logical_action_id"] = "another";
+    if (invalid == 1) end["attributes"]["executed"] = false;
+    if (invalid == 2) start["step_id"] = end["step_id"] = "step-other-call";
+    if (invalid == 3) start["execution_id"] = end["execution_id"] = "other-execution";
+    if (invalid == 4) start["input"]["output"] = "B";
+    if (invalid == 5) end["status"] = "cancelled";
+    if (invalid == 6) start["actor_id"] = end["actor_id"] = "other-actor";
+    if (invalid == 7) start["operation"] = end["operation"] = "other-operation";
+    if (invalid == 8) { auto duplicate = end; events.push_back(duplicate); }
+    expect(delegated_changes(evidence).fields().empty(),
+           "unrelated, ambiguous or unexecuted dispatch invented removed-guard attribution");
+  }
   const auto removal = search.control_preflight(child, parent, report(sequential, rejected));
   expect(removal.flag("passed", false) && removal["removal_changes"]["task"].num("actions", 0) == 1,
          "deleting an applied asynchronous failure budget was blocked");
@@ -7369,7 +7418,7 @@ void reflection_control_binding_budget_reservation() {
 
 // Full-pool reflection must visit all 32 distinct train tasks and resume completed
 // map/reduce stages after a failed final model call, without replaying their API calls.
-void full_pool_reflection_covers_32_tasks_and_resumes() {
+void full_pool_reflection_fixture(const std::string &scenario = {}) {
   Search search;
   search.seed = public_alias_fixture();
   auto mixed_policy = proto<trajectory::evolution::v1::RuntimePolicy>(search.seed["policy"]);
@@ -7383,14 +7432,28 @@ void full_pool_reflection_covers_32_tasks_and_resumes() {
   base_loop->set_max_no_progress(3);
   base_loop->set_no_progress_decision("stop");
   base_loop->set_reason("Preserve the existing execution budget");
+  if (!scenario.empty()) {
+    auto *base_action = mixed_options.add_action_rules();
+    base_action->set_rule_id("unselected-base-action");
+    base_action->set_target_scope("assistant");
+    base_action->set_operation("render");
+    base_action->add_required_arguments("image");
+    base_action->set_match_mode("predicate");
+    base_action->set_reason("Image is required");
+    *base_action->mutable_source_experience() = mixed_options.approved_experiences(0);
+  }
   search.seed["level"] = "L3";
   search.seed["policy"] = json(trajectory::evolution::compile_runtime_policy(
       mixed_policy.snapshot(), mixed_options));
   search.controls = Json{{"enabled", true}, {"prompt_file", "unused-in-unit-test"}};
+  if (!scenario.empty())
+    search.controls["actions"] = Json{{"render", Json::Array{"image"}}};
   validate_control_learning(search.controls);
   search.config = Json{{"max_input_bytes", 65536}, {"max_feedback_trials", 8},
                        {"max_model_calls", 64}, {"reflection_strategy", "combee"},
                        {"objective", Json{{"invalid_loop_weight", 0}, {"token_weight", 0}}}};
+  if (!scenario.empty())
+    search.config["max_feedback_trials"] = 4;
   std::string selected_key;
   const auto available = search.components(search.seed);
   for (const auto &entry : available.fields())
@@ -7444,7 +7507,9 @@ void full_pool_reflection_covers_32_tasks_and_resumes() {
   const auto initial = search.packet(search.seed, report, selected);
   struct FullPoolModel final : legacy::ModelAdapter {
     std::set<std::string> mapped;
-    std::size_t map_calls = 0, reduce_calls = 0, review_calls = 0;
+    std::size_t map_calls = 0, reduce_calls = 0, review_calls = 0, map_repair_calls = 0;
+    std::string scenario;
+    Json sixth_tasks = Json::Array{};
     bool fail_review_once = true;
     bool mixed_provenance_preserved = true;
     std::string memory_id;
@@ -7464,8 +7529,27 @@ void full_pool_reflection_covers_32_tasks_and_resumes() {
           mixed_provenance_preserved &= row["trial"]["observed_tool_failures"].object();
         }
         response.body = R"({"reason":"现有证据不足，保留父策略。","experiences":[]})";
+        if (map_calls == 6 && scenario.rfind("map_", 0) == 0) {
+          for (const auto &row : packet["feedback"].items())
+            sixth_tasks.push(row["task_id"]);
+          response.body = R"({"reason":"fixture unauthorized component","controls":{"action_rules":[]}})";
+        }
+      } else if (packet.str("phase") == "pool_map_repair") {
+        ++map_repair_calls;
+        Json repaired_tasks = Json::Array{};
+        for (const auto &row : packet["feedback"].items())
+          repaired_tasks.push(row["task_id"]);
+        expect(packet.str("error") == "gepa_component_not_authorized" &&
+                   repaired_tasks.dump() == sixth_tasks.dump() &&
+                   packet["selected_components"].items().size() == 2,
+               "authorization repair changed the map group or widened selected components");
+        response.body = scenario == "map_repeat_unauthorized"
+            ? R"({"reason":"fixture repeated unauthorized component","controls":{"action_rules":[]}})"
+            : R"({"reason":"repair within original components","experiences":[]})";
       } else if (packet.str("phase") == "pool_counterexample_review") {
         ++review_calls;
+        if (scenario == "review_error")
+          throw Error("gepa_draft_invalid");
         if (fail_review_once) {
           fail_review_once = false;
           response.transport_ok = false;
@@ -7506,16 +7590,69 @@ void full_pool_reflection_covers_32_tasks_and_resumes() {
   write(search.config.str("prompt_file"), "仅依据本次训练证据输出严格 JSON。");
   auto model = std::make_shared<FullPoolModel>();
   model->memory_id = memory_id;
+  model->scenario = scenario;
+  if (!scenario.empty())
+    model->fail_review_once = false;
   model->trigger_pattern = available[selected_key].str("trigger_pattern");
   if (model->trigger_pattern.empty())
     model->trigger_pattern = "when delivery verification is needed";
   search.model = model;
   Json pending;
+  if (!scenario.empty()) {
+    bool incomplete = false;
+    std::string error;
+    try {
+      (void)search.propose_full_pool(search.seed, initial, report, 0, pending);
+    } catch (const FullPoolProposalIncomplete &failure) {
+      incomplete = true;
+      error = failure.what();
+    }
+    std::cout << "full_pool_scenario=" << scenario << " incomplete=" << incomplete
+              << " error=" << error << " maps=" << model->map_calls
+              << " repairs=" << model->map_repair_calls << " mapped=" << model->mapped.size()
+              << " reduces=" << model->reduce_calls << " reviews=" << model->review_calls
+              << " covered=" << search.tree["nodes"].items()[0].num("reflection_pool_covered_task_count", 0)
+              << '\n';
+    expect(!fs::exists(fs::path(directory) / "reflections/0-repair.request.json"),
+           "incomplete full-pool work escaped into the legacy single-draft repair");
+    if (scenario == "map_repair") {
+      expect(!incomplete && model->map_calls == 8 && model->map_repair_calls == 1 &&
+                 model->mapped.size() == 32 && model->reduce_calls == 1 &&
+                 model->review_calls == 1 &&
+                 search.tree["nodes"].items()[0].num("reflection_pool_covered_task_count", 0) == 32,
+             "sixth-map authorization repair skipped remaining maps/reduce/review or repeated maps");
+      // Mutating an already completed draft still produces an ordinary repairable error.
+      bool ordinary = false;
+      try {
+        (void)search.mutate(search.seed,
+            Json{{"reason", "bad completed format"}, {"controls", Json{{"action_rules", Json::Array{}}}}},
+            selected);
+      } catch (const Error &failure) {
+        ordinary = dynamic_cast<const FullPoolProposalIncomplete *>(&failure) == nullptr;
+      }
+      expect(ordinary, "completed-draft validation was incorrectly marked as incomplete reflection");
+    } else if (scenario == "map_repeat_unauthorized") {
+      expect(incomplete && error == "gepa_component_not_authorized" &&
+                 model->map_calls == 6 && model->map_repair_calls == 1 &&
+                 model->reduce_calls == 0 && model->review_calls == 0 &&
+                 search.tree["nodes"].items()[0].num("reflection_pool_covered_task_count", 0) == 20,
+             "a second unauthorized map draft did not stop at the full-pool boundary");
+    } else {
+      expect(incomplete && error == "gepa_draft_invalid" && model->mapped.size() == 32 &&
+                 model->review_calls == 1 && model->reduce_calls == 1 &&
+                 search.tree["nodes"].items()[0].num("reflection_pool_covered_task_count", 0) == 32,
+             "final review failure was treated as a completed full-pool proposal");
+    }
+    expect(report.SerializeAsString() == original, "full-pool repair changed the original report");
+    return;
+  }
   bool interrupted = false;
   try {
     (void)search.propose_full_pool(search.seed, initial, report, 0, pending);
   } catch (const Error &error) {
     interrupted = std::string(error.what()) == "gepa_reflection_transport_failed";
+    if (!interrupted)
+      std::cerr << "full_pool_fixture_unexpected_error=" << error.what() << '\n';
   }
   expect(interrupted && model->mapped.size() == 32 && model->mixed_provenance_preserved &&
              search.tree["nodes"].items()[0].num("reflection_pool_covered_task_count", 0) == 32,
@@ -7533,6 +7670,16 @@ void full_pool_reflection_covers_32_tasks_and_resumes() {
              draft["experiences"].items().size() == 1 &&
              report.SerializeAsString() == original,
          "full-pool synthesis lost its applied L1 revision or changed source report");
+}
+
+void full_pool_reflection_covers_32_tasks_and_resumes() {
+  full_pool_reflection_fixture();
+}
+
+void full_pool_reflection_preserves_failure_boundary() {
+  full_pool_reflection_fixture("map_repair");
+  full_pool_reflection_fixture("map_repeat_unauthorized");
+  full_pool_reflection_fixture("review_error");
 }
 
 void full_pool_review_preserves_32_cases_with_mixed_controls() {
@@ -7616,12 +7763,138 @@ void full_pool_review_preserves_32_cases_with_mixed_controls() {
          "mixed full-pool review lost task goals, typed bounds or real contrast");
 }
 
+void full_pool_review_bounds_repeated_receipt_context() {
+  Json review{{"selected_components", Json::Array{"action_rules"}},
+              {"components", Json{{"action_rules", Json::Array{}}}},
+              {"controls", Json{{"action_requirements", Json::Array{
+                  Json{{"operation", "run_skills"}, {"min_attempts", 8}}}}}},
+              {"intermediate_proposals", Json::Array{}},
+              {"case_outcomes", Json::Array{}}, {"feedback", Json::Array{}}};
+  for (unsigned i = 0; i < 32; ++i)
+    review["case_outcomes"].push(Json{{"task_id", "task-" + std::to_string(i)},
+        {"verdict", i ? "passed" : "failed"},
+        {"selected_experience_applications", nullptr}, {"goal_completion", Json{
+            {"quality", i ? 1 : 0}, {"issues", Json::Array{}}}}});
+  for (unsigned i = 0; i < 2; ++i) {
+    Json applications{{"status", "observed"}, {"count", 16}, {"points", Json::Array{}}};
+    for (unsigned j = 0; j < 16; ++j)
+      applications["points"].push(Json{{"memory_id", "memory-" + std::to_string(j)},
+          {"content_revision", "revision"}, {"receipt_event_id", "receipt-" + std::to_string(j)},
+          {"run_id", "run-" + std::to_string(i)}, {"execution_id", "execution"},
+          {"target_scope", "tool"}, {"observed_operations", Json::Array{"run_skills"}},
+          {"task_excerpt", std::string(512, 't')}, {"state_excerpt", std::string(1024, 's')}});
+    review["feedback"].push(Json{{"task_id", "task-" + std::to_string(i)},
+        {"task_input", "Complete every required action."},
+        {"trial", Json{{"verdict", i ? "passed" : "failed"},
+            {"goal_completion", Json{{"quality", i ? 1 : 0}}},
+            {"evidence", Json{{"runs", Json::Array{Json{{"run_id", "run"},
+                {"actions", Json::Array{Json{{"operation", "run_skills"},
+                    {"action_control", Json{{"required_operation_rounds", 8}}}}}}}}}}}}},
+        {"selected_experience_applications", applications}});
+  }
+  const auto selection = Json{{"selected_proposals", Json::Object{}}};
+  const auto unbounded = compact_full_pool_review(review, selection, 200000);
+  expect(unbounded["feedback"].dump() == review["feedback"].dump(),
+         "receipt context was shortened despite fitting the input budget");
+  expect(reflection_input_bytes(review) > 50000, "receipt fixture did not exceed the budget");
+  const auto compact = compact_full_pool_review(review, selection, 22000);
+  expect(reflection_input_bytes(compact) <= 22000 &&
+             compact["case_outcomes"].dump() == review["case_outcomes"].dump() &&
+             compact["controls"].dump() == review["controls"].dump() &&
+             compact["feedback"].items().size() == 2,
+         "receipt compaction lost outcomes, bounds or the real pair");
+  for (std::size_t i = 0; i < 2; ++i) {
+    const auto &before = review["feedback"].items()[i];
+    const auto &after = compact["feedback"].items()[i];
+    expect(before["trial"].dump() == after["trial"].dump() &&
+               before["task_input"].dump() == after["task_input"].dump(),
+           "receipt compaction removed actual task, goals or required actions");
+    const auto &a = after["selected_experience_applications"];
+    const auto &b = before["selected_experience_applications"];
+    expect(a.num("count", 0) == 16 && a["points"].items().size() == 16 &&
+               a.flag("context_excerpts_truncated", false),
+           "receipt compaction changed the application count or receipt set");
+    for (std::size_t j = 0; j < 16; ++j)
+      for (const auto &field : b["points"].items()[j].fields())
+        if (field.first != "task_excerpt" && field.first != "state_excerpt")
+          expect(field.second.dump() == a["points"].items()[j][field.first].dump(),
+                 "receipt compaction changed causal identity or operation facts");
+  }
+  auto required = compact;
+  required["controls"]["action_requirements"].push(
+      Json{{"operation", std::string(30000, 'o')}, {"min_attempts", 8}});
+  bool rejected = false;
+  try { (void)compact_full_pool_review(required, selection, 22000); }
+  catch (const Error &error) {
+    rejected = std::string(error.what()) == "gepa_feedback_budget_too_small";
+  }
+  expect(rejected, "review silently dropped required control facts to fit the budget");
+}
+
+void full_pool_review_selects_actual_support_and_necessary_success() {
+  auto row = [](const std::string &id, const std::string &verdict, const std::string &actor,
+                unsigned iteration, bool final_answer = false) {
+    Json action{{"actor_id", actor}, {"event_id", id + "-event"},
+                {"iteration", std::to_string(iteration)},
+                {"iteration_assessment", Json{{"decision", "keep"}}},
+                {"reviewed_final_answer", final_answer}};
+    return Json{{"task_id", id}, {"trial", Json{{"verdict", verdict},
+        {"evidence", Json{{"runs", Json::Array{Json{{"actions", Json::Array{action}}}}}}}}}};
+  };
+  Json rows = Json::Array{row("unrelated-failure", "failed", "other", 20),
+                         row("unrelated-success", "passed", "other", 20),
+                         row("actual-failure", "failed", "web-search", 3),
+                         row("short-success", "passed", "web-search", 2),
+                         row("necessary-long-success", "passed", "web-search", 7),
+                         row("only-final-answer", "passed", "web-search", 12, true)};
+  const auto original = rows.dump();
+  Json support{{"task_ids", Json::Array{"actual-failure"}},
+               {"actors", Json{{"web-search", true}}}, {"events", Json::Array{}},
+               {"different_tasks", 1}, {"boundary_changes", 2}};
+  const auto pair = select_full_pool_review_cases(rows, support);
+  expect(pair["failure"].str("task_id") == "actual-failure" &&
+             pair["success"].str("task_id") == "necessary-long-success" &&
+             pair["success"]["trial"]["evidence"]["runs"].items()[0]["actions"].items()[0]
+                 ["iteration_assessment"].str("decision") == "keep" && rows.dump() == original,
+         "candidate review lost relevant failure or same-actor necessary long-chain evidence");
+  auto successful = pair["success"];
+  auto &actions = successful["trial"]["evidence"]["runs"].items()[0]["actions"];
+  const auto necessary = actions.items()[0];
+  actions.push(Json{{"kind", "action.end"}, {"operation", "retry"}, {"status", "failed"},
+                    {"action_control", Json::Object{}}, {"actor_id", "web-search"},
+                    {"event_id", "distracting-failure"}});
+  actions.push(Json{{"kind", "action.end"}, {"operation", "other-retry"}, {"status", "failed"},
+                    {"action_control", Json::Object{}}, {"actor_id", "web-search"},
+                    {"event_id", "distracting-failure-2"}});
+  const auto compact = compact_full_pool_review_case(successful, Json::Array{"action_rules"}, support);
+  bool retained = false;
+  for (const auto &run : compact["trial"]["evidence"]["runs"].items())
+    for (const auto &action : run["actions"].items())
+      retained |= action.dump() == necessary.dump();
+  expect(retained, "two-action compaction deleted the selected necessary-success counterexample");
+  const auto fallback = select_full_pool_review_cases(rows, Json::Object{});
+  expect(fallback["failure"].str("task_id") == "unrelated-failure" &&
+             fallback["success"].str("task_id") == "unrelated-success",
+         "missing replay support should preserve a real fallback pair, not reject the proposal");
+}
+
 void full_pool_review_replays_saved_stages(const fs::path &reflection_dir,
-                                           std::size_t node) {
+                                           std::size_t node, const Json &support = Json()) {
   const auto prefix = std::to_string(node);
   const auto first = Json::parse(read(reflection_dir / (prefix + ".pool-map-0.request.json")))["input"];
-  const auto reduce = Json::parse(read(reflection_dir / (prefix + ".pool-reduce-0.request.json")))["input"];
-  const auto selection = Json::parse(read(reflection_dir / (prefix + ".pool-reduce-0.draft.json")));
+  fs::path reduce_path, selection_path;
+  for (std::size_t level = 0; level < 32; ++level) {
+    const auto stem = prefix + ".pool-reduce-" + std::to_string(level);
+    const auto request = reflection_dir / (stem + ".request.json");
+    const auto draft = reflection_dir / (stem + ".draft.json");
+    if (fs::is_regular_file(request) && fs::is_regular_file(draft)) {
+      reduce_path = request;
+      selection_path = draft;
+    }
+  }
+  expect(!reduce_path.empty(), "saved completed final reduce is missing");
+  const auto reduce = Json::parse(read(reduce_path))["input"];
+  const auto selection = Json::parse(read(selection_path));
   auto review = first;
   review["phase"] = "pool_counterexample_review";
   review["intermediate_proposals"] = reduce["intermediate_proposals"];
@@ -7629,7 +7902,7 @@ void full_pool_review_replays_saved_stages(const fs::path &reflection_dir,
   review["proposed_selection"] = selection["selected_proposals"];
   review["case_outcomes"] = Json::Array{};
   review["feedback"] = Json::Array{};
-  Json failed_case, successful_case;
+  Json failed_case, successful_case, all_feedback = Json::Array{};
   std::set<std::string> ids;
   std::map<std::string, Json> observed_failures;
   for (std::size_t group_index = 0;; ++group_index) {
@@ -7661,6 +7934,7 @@ void full_pool_review_replays_saved_stages(const fs::path &reflection_dir,
             row["selected_experience_applications"];
       if (ids.insert(row.str("task_id")).second)
         review["case_outcomes"].push(std::move(outcome));
+      all_feedback.push(row);
       auto example = row;
       example["trial"]["observed_tool_failures"] = failures;
       if (trial.str("verdict") == "passed" && successful_case.null())
@@ -7684,11 +7958,19 @@ void full_pool_review_replays_saved_stages(const fs::path &reflection_dir,
       }
   expect(reflection_input_bytes(enriched_reduce) <= 65536,
          "saved Node2 reduce exceeds the model budget after tool provenance is added");
+  if (support.object()) {
+    const auto pair = select_full_pool_review_cases(all_feedback, support);
+    failed_case = pair["failure"];
+    successful_case = pair["success"];
+    review["actual_support"] = support;
+    expect(failed_case.str("task_id") == "TGJK_YD2_008",
+           "saved Node7 review did not choose its actual support failure");
+  }
   for (auto example : {failed_case, successful_case})
     if (example.object()) {
       if (example["trial"]["evidence"]["runs"].array())
-        example["trial"] = compact_control_reflection_detail(
-            example["trial"], review["selected_components"], 2);
+        example = compact_full_pool_review_case(std::move(example),
+                                              review["selected_components"], support);
       review["feedback"].push(std::move(example));
     }
   review["counterexample_pair"] = Json{{"failure_present", failed_case.object()},
@@ -7702,7 +7984,9 @@ void full_pool_review_replays_saved_stages(const fs::path &reflection_dir,
              after <= 65536,
          "saved mixed L1/control review lost full-pool facts or typed bounds");
   std::cout << "saved full-pool review: tasks=" << ids.size()
-            << " before_bytes=" << before << " after_bytes=" << after << '\n';
+            << " before_bytes=" << before << " after_bytes=" << after
+            << " failure=" << failed_case.str("task_id")
+            << " success=" << successful_case.str("task_id") << '\n';
 }
 
 // 每次反思只展示获选能力的说明；旧自定义纯文本模板完全兼容，非法标记明确报错。
@@ -8377,6 +8661,19 @@ void reflection_real_tool_provenance(const fs::path &report_path) {
 
 int main(int argc, char **argv) {
   try {
+    if (argc == 2 && std::string(argv[1]) == "delegated_guard_attribution") {
+      asynchronous_target_replay();
+      terminal_failure_identity();
+      std::cout << "delegated guard attribution regressions passed\n";
+      return 0;
+    }
+    if (argc == 4 && std::string(argv[1]) == "delegated_guard_real_report") {
+      const auto report = proto<Report>(Json::parse(read(argv[2], trajectory::evolution::kMaxEvaluationReportBytes)));
+      const auto parent = Json::parse(read(argv[3], trajectory::evolution::kMaxEvaluationReportBytes));
+      Search search;
+      std::cout << search.applied_changes(parent, report).dump() << '\n';
+      return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "reflection_goal_diagnostic") {
       reflection_goal_diagnostic_keeps_missing_requirement();
       unchanged_experience_repair_is_bounded();
@@ -8456,8 +8753,30 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && std::string(argv[1]) == "full_pool_reflection") {
       full_pool_reflection_covers_32_tasks_and_resumes();
+      full_pool_reflection_preserves_failure_boundary();
       full_pool_review_preserves_32_cases_with_mixed_controls();
+      full_pool_review_bounds_repeated_receipt_context();
+      full_pool_review_selects_actual_support_and_necessary_success();
       std::cout << "full-pool reflection and resume regression passed\n";
+      return 0;
+    }
+    if (argc == 5 && std::string(argv[1]) == "full_pool_support_replay") {
+      const fs::path reflections = argv[2];
+      const auto node = std::stoull(argv[4]);
+      const auto candidate = Json::parse(read(reflections.parent_path() / "versions" /
+                                             (std::to_string(node) + ".json")));
+      const auto report = proto<Report>(Json::parse(read(argv[3],
+          trajectory::evolution::kMaxEvaluationReportBytes)));
+      Search search;
+      const auto original = report.SerializeAsString();
+      const auto support = search.reflection_candidate_support(candidate, report);
+      expect(support.num("different_tasks", 0) == 1 &&
+                 support.num("boundary_changes", 0) == 2 &&
+                 support["task_ids"].items()[0].text() == "TGJK_YD2_008" &&
+                 report.SerializeAsString() == original,
+             "actual Node7 replay must show exactly one supported task and two changes");
+      std::cout << "actual candidate support=" << support.dump() << '\n';
+      full_pool_review_replays_saved_stages(reflections, node, support);
       return 0;
     }
     if (argc == 4 && std::string(argv[1]) == "full_pool_review_replay") {
@@ -8647,6 +8966,8 @@ int main(int argc, char **argv) {
     run("reflection_prompt_component_contract", reflection_prompt_component_contract);
     run("full_pool_reflection_covers_32_tasks_and_resumes",
         full_pool_reflection_covers_32_tasks_and_resumes);
+    run("full_pool_reflection_preserves_failure_boundary",
+        full_pool_reflection_preserves_failure_boundary);
     run("reflection_sources_follow_current_parent", reflection_sources_follow_current_parent);
     run("observed_operation_binding_views", observed_operation_binding_views);
     run("reviewed_operation_budget_bindings", reviewed_operation_budget_bindings);

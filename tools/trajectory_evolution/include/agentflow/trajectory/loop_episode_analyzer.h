@@ -57,6 +57,8 @@ struct ToolActionSummary {
   std::string retryability;
   std::string call_event_id;
   std::string result_event_id;
+  std::string action_name;
+  bool action_contract_observed = false;
 };
 
 struct DispatchSummary {

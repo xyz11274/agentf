@@ -78,10 +78,10 @@ inline void bound_judge_payload(Json &value, const std::string &path, std::size_
   }
 }
 
-// 裁判未主动补查时，只为未知目标寻找当前批次被裁剪的答案字段。
+// 为当前批次目标寻找被裁剪的答案字段；include_definite 同时检查已判通过或失败的目标。
 // 不读取整段轨迹、输入或前后轮历史；原文仍由调用处按原路径、输入预算限量加载。
 inline Json answer_previews_for_unknown_goals(const Json &evidence, const Json &scope,
-                                            const Json &rows) {
+                                            const Json &rows, bool include_definite = false) {
   Json references = Json::Array{};
   std::set<std::string> paths;
   if (evidence["context_evidence"].array())
@@ -111,15 +111,17 @@ inline Json answer_previews_for_unknown_goals(const Json &evidence, const Json &
   };
   const auto begin = scope.num("turn_begin", 1), end = scope.num("turn_end", begin);
   for (std::size_t i = 0; i < rows.items().size() && i < scope["goals"].items().size(); ++i) {
-    if (rows.items()[i].str("status") != "uncertain")
+    const auto status = rows.items()[i].str("status");
+    if (status != "uncertain" &&
+        !(include_definite && (status == "passed" || status == "failed")))
       continue;
     const auto turn = scope["goals"].items()[i].num("turn", 0);
     if (turn < begin || turn > end)
       continue;
     const auto &output = evidence["output"];
     if (output["turns"].array() && turn - begin < output["turns"].items().size())
-      collect(collect, output["turns"].items()[turn - begin],
-              "/output/turns/" + std::to_string(turn - begin));
+      collect(collect, output["turns"].items()[static_cast<std::size_t>(turn - begin)],
+              "/output/turns/" + std::to_string(static_cast<std::size_t>(turn - begin)));
     else if (turn == end && output.has("final"))
       collect(collect, output["final"], "/output/final");
     else if (begin == end)
