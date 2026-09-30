@@ -1,0 +1,8 @@
+业务固定500题交付（Seed004）
+报告：../实验报告.md
+一键缓存复核（不调用API）：
+bash /root/lai-code/Agent/AgentFlow/trace_output/business-simulator/published/seed004/run.sh
+
+当前成绩：acceptance-500.json；策略：strategy.json；清单：manifest.json。
+原始记录保留用于复核，报告无附件。
+固定300题业务范围与预先按场景分层冻结的整批200道原训练题回放，合计500题。原300题使用已有评测辅助组织；追加200题在补测前冻结，整批纳入，不按新成绩取子集。这是业务范围与训练回放对照，不作为独立holdout结论。

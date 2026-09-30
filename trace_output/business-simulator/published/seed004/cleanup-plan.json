@@ -1,0 +1,73 @@
+{
+  "status": "complete",
+  "scope": "business-simulator generated artifacts only",
+  "delete_paths": [
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/targeted-seed-20260929",
+      "logical_bytes": 298387219
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/training-supplement-20260929",
+      "logical_bytes": 159470145
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/targeted-seed-crossdomain-20260929",
+      "logical_bytes": 95665804
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/seed-gui-delivery-014",
+      "logical_bytes": 129018928
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/seed-success-20260929",
+      "logical_bytes": 85828471
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/seed-training-gap-012",
+      "logical_bytes": 40862847
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/audit",
+      "logical_bytes": 6129274294
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/targeted-seed-relearn-20260929",
+      "logical_bytes": 142592546
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/published/best-strategy.json",
+      "logical_bytes": 81005
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/published/regrade",
+      "logical_bytes": 407325126
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/published/active-best-candidate.json",
+      "logical_bytes": 1610
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/published/best-strategy-runs",
+      "logical_bytes": 6635877682
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/published/best-strategy-comparison.json",
+      "logical_bytes": 23099
+    },
+    {
+      "path": "/root/lai-code/Agent/AgentFlow/trace_output/business-simulator/baseline-cache",
+      "logical_bytes": 150684412
+    }
+  ],
+  "retain": [
+    "training",
+    "gepa",
+    "published"
+  ],
+  "preserved_source_reports": 23,
+  "preserved_raw_bytes": 1423552167,
+  "started_at": "2026-09-30T01:27:27.957338+00:00",
+  "finished_at": "2026-09-30T01:27:30.517053+00:00",
+  "deleted_items": 14,
+  "deleted_logical_bytes": 14275093188
+}

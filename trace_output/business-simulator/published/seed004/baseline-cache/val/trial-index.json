@@ -1,0 +1,1226 @@
+{
+  "schema_version": 1,
+  "report_kind": "baseline_trial_index",
+  "complete": true,
+  "split": "val",
+  "version": "agent-version-v1:e9fe2e6348ba22b065ac86e70668a7aaad53e5b2448eaa709cd6f1fe62e345ae",
+  "planned": 200,
+  "trials": [
+    {
+      "task_id": "CK_GUI_FHCK_00_003",
+      "trial_id": "b75f1b58452bd6386d4d05f167f9b1d7",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "CK_GUI_FHCK_00_030",
+      "trial_id": "a861a2719c05c6d490284d97c6412062",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "CK_GUI_FHCK_00_042",
+      "trial_id": "9ffe5f68a99f7f455d3ded8ef40c45fb",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "CK_GUI_FHCK_00_061",
+      "trial_id": "29c445763c2da4bcc288337e7eca9a70",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "CK_GUI_FHCK_00_139",
+      "trial_id": "5c9c247cc96ced05c807d96b1115621e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_DL_SWLJ_01_007",
+      "trial_id": "5ffce7f7558d0ef16a52d672914bd77d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_DL_SWLJ_03_012",
+      "trial_id": "a6e023a8d1b4093bafe147f6bf29e9f9",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_DL_SWLJ_04_036",
+      "trial_id": "063d0fa56beeedf3161f25b1771f9f4f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_WD_JCWD_01_012",
+      "trial_id": "5d7495b73a659f4906f28a27179ccc6b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_WD_LWWD_01_021",
+      "trial_id": "1f1dd0fbb1870f416b5d5512c4c4bb1c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_WD_LWWD_01_024",
+      "trial_id": "5238f9849ac177651a7fc7805fd13c9e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_WD_LWWD_01_028",
+      "trial_id": "f4ce71b4c3977ee9402a46cc54ff3d91",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_WD_LWWD_04_019",
+      "trial_id": "4beb7ece1d931b1c7a315167a736182f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_WD_LWWD_05_007",
+      "trial_id": "0f061ebdccd7060d0b5a901276edf618",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_WD_LWWD_05_014",
+      "trial_id": "27a49ee60e5bd0e8e8762db540974d70",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_WD_LWWD_06_001",
+      "trial_id": "8fe799fc1289907716e3ea75e784ba96",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_WD_LWWD_07_003",
+      "trial_id": "51ef8bb90ac3bfd8452a42f5716d8274",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_WD_LWWD_07_009",
+      "trial_id": "bda8af8fd42ca736f71c04355778e8d1",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_WD_LYWD_02_008",
+      "trial_id": "161a40022ba9dafde42466b65c02dc6f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_YT_CYFF_02_011",
+      "trial_id": "869b75a61c3f63fc1152e5d529724162",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_YT_CYFF_02_012",
+      "trial_id": "8f9720ce64525040c88f5f6c3bcc8f5b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_YT_CYFF_02_039",
+      "trial_id": "40889cdb8bec760a3c46c3686767d86d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_YT_YTLY_02_010",
+      "trial_id": "d2ed26cc80cb7168821b2aa3457734c1",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_YT_YTLY_02_019",
+      "trial_id": "090b447ae0981bb301dafec5f3cb5b57",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_YT_YTLY_02_023",
+      "trial_id": "5fd6aa33d04f54e4991e4e32f4848a4d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_YT_YTLY_02_032",
+      "trial_id": "068d73f16527fd18ffa6cdfc5182a1eb",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "DH_YT_YTLY_03_009",
+      "trial_id": "7d3849e9020b85cff687fc083a358088",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/008.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "DH_YT_ZZRW_01_011",
+      "trial_id": "b99680bdc4da22d6a7691114b875bca6",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_HHYL_004",
+      "trial_id": "a7dfc53e5a0bb881a611b377578dc566",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_WYYL_003",
+      "trial_id": "fd21e3a9bc445e2ed3ec8eb9dd417af1",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_WYYL_009",
+      "trial_id": "a8e13948620ba129d81b17a654c60204",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_WYYL_010",
+      "trial_id": "01af97abfd25d42f48cbf3810bb913e5",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_WYYL_013",
+      "trial_id": "569ea4b03ed53d1c619543c94ce25be2",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_YDYL_002",
+      "trial_id": "b0ed60d7b225b89dd82127ffd922d52d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_YDYL_003",
+      "trial_id": "22b485cb271e2a27a817dfe8146dddf4",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "QA_GUI_YDYL_012",
+      "trial_id": "a7f7459ffac1138441db1fcba5c09fd0",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GUI_YDYL_015",
+      "trial_id": "f9601ff8e8576e6cb0a405520464f10f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_HHYL_001",
+      "trial_id": "5cc58d918053b985ab8d671ff033668e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_HHYL_002",
+      "trial_id": "a9e0a9f8c54191225f71d32a5122dac4",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_WYYL_002",
+      "trial_id": "96b21cdd1669a1478a94b3baa4a325b1",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_WYYL_005",
+      "trial_id": "7f11c388208f45d90fa9bc731eae18ed",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_WYYL_009",
+      "trial_id": "ec4e5a0a5f4f795eb2f5590c3ab0b0ac",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_YDYL_005",
+      "trial_id": "0ccc5309c7012ab73b4a56b2817ccb58",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_YDYL_008",
+      "trial_id": "f8e54667e851dc5fcacd3d1f0264c7a2",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_YDYL_010",
+      "trial_id": "797842a91ab452e112d071ece487236f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_GY_YDYL_015",
+      "trial_id": "df06b1a6eb1afe6c0cf6eb75e0607e19",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JJ_011",
+      "trial_id": "a7eb135011cb4d641e1b161e8990783c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/008.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "QA_JJ_022",
+      "trial_id": "145122a91becd6b594a11f97a119034d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JJ_023",
+      "trial_id": "04af111c2b7cadb6fc93a9cb22d846a3",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "QA_JJ_039",
+      "trial_id": "a2d16ab2060eafc6db4f27767ec191c6",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JJ_040",
+      "trial_id": "cc5ae8380e9ea384aebd78ff03c56c83",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JJ_043",
+      "trial_id": "98618211ffb3938dcfb2a8e8dceb9351",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JK_HHYL_003",
+      "trial_id": "725b486276eacb98e2d7ef4fe0b5ddf3",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "QA_JK_HHYL_004",
+      "trial_id": "b08def7579c26b19449f1d663fba3d39",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JK_WYYL_001",
+      "trial_id": "58d62835260c8e1f77c1877a1da07d97",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JK_WYYL_005",
+      "trial_id": "0cf3ffa4c4c7acba72bd4c0950310ee4",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JK_WYYL_009",
+      "trial_id": "1ebbd24af0559d46833b87afbf3685f7",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JK_YDYL_001",
+      "trial_id": "2891ed48164e98eb375f587782ff880d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JK_YDYL_008",
+      "trial_id": "bfd369119565c4dcd3bd8d94dd8a94db",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_JK_YDYL_011",
+      "trial_id": "d046d6c21ce131d4d17236d96555ddc0",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_ZS_WYYL_003",
+      "trial_id": "08177cc16bf1f7e3125f2b899b28f830",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_ZS_WYYL_007",
+      "trial_id": "e6008732a284aa74a98a98408d69a80b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_ZS_WYYL_009",
+      "trial_id": "4e67643ab2c30589a9a1cd82d17b2cfa",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_ZS_WYYL_013",
+      "trial_id": "d5ace47bd324d7f3bc8608421d431f58",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "QA_ZS_WYYL_025",
+      "trial_id": "9b0099c798e8a045a75a49e3bf48fa2a",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_01_001",
+      "trial_id": "dae1d7a5644298cbcc2729190e0d633c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_01_003",
+      "trial_id": "5b15e5c0fefe8f80022efd9cdb4a99f1",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_01_006",
+      "trial_id": "0775e6cd0195d391fb5138d24cbac017",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_01_007",
+      "trial_id": "f2f677e869a3c54e74b218e40e01fc9b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_01_009",
+      "trial_id": "079b24eaa1b2cffe29fb255099a55f8a",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_01_107",
+      "trial_id": "69ac3012847ec213cea2c29088285a35",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_01_118",
+      "trial_id": "3892a3e9d8be264f088880c74c6d5134",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_002",
+      "trial_id": "5fa7e925433e6e610d3b8e43e333bd7e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_014",
+      "trial_id": "4a9bfa40e1774c9e4f52ac8d4ad8c9d0",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_016",
+      "trial_id": "f195bd85138707a49d7a9d95cc8e5087",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_02_020",
+      "trial_id": "122e9bf5a578cd3a70a571545308372b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/011.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_024",
+      "trial_id": "149a48ace67ed48a5a383958339b3b1c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_026",
+      "trial_id": "f1a234c22557c0c389bfd6ee0674384d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_027",
+      "trial_id": "c3352f0d84b73675bd1d2d5a770eb983",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_029",
+      "trial_id": "6cac0e44c94dc7db9dd07a117ef75563",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/008.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_02_038",
+      "trial_id": "e524fed98e8fd71a4400c9d321d08c43",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_043",
+      "trial_id": "cfbd58cbbfde302b1d897c656658675e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_045",
+      "trial_id": "cc12a9d63cd90005644457c31ceebed6",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_061",
+      "trial_id": "d184aa4e390648571e24b15bc4dbdc09",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_02_071",
+      "trial_id": "d001c2b2ea2e9a716c041ab72d542d19",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_02_072",
+      "trial_id": "440b27a41088b4d9965573a02e505427",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_079",
+      "trial_id": "508c6a645296939f3559d31af1ab3ba7",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_02_080",
+      "trial_id": "4e52fde4bb49b4d4b42adb97cddf1f2a",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_02_082",
+      "trial_id": "f2abf59afb38afd81c986c816c91ea2b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_086",
+      "trial_id": "21ed2078d7d4a9cf6c8cc0ef74670d9c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_087",
+      "trial_id": "44ca7d8593aec066c89abfda8017dc9b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/011.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_092",
+      "trial_id": "e6b22279d73c7960a140e75a6af2a9ab",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_02_094",
+      "trial_id": "9759d728328b7b262563fac5b1a88046",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_02_109",
+      "trial_id": "e161e9b0bcfec86c3850ae9a00dceb61",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_005",
+      "trial_id": "d2f1629855edf51f425db848d5a5005c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_008",
+      "trial_id": "9ed0c2149bf20d3b6ea1babad3d83154",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_009",
+      "trial_id": "57b6ca68d565f011138d2433a84ef41d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_016",
+      "trial_id": "b33304bd4b5101552f803bcb3e80fca3",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_019",
+      "trial_id": "9d2a07ed961917700751fe06b34c2dcd",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_020",
+      "trial_id": "32015e801e300fa3fde611206a7480d5",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_024",
+      "trial_id": "030c2824c6549f56d3ba6ea913f6c9ea",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_026",
+      "trial_id": "a7f99a47986382ed6d7fdfdf6759cb13",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_027",
+      "trial_id": "147e6ee60c47990d641f5c81988c15e6",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_033",
+      "trial_id": "aa1c31aae8375eeba668c4832b8f24c5",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_035",
+      "trial_id": "1a5a9bcb6f7c45e448edad6a37e78579",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_039",
+      "trial_id": "5e58a95103121b86f0bdf98c9810275d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_054",
+      "trial_id": "1d95461888dd058a24ec5d783a004776",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_065",
+      "trial_id": "96ee8e41a2c1345b225808a22e0e9de1",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_066",
+      "trial_id": "f5c20cdc63dbe9eb5c0a3545bc02579d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_068",
+      "trial_id": "5a4334c20fb7e4aefc0d4b62490d7f4d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_069",
+      "trial_id": "cc5acf4f2343e75a6d4325b4d5ca5e6f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/009.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_080",
+      "trial_id": "9f992b2e937d2b069ce7f882230cd6ad",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_083",
+      "trial_id": "43def3eb34e14b2e496d2ca417366acb",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_084",
+      "trial_id": "853c59204f57537dc20ca31f9f97df75",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/004.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_088",
+      "trial_id": "39576c77bd4d1c51562db4f158e6208a",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_095",
+      "trial_id": "b704bbb0aad31a4b810b004f26eaab91",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_096",
+      "trial_id": "0959144f213832c19619e5a9f55c4922",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_097",
+      "trial_id": "db5e12a3b59600a0211b91a92273a44c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_100",
+      "trial_id": "737ae27dda8dbe21c3e4689e7a1044a7",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_102",
+      "trial_id": "90eef86e211ceca09190c74ac2a80bdc",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_107",
+      "trial_id": "6a0b6b5003de73038a6cac9e6c9609a2",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_112",
+      "trial_id": "33f87448e4a634219699f00a06c0477f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_116",
+      "trial_id": "67f15c4f52a7803dcd61bff07dc46c25",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/008.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_126",
+      "trial_id": "5d8d80bd01f3b8aee49b0ca4e695a2a5",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_139",
+      "trial_id": "2bb0a0cdb930771e40e65a3a8f196adb",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_141",
+      "trial_id": "03446c7889dbb57c7c7a60f51db33aab",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_147",
+      "trial_id": "b35864e1bbabc390dc5b6dc8ea736ef1",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_155",
+      "trial_id": "f131befd1d82594997c661a483d8ac7f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_164",
+      "trial_id": "9939d9d7d402c9f4273ce12c61c7a450",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_169",
+      "trial_id": "d0eb798bc1adbcc47826cf07fad2f172",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_172",
+      "trial_id": "7666f9f791b7769a077d3cf5ce51ef8b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_176",
+      "trial_id": "25f061895fcae8ee31a16d7b1f67afc2",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_177",
+      "trial_id": "4664006cc8b84ef6153d35b7552d029e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_178",
+      "trial_id": "43d7e8b67f99a7581e52e14ac77572ec",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_183",
+      "trial_id": "b7b2510d23e57778f40d1be8218eb85b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_186",
+      "trial_id": "9cd4a354aae54de3409525b088823ac7",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_189",
+      "trial_id": "cc58d4c6c3b0f1cc08c251558e68afca",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_193",
+      "trial_id": "9d22614ddb90e91c1fe3de07c28cc9c7",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/003.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_194",
+      "trial_id": "3fb5056ef5afbf51e00cc87260fafd43",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/003.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_197",
+      "trial_id": "0278f16a75d84bd012710fcbf751a057",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_205",
+      "trial_id": "e880ebdf8a84f87fb328875afca75aae",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_206",
+      "trial_id": "c25c304a4d8a27de0708c8cfc114b0f2",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_207",
+      "trial_id": "b3a633d65ee0cec49fe362f705d16d2e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_210",
+      "trial_id": "1bcafd792a71c84d12099a474984b2e9",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_217",
+      "trial_id": "db0ef137b63c820fddccfad64b8730fd",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_221",
+      "trial_id": "b41c0b7523115a9cc8a78c59849b8a4d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_222",
+      "trial_id": "5730bc14edc23c1c154c4c27de18a067",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_226",
+      "trial_id": "6aa9d662bf2f8bb45715dcbf80c1e77f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_233",
+      "trial_id": "8b7b4ff5f2ba91da4551dfd1f5f8ac5d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_238",
+      "trial_id": "317dddef12d17f48113e60789069336d",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_245",
+      "trial_id": "802f1159c2f45980762863ce808b0416",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_261",
+      "trial_id": "c93ccd2926bc9f5eba1c377adc6b9d5a",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_273",
+      "trial_id": "73ab73be06230fc8f44ceacf64e89ce8",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_274",
+      "trial_id": "83349f1193da26fb74afa3bcdbe0fd7e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_275",
+      "trial_id": "adacb1f8e7f16fcd0597d5b46228e8a3",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_279",
+      "trial_id": "1d18bc2af9840b8887f1b6ef57f25472",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_287",
+      "trial_id": "58ebb4940b319281a6815bd597c2065c",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_289",
+      "trial_id": "086f14878c8349d25ebf51cb63bf1fb8",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_293",
+      "trial_id": "6871dce689ffdd13669f4fe5f89a994e",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_309",
+      "trial_id": "d4100315cd95aff31f942a81a48eba75",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_310",
+      "trial_id": "8a3d4844f9dc3371f5f8182b8b17cef0",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_313",
+      "trial_id": "150e012268a627f9d71325473da4b4de",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "SYS_DYT_03_320",
+      "trial_id": "37f07dac51f462563019add69680c142",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_322",
+      "trial_id": "0332d6e8e101b97a194dc4ec961cad31",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_331",
+      "trial_id": "0f1cc8f017b7f766535ff9851fa42d51",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_332",
+      "trial_id": "1fc15029dec51cd38fb3af6690c0daf9",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "SYS_DYT_03_355",
+      "trial_id": "33e42804b96f0f994c84561a95809341",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/004.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJJ_YD2_002",
+      "trial_id": "1f2d341c14548875c365c64bc23dae8f",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "TGJJ_YD2_003",
+      "trial_id": "f559a6363d84f405157e16e72e40ee09",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJJ_YD3_001",
+      "trial_id": "2609425397a0032618bb66a5f8cc52e0",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJJ_YD3_002",
+      "trial_id": "92b387a1ef5a9663899dccb2243c8363",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/011.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJK_WYD_001",
+      "trial_id": "9f78bab4f8eb253f89cdc2b4bc85c1b3",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJK_WYD_006",
+      "trial_id": "100999472f314716d9b24fa77b6b6a67",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJK_YD2_006",
+      "trial_id": "11dec3e7ff96b64de3b1b64c2e0627ad",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJK_YD2_008",
+      "trial_id": "2bf2ef52b87fc7bbf818f7d455f768ea",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJK_YD2_010",
+      "trial_id": "dec59f4c44d0c436aaaa9983d783089b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJK_YD3_004",
+      "trial_id": "9484f4fba93a185b8ef4e7b6d4895704",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGJK_YD3_005",
+      "trial_id": "9798248d67fe1285a791697b32094493",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGYJ_WYD_010",
+      "trial_id": "51692035738e39d7f3a6150dc3c1e1e0",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/006.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGYJ_YD2_001",
+      "trial_id": "90dd9f47515eba5e0aa29f83669ee944",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGYJ_YD2_003",
+      "trial_id": "62341acca21f3b89e52ebb169b6a8498",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGYJ_YD2_012",
+      "trial_id": "e26bf8d1de1514a904b848b3b87c8036",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGZS_WYYL_010",
+      "trial_id": "4d46729642a5dd9d399771f754894ad4",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGZS_WYYL_011",
+      "trial_id": "098cb769dfdae923939437099940904b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGZS_YDYL_005",
+      "trial_id": "06633621af5a2ca1694afc32292985b2",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TGZS_YDYL_009",
+      "trial_id": "7305ceabd17a74593522a00790a13951",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TOKEN_TEST_01_061",
+      "trial_id": "4e78f00170838c0e0dd5e901dfbc0e5b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "TOKEN_TEST_01_084",
+      "trial_id": "422b50a6b8e3fad5ded5d56b079f834b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TOKEN_TEST_01_123",
+      "trial_id": "8cc6cf4b58ff8fee7a071467afeaf1d9",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TOKEN_TEST_01_177",
+      "trial_id": "7326edf2d41f0b92f2421fd4d1070b8b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "TOKEN_TEST_01_184",
+      "trial_id": "f1811d6c4bcedba15a6fd3fcd892a120",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "ZJ_GY_CYX_01_023",
+      "trial_id": "0424ff003842aadad7acd66c221d860b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "ZJ_GY_KSP_01_021",
+      "trial_id": "633e96dc882cd8d010e7daa997391776",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "ZJ_GY_KSP_01_027",
+      "trial_id": "1718579ddd4996347779cb76ac34fda3",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "ZJ_JJ_SBKG_003",
+      "trial_id": "8bfb4ed46a901f20036c0af796dde362",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "ZJ_JJ_XGCX_005",
+      "trial_id": "eb395cc75ab4fab14551c5d43bc97a47",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "ZJ_JK_CYTX_001",
+      "trial_id": "f8ddc25f6ab898194f94fa9d6b726cf4",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+      "variant_id": "candidate"
+    },
+    {
+      "task_id": "ZJ_JK_DZ_004",
+      "trial_id": "8ee3e0500c391b88edbf4cbbe4b67a1a",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "ZJ_JK_GHCX_002",
+      "trial_id": "3e0d23a931a4e9117df1e511df898546",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    },
+    {
+      "task_id": "product:Two_Intent_Hybrid:DH_YT_YTLY_03_009",
+      "trial_id": "8941e31ca3591e0fae259eb6e04dd37b",
+      "report_path": "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+      "variant_id": "L0"
+    }
+  ],
+  "selection_rule": "first valid observation under current judge; all fixed historical selection tasks regraded",
+  "source_reports": [
+    "trace_output/business-simulator/published/seed004/evidence/001.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/002.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/003.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/004.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/005.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/006.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/007.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/008.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/009.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/010.json.gz",
+    "trace_output/business-simulator/published/seed004/evidence/011.json.gz"
+  ],
+  "judge_fingerprint": "6054700203082db3713c1ded0fe69d406f04b2a91a6b07d88fad6cf0246d65aa",
+  "answer_field_bytes": 32768
+}
