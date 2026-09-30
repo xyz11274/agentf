@@ -1,0 +1,57 @@
+{
+  "conversations": 272,
+  "turns": 563,
+  "unique_task_ids": 272,
+  "original_train_id_overlap": 0,
+  "batches": [
+    {
+      "source": "tools/trajectory_evolution/experiments/business-coverage/datasets/supplemental-20260929/train.jsonl",
+      "conversations": 48,
+      "turns": 111,
+      "first_line": 1,
+      "last_line": 48,
+      "evaluation_feedback_informed": false
+    },
+    {
+      "source": "tools/trajectory_evolution/experiments/business-coverage/datasets/targeted-seed-20260929/train.jsonl",
+      "conversations": 96,
+      "turns": 196,
+      "first_line": 49,
+      "last_line": 144,
+      "evaluation_feedback_informed": false
+    },
+    {
+      "source": "tools/trajectory_evolution/experiments/business-coverage/datasets/targeted-seed-crossdomain-20260929/train.jsonl",
+      "conversations": 32,
+      "turns": 64,
+      "first_line": 145,
+      "last_line": 176,
+      "evaluation_feedback_informed": false
+    },
+    {
+      "source": "tools/trajectory_evolution/experiments/business-coverage/datasets/seed-success-20260929/train.jsonl",
+      "conversations": 32,
+      "turns": 64,
+      "first_line": 177,
+      "last_line": 208,
+      "evaluation_feedback_informed": false
+    },
+    {
+      "source": "trace_output/business-simulator/seed-training-gap-012/dataset/train.jsonl",
+      "conversations": 16,
+      "turns": 32,
+      "first_line": 209,
+      "last_line": 224,
+      "evaluation_feedback_informed": true
+    },
+    {
+      "source": "tools/trajectory_evolution/experiments/business-coverage/datasets/source/supplemental-gui-delivery-014/train.jsonl",
+      "conversations": 48,
+      "turns": 96,
+      "first_line": 225,
+      "last_line": 272,
+      "evaluation_feedback_informed": true
+    }
+  ],
+  "note": "Original source records and provenance preserved. Original train/val/holdout unchanged. Native copies and replay outputs excluded. Evaluation-feedback-informed batches support targeted regression, not independent holdout claims."
+}

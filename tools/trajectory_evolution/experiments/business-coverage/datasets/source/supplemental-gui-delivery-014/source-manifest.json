@@ -1,0 +1,58 @@
+{
+  "schema": "training-gap-014.v1",
+  "tasks": 48,
+  "turns": 96,
+  "mechanisms": {
+    "navigation_without_location": 8,
+    "search_favorite_checkin": 8,
+    "recharge_missing_phone": 8,
+    "message_missing_recipient": 8,
+    "shopping_missing_address": 8,
+    "unsupported_dependent_branch": 8
+  },
+  "parent_candidate": "seed_relearn_scoped_004",
+  "evaluation_feedback_informed": true,
+  "training_feedback_sources": [
+    {
+      "split": "val",
+      "task_ids": [
+        "CK_GUI_FHCK_00_061",
+        "CK_GUI_FHCK_00_139"
+      ],
+      "mechanism": "complete_plan_delivery"
+    },
+    {
+      "split": "holdout",
+      "task_ids": [
+        "TGJK_YD2_002"
+      ],
+      "mechanism": "complete_plan_delivery"
+    },
+    {
+      "split": "val",
+      "task_ids": [
+        "QA_GY_YDYL_005"
+      ],
+      "mechanism": "deliver_actual_results"
+    },
+    {
+      "split": "val",
+      "task_ids": [
+        "QA_GUI_YDYL_014"
+      ],
+      "mechanism": "failure_branch_and_missing_fields"
+    },
+    {
+      "split": "val",
+      "task_ids": [
+        "QA_GUI_YDYL_002"
+      ],
+      "mechanism": "bind_selected_entity"
+    }
+  ],
+  "evaluation_basis": "training_informed_replay",
+  "independent_holdout": false,
+  "evaluation_dataset_modified": false,
+  "copied_evaluation_answers": false,
+  "generation": "48 natural GUI conversations across six mechanism families, eight distinct contexts each; expectations authored from real tool contract, no copied evaluation answers."
+}
