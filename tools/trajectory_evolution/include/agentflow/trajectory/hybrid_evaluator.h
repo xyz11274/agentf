@@ -150,7 +150,8 @@ private:
   EvaluationOutput evaluate_content(const AnalysisReport &analysis, const std::string &content,
                                     bool standard_trace = false,
                                     const std::string &execution_status = {},
-                                    const std::string &business_status = {}) const;
+                                    const std::string &business_status = {},
+                                    const std::string &model_content = {}) const;
 
   EvaluatorOptions options_;
   std::shared_ptr<ModelAdapter> model_adapter_;

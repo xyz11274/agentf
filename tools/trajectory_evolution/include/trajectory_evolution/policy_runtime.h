@@ -8,6 +8,9 @@
 #include "runtime_policy.pb.h"
 #include "trajectory_evolution/shadow_runtime.h"
 
+#include <map>
+#include <tuple>
+
 namespace trajectory::evolution {
 
 // 编译阶段把经验快照和经校验的选项固定为一个不可变策略版本；后续运行时只读取该版本。
@@ -28,11 +31,11 @@ public:
     return policy_;
   }
 
-  // 决策函数没有副作用：它只把当前打点查询映射为建议、控制或循环结论。
+  // 固定策略把打点查询映射为建议、控制或循环结论；同一 run 的 L1 经验只注入一次。
   // 业务状态只能在宿主随后提交实际执行结果时推进，不能把策略建议误记为已发生事实。
   // 运行时读取当前边界事实并产生有界决策；这里不调用远程模型进行语义裁判。
   v1::RuntimeDecision decide(const v1::RuntimeQuery &query) const;
-  // 重新计算控制决定，不能把调用方传入的计划直接当作证据。
+  // 校验原查询准备的 L1 决定或重新计算控制决定；不信任调用方声称已应用。
   v1::RuntimeReceipt verify(const v1::RuntimeQuery &query,
                             const v1::RuntimeObservation &observation) const;
   // 每次调用的原生请求布局只读取绑定字段，
@@ -45,6 +48,16 @@ private:
   const v1::RuntimePolicy policy_;
   const ShadowRuntime shadow_;
   std::set<std::string> approved_ids_;
+  // The native host owns one PolicyRuntime per run. Retain only decisions
+  // that actually prepared a nonempty L1 injection, so interleaved queries
+  // cannot erase the original receipt evidence or reopen one-shot advice.
+  // Keys are the existing run/query/decision/boundary identity, not a new
+  // fingerprint. Each retained decision contains its original full query.
+  using PreparedQueryKey =
+      std::tuple<std::string, std::string, std::string, std::string>;
+  mutable std::string seen_run_id_;
+  mutable std::set<std::string> injected_experience_ids_;
+  mutable std::map<PreparedQueryKey, v1::RuntimeDecision> prepared_injections_;
 };
 
 } // 命名空间结束：trajectory::evolution

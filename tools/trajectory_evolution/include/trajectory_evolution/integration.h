@@ -37,6 +37,8 @@ public:
   // 显式冷启动准入：只接收已验证且未修改的 L0 训练试验。
   IntegrationResponse import_training_evaluation(const std::filesystem::path &report_directory,
                                                  const std::filesystem::path &dataset_directory);
+  // 仅从权威成功分析缓存重新绑定已有经验的语义证据，不请求模型或重放业务。
+  IntegrationResponse refresh_evidence();
   // 返回后台学习队列和处理状态，不触发额外模型请求。
   std::string learning_status() const;
   // 在后台处理已到期的评测工作，遵守批次、频率和取消约束。

@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <initializer_list>
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -92,8 +94,310 @@ inline void trace_view(Value &trace) {
       event_view(event);
 }
 
+// A request handoff is supported only by a real common agent-turn parent,
+// an explicit target and either exact actual user input or a unique framework
+// dispatch key. This is not a new DAG edge and makes no claim about the
+// contribution or necessity of either iteration.
+inline Value dispatch_handoffs(const Value &trace, Allocator &allocator) {
+  Value result(rapidjson::kArrayType);
+  if (!trace.IsObject() || !trace.HasMember("events") || !trace["events"].IsArray())
+    return result;
+  const Value empty;
+  auto member = [&](const Value &value, const char *key) -> const Value & {
+    return value.IsObject() && value.HasMember(key) ? value[key] : empty;
+  };
+  auto text = [&](const Value &value) -> std::string {
+    return value.IsString() ? std::string(value.GetString(), value.GetStringLength()) : "";
+  };
+  auto stamp = [&](const Value &event) -> std::uint64_t {
+    const auto &value = member(event, "timestamp_us");
+    if (value.IsUint64()) return value.GetUint64();
+    const auto raw = text(value);
+    if (raw.empty()) return 0;
+    for (const auto ch : raw) if (ch < '0' || ch > '9') return 0;
+    try { return std::stoull(raw); } catch (...) { return 0; }
+  };
+  std::map<std::string, const Value *> events;
+  for (const auto &event : trace["events"].GetArray()) {
+    const auto id = text(member(event, "event_id"));
+    if (id.empty() || id.size() > 256 || !events.emplace(id, &event).second)
+      return result;
+  }
+  auto parent = [&](const Value &event) -> std::string {
+    std::vector<std::string> pending{text(member(event, "event_id"))};
+    std::set<std::string> seen, parents;
+    while (!pending.empty()) {
+      const auto id = pending.back(); pending.pop_back();
+      if (!seen.insert(id).second) continue;
+      const auto found = events.find(id);
+      if (found == events.end()) return "";
+      const auto &item = *found->second;
+      const auto &attrs = member(item, "attributes");
+      if (text(member(item, "kind")) == "step.start" &&
+          text(member(attrs, "activity_kind")) == "agent-turn") {
+        parents.insert(id); continue;
+      }
+      const auto &causes = member(item, "caused_by");
+      if (causes.IsArray()) for (const auto &cause : causes.GetArray()) {
+        if (!cause.IsString()) return "";
+        pending.push_back(text(cause));
+      }
+    }
+    return parents.size() == 1 ? *parents.begin() : "";
+  };
+  struct Dispatch {
+    const Value *event;
+    std::string parent, target, prompt, call_id;
+    std::size_t ordinal;
+  };
+  struct Child {
+    const Value *event;
+    std::string parent, prompt, key, target;
+  };
+  std::vector<Dispatch> dispatches;
+  std::vector<Child> children;
+  for (const auto &event : trace["events"].GetArray()) {
+    const auto &attrs = member(event, "attributes"), &ext = member(attrs, "extensions");
+    if (text(member(event, "kind")) != "action.end" ||
+        text(member(attrs, "semantic")) != "model" ||
+        !member(attrs, "executed").IsTrue() ||
+        text(member(ext, "source_event_name")) != "llm.request.prepared") continue;
+    const auto owner = parent(event);
+    if (owner.empty() || !stamp(event)) continue;
+    const auto actor = text(member(event, "actor_id"));
+    const auto &choices = member(member(event, "output"), "choices");
+    if (actor == "coordinator_decide" && choices.IsArray())
+      for (const auto &choice : choices.GetArray()) {
+        const auto &message = member(choice, "message");
+        const auto &calls = member(message.IsObject() ? message : choice, "tool_calls");
+        if (!calls.IsArray()) continue;
+        for (const auto &call : calls.GetArray()) {
+          const auto &function = member(call, "function");
+          const auto &fn = function.IsObject() ? function : call;
+          auto name = text(member(fn, "name"));
+          if (name.empty()) name = text(member(call, "tool_name"));
+          if (name != "run_skills") continue;
+          auto call_id = text(member(call, "tool_call_id"));
+          if (call_id.empty()) call_id = text(member(call, "id"));
+          if (call_id.empty() || call_id.size() > 256) continue;
+          const auto &raw = member(fn, "arguments");
+          rapidjson::Document parsed;
+          if (raw.IsString() && raw.GetStringLength() <= 32768)
+            parsed.Parse(raw.GetString(), raw.GetStringLength());
+          const auto &args = raw.IsObject() ? raw : static_cast<const Value &>(parsed);
+          const auto &skills = member(args, "skills");
+          if (!skills.IsArray()) continue;
+          std::size_t ordinal = 0;
+          for (const auto &skill : skills.GetArray()) {
+            const auto target = text(member(skill, "name")), prompt = text(member(skill, "prompt"));
+            if (!target.empty() && target.size() <= 128 && !prompt.empty() && prompt.size() <= 4096)
+              dispatches.push_back({&event, owner, target, prompt, call_id, ordinal});
+            ++ordinal;
+          }
+        }
+      }
+    if (actor == "skill_executor") {
+      const auto key = text(member(ext, "exec_skill_key"));
+      if (key.empty() || key.size() > 512) continue;
+      const auto &messages = member(member(event, "input"), "messages");
+      if (!messages.IsArray()) continue;
+      std::string prompt;
+      std::string target;
+      for (const auto &message : messages.GetArray()) {
+        if (text(member(message, "role")) == "user") {
+          if (prompt.empty())
+            prompt = text(member(message, "content"));
+          continue;
+        }
+        if (text(member(message, "role")) == "system") {
+          const auto content = text(member(message, "content"));
+          const std::string prefix = "## Skill: ";
+          if (content.compare(0, prefix.size(), prefix) == 0) {
+            const auto end = content.find('\n', prefix.size());
+            target = content.substr(prefix.size(), end == std::string::npos
+                                                        ? std::string::npos
+                                                        : end - prefix.size());
+          }
+        }
+      }
+      if (!prompt.empty() && prompt.size() <= 4096 && target.size() <= 128)
+        children.push_back({&event, owner, prompt, key, target});
+    }
+  }
+  if (dispatches.size() > 128 || children.size() > 128) return result;
+  struct Match {
+    std::size_t dispatch, child;
+    const char *basis;
+  };
+  std::vector<Match> matches;
+  std::vector<std::size_t> dispatch_count(dispatches.size()), child_count(children.size());
+  std::map<std::string, std::size_t> dispatch_target_counts, child_target_counts;
+  auto pair_key = [](const std::string &parent, const std::string &target) {
+    return parent + '\x1f' + target;
+  };
+  for (const auto &dispatch : dispatches)
+    ++dispatch_target_counts[pair_key(dispatch.parent, dispatch.target)];
+  for (const auto &child : children)
+    if (!child.target.empty())
+      ++child_target_counts[pair_key(child.parent, child.target)];
+  for (std::size_t d = 0; d < dispatches.size(); ++d)
+    for (std::size_t c = 0; c < children.size(); ++c) {
+      const auto &dispatch = dispatches[d]; const auto &child = children[c];
+      if (dispatch.parent != child.parent ||
+          stamp(*dispatch.event) >= stamp(*child.event)) continue;
+      if (child.target != dispatch.target) continue;
+      if (dispatch.prompt == child.prompt) {
+        matches.push_back({d, c, "unique_same_parent_exact_prompt"});
+        ++dispatch_count[d]; ++child_count[c];
+        continue;
+      }
+      // AppWorld's skill wrapper prepends the complete skill document and
+      // normalizes the child prompt. A unique explicit dispatch key keeps
+      // the causal handoff observable without asserting that the child was
+      // useful or that either loop must be kept.
+      if (child.key.rfind("dispatch:", 0) == 0 &&
+          dispatch_target_counts[pair_key(dispatch.parent, dispatch.target)] == 1 &&
+          child_target_counts[pair_key(child.parent, child.target)] == 1)
+        matches.push_back({d, c, "unique_same_parent_dispatch_key"});
+    }
+  for (const auto &match : matches) {
+    if (match.basis == std::string("unique_same_parent_exact_prompt") &&
+        (dispatch_count[match.dispatch] != 1 || child_count[match.child] != 1)) continue;
+    const auto &dispatch = dispatches[match.dispatch]; const auto &child = children[match.child];
+    Value row(rapidjson::kObjectType);
+    auto add = [&](const char *key, const std::string &value) {
+      if (!value.empty()) row.AddMember(Value(key, allocator), Value(value.data(), value.size(), allocator), allocator);
+    };
+    add("dispatch_event_id", text(member(*dispatch.event, "event_id")));
+    add("skill_event_id", text(member(*child.event, "event_id")));
+    add("parent_event_id", dispatch.parent); add("target", dispatch.target);
+    add("tool_call_id", dispatch.call_id); add("exec_skill_key", child.key);
+    add("dispatch_source_call_id", text(member(member(member(*dispatch.event, "attributes"), "extensions"), "source_call_id")));
+    add("skill_source_call_id", text(member(member(member(*child.event, "attributes"), "extensions"), "source_call_id")));
+    row.AddMember("skill_ordinal", static_cast<unsigned>(dispatch.ordinal), allocator);
+    row.AddMember("matching_basis", Value(match.basis, allocator), allocator);
+    result.PushBack(row, allocator);
+  }
+  return result;
+}
+
+// Derive bounded identity metadata before any public payload is previewed.
+// Reapplying this to a projected trace must not duplicate the real handoff.
+inline void bind_dispatch_handoffs(Value &trace, Allocator &allocator) {
+  if (!trace.IsObject()) return;
+  auto handoffs = dispatch_handoffs(trace, allocator);
+  std::set<std::string> recorded;
+  auto identity = [](const Value &handoff) {
+    if (!handoff.IsObject()) return bytes(handoff);
+    std::string key;
+    for (const auto *field : {"dispatch_event_id", "skill_event_id", "parent_event_id",
+                             "target", "tool_call_id", "exec_skill_key", "matching_basis"}) {
+      key += '\x1f';
+      if (handoff.HasMember(field) && handoff[field].IsString())
+        key.append(handoff[field].GetString(), handoff[field].GetStringLength());
+    }
+    return key;
+  };
+  for (const auto &handoff : handoffs.GetArray()) recorded.insert(identity(handoff));
+  if (trace.HasMember("attributes") && trace["attributes"].IsObject() &&
+      trace["attributes"].HasMember("dispatch_handoffs") &&
+      trace["attributes"]["dispatch_handoffs"].IsArray()) {
+    for (const auto &handoff : trace["attributes"]["dispatch_handoffs"].GetArray())
+      if (recorded.insert(identity(handoff)).second) {
+        Value copy(handoff, allocator);
+        handoffs.PushBack(std::move(copy), allocator);
+      }
+  }
+  if (trace.HasMember("attributes") && trace["attributes"].IsObject())
+    trace["attributes"].RemoveMember("dispatch_handoffs");
+  if (handoffs.Empty()) return;
+  if (!trace.HasMember("attributes"))
+    trace.AddMember("attributes", Value(rapidjson::kObjectType), allocator);
+  if (trace["attributes"].IsObject())
+    trace["attributes"].AddMember("dispatch_handoffs", handoffs, allocator);
+}
+
+inline void bind_dispatch_handoffs(rapidjson::Document &evidence) {
+  if (!evidence.IsObject()) return;
+  if (evidence.HasMember("trace"))
+    bind_dispatch_handoffs(evidence["trace"], evidence.GetAllocator());
+  if (evidence.HasMember("traces") && evidence["traces"].IsArray())
+    for (auto &trace : evidence["traces"].GetArray())
+      bind_dispatch_handoffs(trace, evidence.GetAllocator());
+}
+
+// A uniquely observed dispatch is a prerequisite of its actual child request.
+// Reject contradictory reviews, rather than assigning either contribution here.
+// Missing/ambiguous links and children already judged waste remain model-reviewed.
+inline Value dispatch_dependency_conflicts(const Value &review, const Value &inventory,
+                                          const Value &evidence, Allocator &allocator) {
+  Value result(rapidjson::kArrayType);
+  const Value empty;
+  auto member = [&](const Value &value, const char *key) -> const Value & {
+    return value.IsObject() && value.HasMember(key) ? value[key] : empty;
+  };
+  auto text = [&](const Value &value) -> std::string {
+    return value.IsString() ? std::string(value.GetString(), value.GetStringLength()) : "";
+  };
+  const auto &rows = member(review, "iteration_reviews");
+  if (!rows.IsArray() || !inventory.IsObject()) return result;
+  std::map<std::string, std::string> decisions;
+  for (const auto &row : rows.GetArray())
+    decisions.emplace(text(member(row, "iteration_id")), text(member(row, "decision")));
+  std::set<std::string> rejected;
+  auto inspect = [&](const Value &trace) {
+    const auto run = text(member(member(trace, "identity"), "run_id"));
+    const auto &links = member(member(trace, "attributes"), "dispatch_handoffs");
+    if (run.empty() || !links.IsArray()) return;
+    auto iteration = [&](const std::string &event) -> std::string {
+      std::string found;
+      for (auto entry = inventory.MemberBegin(); entry != inventory.MemberEnd(); ++entry) {
+        if (text(member(entry->value, "run_id")) != run) continue;
+        const auto &ids = member(entry->value, "event_ids");
+        if (!ids.IsArray()) continue;
+        for (const auto &id : ids.GetArray()) if (text(id) == event) {
+          if (!found.empty()) return "";
+          found = text(entry->name);
+        }
+      }
+      return found;
+    };
+    for (const auto &link : links.GetArray()) {
+      // These records were derived from real same-parent requests by the
+      // projection above. We do not infer links from a repeated skill name.
+      if (text(member(link, "matching_basis")) != "unique_same_parent_exact_prompt" ||
+          text(member(link, "parent_event_id")).empty() ||
+          text(member(link, "target")).empty()) continue;
+      const auto dispatch_event = text(member(link, "dispatch_event_id"));
+      const auto child_event = text(member(link, "skill_event_id"));
+      if (dispatch_event.empty() || child_event.empty() || dispatch_event == child_event) continue;
+      const auto dispatch = iteration(dispatch_event), child = iteration(child_event);
+      if (dispatch.empty() || child.empty() || dispatch == child ||
+          decisions[dispatch] != "waste" || decisions[child] != "keep" ||
+          !rejected.insert(dispatch).second) continue;
+      Value conflict(rapidjson::kObjectType);
+      auto add = [&](const char *key, const std::string &value) {
+        conflict.AddMember(Value(key, allocator), Value(value.data(), value.size(), allocator), allocator);
+      };
+      add("iteration_id", dispatch);
+      add("issue", "necessary_contribution_discarded");
+      add("constraint", "actual_dispatch_required_by_retained_child");
+      add("retained_iteration_id", child);
+      add("dispatch_event_id", dispatch_event);
+      add("skill_event_id", child_event);
+      result.PushBack(conflict, allocator);
+    }
+  };
+  const auto &traces = member(evidence, "traces");
+  if (traces.IsArray()) for (const auto &trace : traces.GetArray()) inspect(trace);
+  else inspect(member(evidence, "trace"));
+  return result;
+}
+
 // 移除重复模型信封和组件诊断，保留实际动作、返回及并发因果。
-inline void task_evidence_view(Value &evidence, bool include_model_requests = true) {
+inline void task_evidence_view(rapidjson::Document &evidence, bool include_model_requests = true,
+                               bool keep_causal_anchors = false, bool keep_dispatch_bindings = false,
+                               bool keep_outer_request_inputs = false) {
   // 确定性分析、来源信息和尚未得出的评测结论保留在本地。
   omit(evidence, {"trajectory", "execution_run_id", "loaded_version", "loop_review"});
   if (!evidence.IsObject())
@@ -102,11 +406,58 @@ inline void task_evidence_view(Value &evidence, bool include_model_requests = tr
     for (auto &file : evidence["artifacts"].GetObject())
       omit(file.value, {"stored_file"});
   auto execution_view = [&](Value &trace) {
+    if (keep_dispatch_bindings)
+      bind_dispatch_handoffs(trace, evidence.GetAllocator());
     trace_view(trace);
     if (include_model_requests || !trace.IsObject() || !trace.HasMember("events") ||
         !trace["events"].IsArray())
       return;
     auto &events = trace["events"];
+    // 可选地保留真正被依赖的传输节点身份。正文仍省略，不能用压缩后的
+    // 相邻位置补造前因，也不能将不同 Run 的相同 ID 串在一起。
+    std::vector<Value> causal_metadata;
+    std::map<std::string, std::size_t> causal_indices;
+    std::set<std::string> ambiguous_causal_ids;
+    std::vector<std::size_t> retained_indices;
+    if (keep_causal_anchors) {
+      causal_metadata.reserve(events.Size());
+      for (const auto &event : events.GetArray()) {
+        Value metadata(rapidjson::kObjectType);
+        if (event.IsObject()) {
+          for (const auto *field : {"event_id", "kind", "timestamp_us", "actor_id", "action_id",
+                                   "execution_id", "step_id", "loop_id", "iteration", "operation",
+                                   "status", "caused_by"}) {
+            const auto found = event.FindMember(field);
+            if (found != event.MemberEnd()) {
+              Value key(field, evidence.GetAllocator());
+              Value value(found->value, evidence.GetAllocator());
+              metadata.AddMember(key, value, evidence.GetAllocator());
+            }
+          }
+          const auto attributes = event.FindMember("attributes");
+          if (attributes != event.MemberEnd() && attributes->value.IsObject()) {
+            Value typed(rapidjson::kObjectType);
+            for (const auto *field : {"semantic", "type", "executed"}) {
+              const auto found = attributes->value.FindMember(field);
+              if (found != attributes->value.MemberEnd()) {
+                Value key(field, evidence.GetAllocator());
+                Value value(found->value, evidence.GetAllocator());
+                typed.AddMember(key, value, evidence.GetAllocator());
+              }
+            }
+            if (!typed.ObjectEmpty())
+              metadata.AddMember("attributes", typed, evidence.GetAllocator());
+          }
+          const auto id = event.FindMember("event_id");
+          if (id != event.MemberEnd() && id->value.IsString()) {
+            const std::string name(id->value.GetString(), id->value.GetStringLength());
+            if (!name.empty() && !causal_indices.emplace(name, causal_metadata.size()).second)
+              ambiguous_causal_ids.insert(name);
+          }
+        }
+        causal_metadata.push_back(std::move(metadata));
+      }
+    }
     bool has_action_start = false, has_action_end = false;
     std::set<std::string> action_steps;
     for (const auto &event : events.GetArray()) {
@@ -120,9 +471,14 @@ inline void task_evidence_view(Value &evidence, bool include_model_requests = tr
     }
     const bool has_action_evidence = has_action_start && has_action_end;
     std::set<std::string> retained_step_inputs;
+    std::set<std::pair<std::string, std::string>> retained_outer_requests;
+    std::size_t original_index = 0;
     for (auto it = events.Begin(); it != events.End();) {
+      const auto current_index = original_index++;
       auto &event = *it;
       if (!event.IsObject()) {
+        if (keep_causal_anchors)
+          retained_indices.push_back(current_index);
         ++it;
         continue;
       }
@@ -157,7 +513,19 @@ inline void task_evidence_view(Value &evidence, bool include_model_requests = tr
                                   event["actor_id"].GetStringLength())
                     : std::string{};
             const bool message = event["input"].IsObject() && event["input"].HasMember("role");
-            retain_step = message || retained_step_inputs.insert(execution).second;
+            const auto &input = event["input"];
+            const bool outer_request = keep_outer_request_inputs && attributes &&
+                attributes->HasMember("activity_kind") && (*attributes)["activity_kind"] == "agent-turn" &&
+                input.IsObject() && input.HasMember("system") && input["system"].IsString() &&
+                input.HasMember("messages") && input["messages"].IsArray() &&
+                input.HasMember("turn") && input["turn"].IsNumber();
+            // Each outer request may carry new observations while sharing the
+            // same native execution. A preceding control-state input must not
+            // consume its slot. Repeated identical requests remain compact;
+            // the existing text sharing handles repeated history strings.
+            retain_step = message || (outer_request
+                ? retained_outer_requests.emplace(execution, bytes(input)).second
+                : retained_step_inputs.insert(execution).second);
           }
         }
       }
@@ -222,7 +590,40 @@ inline void task_evidence_view(Value &evidence, bool include_model_requests = tr
         if (value.ObjectEmpty())
           event.RemoveMember("attributes");
       }
+      if (keep_causal_anchors)
+        retained_indices.push_back(current_index);
       ++it;
+    }
+    if (keep_causal_anchors) {
+      std::set<std::size_t> required(retained_indices.begin(), retained_indices.end());
+      std::vector<std::size_t> pending(retained_indices.begin(), retained_indices.end());
+      while (!pending.empty()) {
+        const auto index = pending.back();
+        pending.pop_back();
+        const auto &metadata = causal_metadata[index];
+        const auto causes = metadata.FindMember("caused_by");
+        if (causes == metadata.MemberEnd() || !causes->value.IsArray())
+          continue;
+        for (const auto &cause : causes->value.GetArray()) {
+          if (!cause.IsString())
+            continue;
+          const std::string id(cause.GetString(), cause.GetStringLength());
+          const auto found = causal_indices.find(id);
+          if (found != causal_indices.end() && !ambiguous_causal_ids.count(id) &&
+              required.insert(found->second).second)
+            pending.push_back(found->second);
+        }
+      }
+      Value complete(rapidjson::kArrayType);
+      complete.Reserve(static_cast<rapidjson::SizeType>(required.size()), evidence.GetAllocator());
+      std::size_t retained = 0;
+      for (std::size_t index = 0; index < causal_metadata.size(); ++index) {
+        if (retained < retained_indices.size() && retained_indices[retained] == index)
+          complete.PushBack(events[static_cast<rapidjson::SizeType>(retained++)], evidence.GetAllocator());
+        else if (required.count(index))
+          complete.PushBack(causal_metadata[index], evidence.GetAllocator());
+      }
+      events = std::move(complete);
     }
   };
   if (evidence.HasMember("trace"))
@@ -238,8 +639,10 @@ class Sharing {
 public:
   // 初始化 Sharing 的状态和资源；输入参数的校验与所有权在构造阶段确定。
   // 对象创建后复用既有配置，实际执行与收尾分别由后续接口负责。
-  Sharing(Allocator &allocator, const char *reference_key, bool containers = true)
-      : allocator_(allocator), reference_key_(reference_key), containers_(containers) {}
+  Sharing(Allocator &allocator, const char *reference_key, bool containers = true,
+          std::size_t minimum_bytes = 512, std::size_t maximum_container_bytes = 1048576)
+      : allocator_(allocator), reference_key_(reference_key), containers_(containers),
+        minimum_bytes_(minimum_bytes), maximum_container_bytes_(maximum_container_bytes) {}
 
   // 收集当前缓冲区或候选片段，遵守容量上限和内存所有权要求。
   void collect(Value &value, const std::string &path, bool share_node = true) {
@@ -248,7 +651,7 @@ public:
     if (share_node &&
         (value.IsString() || (containers_ && (value.IsArray() || value.IsObject())))) {
       const auto text = bytes(value);
-      if (text.size() >= 512) {
+      if (text.size() >= minimum_bytes_) {
         const auto found = sources_.find(text);
         if (found != sources_.end()) {
           auto &reference = references_[found->second];
@@ -262,7 +665,9 @@ public:
         }
         // 同时限制本地工作内存与模型输入。
         // 整段历史数组过大时，仍可按单条消息共享重复内容。
-        if (text.size() <= 1048576 && stored_bytes_ + text.size() <= 4194304 &&
+        if (text.size() <= 1048576 &&
+            (value.IsString() || text.size() <= maximum_container_bytes_) &&
+            stored_bytes_ + text.size() <= 4194304 &&
             sources_.size() < 4096) {
           sources_.emplace(text, references_.Size());
           stored_bytes_ += text.size();
@@ -299,6 +704,7 @@ private:
   Allocator &allocator_;
   const char *reference_key_;
   bool containers_;
+  std::size_t minimum_bytes_, maximum_container_bytes_;
   std::map<std::string, rapidjson::SizeType> sources_;
   Value references_{rapidjson::kArrayType};
   std::size_t replacements_ = 0, stored_bytes_ = 0;
@@ -357,7 +763,10 @@ inline void dialogue_view(rapidjson::Document &payload, bool standard_trace) {
     }
   rapidjson::Document compact;
   compact.CopyFrom(payload, compact.GetAllocator());
-  Sharing sharing(compact.GetAllocator(), "$content_ref");
+  // Growing request histories must not exhaust the bounded exact-value
+  // index before their individual messages and short failure results are seen.
+  // Keep all unique values; limit only container indexing, not input content.
+  Sharing sharing(compact.GetAllocator(), "$content_ref", true, 128, 8192);
   auto &events = compact["content_events"];
   for (rapidjson::SizeType i = 0; i < events.Size(); ++i)
     sharing.collect(events[i]["data"], "/content_events/" + std::to_string(i) + "/data", false);

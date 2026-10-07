@@ -9,6 +9,7 @@
 #include "trace_internal.h"
 #include "model_json.h"
 #include "model_input.h"
+#include "code_projection.h"
 
 #include <algorithm>
 #include <array>
@@ -1065,15 +1066,28 @@ HybridTrajectoryEvaluator::evaluate_trace_json(const std::string &trace_json) co
     if (event.kind() == "run.end")
       outcome = &event.outcome();
   }
+  // Source identity and deterministic analysis use the original trace. The
+  // model receives only the validated local code view attached at import.
+  std::string model_content;
+  const auto attributes = ::trajectory::evolution::integration::json(validated.trace.attributes());
+  const auto &projection = attributes["training_evaluation"]["evidence_projection"];
+  if (projection.has("code_patches")) {
+    namespace view = ::trajectory::evolution::integration;
+    view::Json evidence{{"trace", view::json(validated.trace)}};
+    view::apply_code_projection(evidence, projection);
+    evidence["trace"]["attributes"]["training_evaluation"].fields().erase("evidence_projection");
+    model_content = neutral::trace_content_jsonl(view::proto<neutral::v1::TraceRun>(evidence["trace"]));
+  }
   return evaluate_content(analysis, neutral::trace_content_jsonl(validated.trace), true,
                           outcome == nullptr ? "unknown" : outcome->execution_status(),
-                          outcome == nullptr ? "unknown" : outcome->business_status());
+                          outcome == nullptr ? "unknown" : outcome->business_status(), model_content);
 }
 
 // 按识别出的输入类型选择正确解析入口，统一返回评测报告。
 EvaluationOutput HybridTrajectoryEvaluator::evaluate_content(
     const AnalysisReport &analysis, const std::string &sessionlog, bool standard_trace,
-    const std::string &execution_status, const std::string &business_status) const {
+    const std::string &execution_status, const std::string &business_status,
+    const std::string &model_content) const {
 
   EvaluatorOptions deterministic_options = options_;
   deterministic_options.model_selection = ModelSelection::none;
@@ -1150,7 +1164,8 @@ EvaluationOutput HybridTrajectoryEvaluator::evaluate_content(
     throw EvaluationError("dialogue evaluation requires prompt templates");
   }
   ModelRequest request =
-      make_dialogue_request(*report, selected_indices, sessionlog, *options_.prompts, &sanitizer,
+      make_dialogue_request(*report, selected_indices, model_content.empty() ? sessionlog : model_content,
+                            *options_.prompts, &sanitizer,
                             &content_event_count, standard_trace);
   report->set_content_event_count(content_event_count);
   report->set_redaction_count(sanitizer.redaction_count);

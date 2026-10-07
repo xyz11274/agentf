@@ -29,6 +29,9 @@ public:
   std::function<std::string(const Path &, std::size_t)> read;
   std::function<void(const Path &, const std::string &)> write;
   std::function<std::string(const std::string &)> hash;
+  Json external_source;
+  std::function<Report(const Json &)> external_loader;
+  bool external_requested = false;
 
   // 按缓存身份生成索引路径，同一数据与评测口径才能定位同一份缓存。
   Path index_path() const {
@@ -37,6 +40,12 @@ public:
 
   // 解析缓存记录中的相对产物路径，拒绝绝对路径和父目录跳转。
   Path source_path(const Json &source) const {
+    if (source.str("kind") == "verified_external_baseline.v1") {
+      const Path absolute(source.str("report"));
+      require(external_loader && absolute.is_absolute() && absolute.filename() == "report.json",
+              "gepa_holdout_cache_path_invalid");
+      return absolute.lexically_normal();
+    }
     const Path relative(source.str("report"));
     require(!relative.empty() && !relative.is_absolute() && relative.filename() == "report.json",
             "gepa_holdout_cache_path_invalid");
@@ -82,6 +91,12 @@ public:
     require(identity.str("split") == "holdout" &&
                 cached_identity.dump() == expected_identity.dump(),
             "gepa_holdout_cache_identity_changed");
+    if (source.str("kind") == "verified_external_baseline.v1") {
+      require(bool(external_loader), "gepa_external_baseline_loader_required");
+      auto report = external_loader(source);
+      artifacts(report, source_path(source).parent_path());
+      return report;
+    }
     std::cerr << "[gepa] holdout_cache_stage=identity\n";
     const auto path = source_path(source);
     // 报告 JSON 可能达到数百 MB。这里只校验哈希，不再把它解析成
@@ -211,6 +226,10 @@ public:
         // 任务版本清单会随数据集增长，索引是元数据而非评测正文；
         // 16 KiB 会把合法的大数据集索引截断，导致 object_required。
         selected = Json::parse(read(index_path(), 4 * 1024 * 1024));
+      else if (external_source.object())
+        selected = external_source;
+      else if (external_requested)
+        return Json{{"status", "pending"}, {"reason", "external_baseline_incomplete"}};
       else {
         // 旧版通过 val L0 的身份链证明执行条件；这里只读取旧最终报告的 holdout baseline。
         // 不看分数选来源：按作业开始时间、路径固定选择最早的兼容来源，选中后损坏即失效。
@@ -380,11 +399,15 @@ public:
         {"model_calls", candidate_summary["model_calls"]},
         {"comparison_timing", "historical_baseline"},
         {"baseline_source", selected},
+        {"resource_costs_complete", selected.flag("resource_costs_complete", true)},
         {"candidate_source",
          Json{{"run_id", candidate.run_id()}, {"report_hash", hash(fresh_bytes)}}},
         {"by_variant", Json{{"baseline", json(baseline.summary())["by_variant"]["baseline"]},
                             {"candidate", candidate_summary["by_variant"]["candidate"]}}}};
     *combined.mutable_summary() = proto<google::protobuf::Struct>(summary);
+    if (selected.str("kind") == "verified_external_baseline.v1")
+      (*(*combined.mutable_summary()->mutable_fields())["by_variant"].mutable_struct_value()->mutable_fields())["baseline"] =
+          baseline.summary().fields().at("by_variant").struct_value().fields().at("baseline");
     *combined.mutable_comparisons() = proto<google::protobuf::Struct>(Json{
         {"candidate",
          Json{{"baseline", "baseline"},
@@ -409,7 +432,14 @@ public:
         Json{{"id", "baseline"}, {"version", identity["baseline_version"]}});
     configuration["comparison_timing"] = "historical_baseline";
     *combined.mutable_configuration() = proto<google::protobuf::Struct>(configuration);
-    const auto bytes = json(combined).dump(), pb = combined.SerializeAsString();
+    std::string bytes;
+    if (selected.str("kind") == "verified_external_baseline.v1") {
+      google::protobuf::util::JsonPrintOptions print_options;
+      print_options.preserve_proto_field_names = true;
+      require(google::protobuf::util::MessageToJsonString(combined, &bytes, print_options).ok(),
+              "serialization_failed");
+    } else bytes = json(combined).dump();
+    const auto pb = combined.SerializeAsString();
     // 配对报告仍服从原批次的总量上限，拒绝时不留下半套产物。
     require(bytes.size() <= report_limit && pb.size() <= report_limit,
             "evaluation_report_size_limit");

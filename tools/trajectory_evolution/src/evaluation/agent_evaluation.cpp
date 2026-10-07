@@ -19,6 +19,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 #include <openssl/sha.h>
@@ -138,11 +139,25 @@ std::string lane(const std::string &user, const std::string &level) {
 
 // 从运行配置构造固定基线变体，确保它不加载待评候选策略。
 Json baseline(const Json &artifact) {
-  return Json{{"schema_version", 1},
+  Json result{{"schema_version", 1},
               {"agent", artifact["agent"]},
               {"user_id", artifact["user_id"]},
               {"level", "L0"},
               {"policy", nullptr}};
+  // AppWorld's window mode controls only L1 advice. Keeping it on L0 would
+  // create a different artifact identity for an unchanged baseline execution.
+  auto &agent = result["agent"];
+  if (agent.has("appworld_options") && agent["appworld_options"].object()) {
+    agent["appworld_options"].fields().erase("l1_window_mode");
+    agent["appworld_options"].fields().erase("l1_observed_phase_experiences");
+    agent["appworld_options"].fields().erase("l1_saved_result_experiences");
+    agent["appworld_options"].fields().erase("l1_auth_parameter_experiences");
+    agent["appworld_options"].fields().erase("l1_auth_structured_missing");
+    agent["appworld_options"].fields().erase("l1_shape_error_auth_experiences");
+    agent["appworld_options"].fields().erase("l1_shape_error_state_forwarding");
+    if (agent["appworld_options"].fields().empty()) agent.fields().erase("appworld_options");
+  }
+  return result;
 }
 
 // 读取候选关联的来源记忆，供真实效果回传与状态管理使用。
@@ -212,11 +227,31 @@ bool published_policy_compatible(const v1::RuntimePolicy &published,
                                  const std::string &control_learning_json) {
   if (published.effective_level() != current.effective_level())
     return false;
-  auto old = bind_runtime_policy(published, current.snapshot().identity());
-  const auto controls = control_learning_json.empty() ? Json() : Json::parse(control_learning_json);
-  if (!generated_controls_authorized(old, current, controls))
+  // Binding narrows both policies to the active conversation. Check the
+  // original permission lists first so normalization cannot hide an expanded
+  // or unrelated conversation scope. Retain the existing portable binding
+  // from an unbound policy (or its own single conversation) to the host's
+  // single active conversation.
+  const auto &published_conversations = published.options().allowed_conversations();
+  const auto &current_conversations = current.options().allowed_conversations();
+  const bool same_conversations =
+      published_conversations.size() == current_conversations.size() &&
+      std::equal(published_conversations.begin(), published_conversations.end(),
+                 current_conversations.begin());
+  const bool portable_conversation =
+      current_conversations.size() == 1 &&
+      current_conversations.Get(0) == current.snapshot().identity().conversation_id() &&
+      (published_conversations.empty() ||
+       (published_conversations.size() == 1 &&
+        published_conversations.Get(0) == published.snapshot().identity().conversation_id()));
+  if (!same_conversations && !portable_conversation)
     return false;
-  auto a = old.options(), b = current.options();
+  auto old = bind_runtime_policy(published, current.snapshot().identity());
+  const auto bound_current = bind_runtime_policy(current, current.snapshot().identity());
+  const auto controls = control_learning_json.empty() ? Json() : Json::parse(control_learning_json);
+  if (!generated_controls_authorized(old, bound_current, controls))
+    return false;
+  auto a = old.options(), b = bound_current.options();
   a = without_generated_controls(a);
   b = without_generated_controls(b);
   a.clear_approved_experiences();
@@ -226,26 +261,122 @@ bool published_policy_compatible(const v1::RuntimePolicy &published,
   a.clear_disabled_injections();
   b.clear_disabled_injections();
   if (json(a).dump() != json(b).dump() ||
-      json(old.snapshot().options()).dump() != json(current.snapshot().options()).dump())
+      json(old.snapshot().options()).dump() != json(bound_current.snapshot().options()).dump())
     return false;
   for (const auto &approved : old.options().approved_experiences()) {
     bool allowed = false, present = false;
-    for (const auto &other : current.options().approved_experiences())
+    for (const auto &other : bound_current.options().approved_experiences())
       allowed |= approved.memory_id() == other.memory_id() &&
                  approved.content_revision() == other.content_revision();
-    for (const auto &item : current.snapshot().experiences())
+    for (const auto &item : bound_current.snapshot().experiences())
       present |= approved.memory_id() == item.memory_id() &&
                  approved.content_revision() == item.content_revision();
     if (!allowed || !present)
       return false;
   }
   // 即使两段经验文本都仍存在，关系变化也可能改变它们能否共同被选中。
-  if (old.snapshot().cross_relations_size() != current.snapshot().cross_relations_size())
+  if (old.snapshot().cross_relations_size() != bound_current.snapshot().cross_relations_size())
     return false;
   for (int i = 0; i < old.snapshot().cross_relations_size(); ++i)
     if (json(old.snapshot().cross_relations(i)).dump() !=
-        json(current.snapshot().cross_relations(i)).dump())
+        json(bound_current.snapshot().cross_relations(i)).dump())
       return false;
+  return true;
+}
+
+  // A cancelled reflection plan is not an executing batch. Keep its original
+// parent evidence and paid drafts when resuming under the same judge/dataset.
+// Unknown states, unbound plans and any open evaluation remain non-resumable.
+bool closed_reflection_checkpoint(const Json &tree, const Json &job,
+                                  const std::string &evaluation_context,
+                                  const std::string &dataset_version,
+                                  const std::string &candidate_context,
+                                  const v1::RuntimePolicy *approved_source) {
+  if (job.str("status") != "cancelled" || !job.flag("cancel_requested", false) ||
+      tree.str("status") != "cancelled" ||
+      tree.str("context") != job.str("context") ||
+      tree.str("seed_version") != job.str("seed_version") ||
+      tree.str("evaluation_context") != evaluation_context ||
+      tree.str("dataset_version") != dataset_version ||
+      tree.flag("holdout_started", false) || !tree["selected_version"].null() ||
+      !tree["nodes"].array() || !tree["batch"].object() ||
+      !tree["evaluations"].object())
+    return false;
+  const auto &batch = tree["batch"];
+  if (!batch["nodes"].array() || !batch["plans"].array() ||
+      batch["nodes"].items().empty() || batch["nodes"].items().size() > 16 ||
+      batch["nodes"].items().size() != batch["plans"].items().size())
+    return false;
+  std::set<std::size_t> present;
+  for (std::size_t index = 0; index < batch["nodes"].items().size(); ++index) {
+    const auto &id = batch["nodes"].items()[index];
+    if (!std::holds_alternative<double>(id.value)) return false;
+    const auto position = id.integer();
+    if (position == 0 || position >= tree["nodes"].items().size() ||
+        !present.insert(position).second)
+      return false;
+    const auto &node = tree["nodes"].items()[position];
+    const auto &plan = batch["plans"].items()[index];
+    const bool pending_completed_parent =
+        node.str("status") == "pending" && !candidate_context.empty() &&
+        !tree.str("candidate_evaluation_context").empty() &&
+        tree.str("candidate_evaluation_context") == job.str("candidate_evaluation_context");
+    bool components_bound = node["components"].dump() == plan["components"].dump();
+    if (!components_bound && pending_completed_parent && approved_source &&
+        node["components"].array() && plan["components"].array() &&
+        node["components"].items().size() == 1 && plan["components"].items().size() == 1) {
+      const auto &fallback = node["component_fallback"];
+      const auto original = plan["components"].items().front().text();
+      const auto selected = node["components"].items().front().text();
+      const auto approved_experience = [&](const std::string &component) {
+        const std::string prefix = "experience:";
+        if (component.compare(0, prefix.size(), prefix) != 0)
+          return false;
+        const auto memory = component.substr(prefix.size());
+        for (const auto &ref : approved_source->options().approved_experiences())
+          if (ref.memory_id() == memory)
+            for (const auto &source : approved_source->snapshot().experiences())
+              if (source.memory_id() == memory &&
+                  source.content_revision() == ref.content_revision() &&
+                  std::find(approved_source->snapshot().options().target_scopes().begin(),
+                            approved_source->snapshot().options().target_scopes().end(),
+                            source.target_scope()) !=
+                      approved_source->snapshot().options().target_scopes().end())
+                return true;
+        return false;
+      };
+      components_bound = fallback.object() &&
+          fallback.str("reason") == "experience_not_applied_in_training" &&
+          fallback.str("from") == original && fallback.str("to") == selected &&
+          original != selected && approved_experience(original) && approved_experience(selected);
+    }
+    if (node.num("id", SIZE_MAX) != position || node.str("kind") != "reflection" ||
+        (node.str("status") != "reflecting" && !pending_completed_parent) ||
+        !node["version"].null() ||
+        node["parent_evaluation"].str("status") != "complete" ||
+        !node["parent_evaluation"]["missing_task_ids"].array() ||
+        !node["parent_evaluation"]["missing_task_ids"].items().empty() ||
+        !plan.object() || !plan["tasks"].array() || plan["tasks"].items().empty() ||
+        node["tasks"].dump() != plan["tasks"].dump() ||
+        node["parent"].dump() != plan["parent"].dump() ||
+        !components_bound)
+      return false;
+    if (!std::holds_alternative<double>(plan["parent"].value)) return false;
+    const auto parent = plan["parent"].integer();
+    if (parent >= position ||
+        tree["nodes"].items()[parent].str("version").empty())
+      return false;
+  }
+  if (!present.count(tree["active"].integer())) return false;
+  for (const auto &entry : tree["evaluations"].fields()) {
+    const auto &evaluation = entry.second;
+    const auto status = evaluation.str("status");
+    if ((status != "complete" && status != "inconclusive" && status != "error" &&
+         status != "cancelled") ||
+        evaluation.str("evaluation_context") != evaluation_context ||
+        evaluation.str("report").empty())
+      return false;
+  }
   return true;
 }
 
@@ -456,6 +587,10 @@ struct AgentEvaluationService::Impl {
       if (!runtime.no_api_key)
         environment.insert(runtime.api_key_env.empty() ? "OPENAI_API_KEY" : runtime.api_key_env);
     }
+    // Management authentication rotates per service process; forwarding is
+    // unchanged. Model credentials and all other environment values still
+    // contribute to the candidate execution identity.
+    environment.erase("EVOLUTION_APPWORLD_TOKEN");
     // 只返回摘要；环境原文（含账户切换）不进入文件、日志或模型请求。
     for (const auto &name : environment) {
       bytes += '\n' + name + '=';
@@ -543,9 +678,12 @@ struct AgentEvaluationService::Impl {
     keys(gate, {"min_pass_rate", "min_coverage", "max_pass_rate_drop", "min_pass_rate_gain",
                 "min_quality", "min_quality_gain", "max_quality_drop", "min_trials",
                 "max_latency_ratio", "max_token_ratio", "max_llm_call_ratio",
-                "min_invalid_loop_reduction", "memory_min_pairs", "require_level_coverage"});
+                "min_invalid_loop_reduction", "memory_min_pairs", "require_level_coverage",
+                "resources_report_only"});
     if (gate.has("require_level_coverage"))
       gate.flag("require_level_coverage", true);
+    if (gate.has("resources_report_only"))
+      gate.flag("resources_report_only", false);
     for (const auto *key : {"min_pass_rate", "min_coverage", "max_pass_rate_drop", "min_pass_rate_gain",
                             "min_quality", "min_quality_gain", "max_quality_drop",
                             "min_invalid_loop_reduction"})
@@ -713,6 +851,7 @@ struct AgentEvaluationService::Impl {
     const auto &candidate = groups["candidate"];
     const auto &base = groups.has("baseline") ? groups["baseline"] : candidate;
     const auto &gate = config["gate"];
+    const bool resources_report_only = gate.flag("resources_report_only", false);
     Json reasons = Json::Array{};
     const bool goals = evaluation["judge"].str("assessment_mode", "legacy") == "objectives";
     auto reject = [&](bool condition, const char *code) {
@@ -720,6 +859,9 @@ struct AgentEvaluationService::Impl {
         reasons.push(code);
     };
     reject(!report.complete(), "evaluation_incomplete");
+    reject(!resources_report_only && summary.has("resource_costs_complete") && !summary.flag("resource_costs_complete", true) &&
+               (gate.has("max_latency_ratio") || gate.has("max_token_ratio") || gate.has("max_llm_call_ratio")),
+           "historical_resource_cost_incomplete");
     reject(candidate.num("trials", 0) < gate.num("min_trials", 2), "insufficient_trials");
     const double coverage = numeric(gate["min_coverage"], 1.0);
     const auto candidate_coverage =
@@ -762,19 +904,19 @@ struct AgentEvaluationService::Impl {
                "min_pass_rate_gain");
     }
     auto ratio = [&](const char *option, const Json &a, const Json &b) {
-      if (groups.has("baseline") && gate.has(option))
+      if (!resources_report_only && groups.has("baseline") && gate.has(option))
         reject(a.null() || b.null() || numeric(a) > numeric(b) * numeric(gate[option]), option);
     };
     ratio("max_latency_ratio", candidate["mean_agent_duration_ms"], base["mean_agent_duration_ms"]);
     ratio("max_token_ratio", candidate["host_reported_metrics"]["tokens"]["mean"],
           base["host_reported_metrics"]["tokens"]["mean"]);
-    if (groups.has("baseline") && gate.has("max_token_ratio"))
+    if (!resources_report_only && groups.has("baseline") && gate.has("max_token_ratio"))
       reject(candidate["host_reported_metrics"]["tokens"].num("observations", 0) !=
                      candidate.num("trials", 0) ||
                  base["host_reported_metrics"]["tokens"].num("observations", 0) !=
                      base.num("trials", 0),
              "token_metric_unobserved");
-    if (groups.has("baseline") && gate.has("max_llm_call_ratio")) {
+    if (!resources_report_only && groups.has("baseline") && gate.has("max_llm_call_ratio")) {
       const auto &candidate_calls = candidate["host_reported_metrics"]["llm_calls"];
       const auto &base_calls = base["host_reported_metrics"]["llm_calls"];
       const bool observations_complete =
@@ -830,7 +972,7 @@ struct AgentEvaluationService::Impl {
       reject(!controls.flag("complete", false), "generated_control_not_observed");
       reject(!current_controls.flag("level_complete", false), "level_capability_not_observed");
     }
-    return Json{{"passed", reasons.items().empty()},
+    Json result{{"passed", reasons.items().empty()},
                 {"scored", scored && paired},
                 {"reasons", reasons},
                 {"baseline", base},
@@ -838,6 +980,9 @@ struct AgentEvaluationService::Impl {
                 {"comparison", groups.has("baseline") ? "paired" : "baseline_only"},
                 {"control_coverage", current_controls},
                 {"historical_control_coverage", controls}};
+    if (resources_report_only)
+      result["resources_report_only"] = true;
+    return result;
   }
 
   // 把已完成评测的真实效果关联到候选和来源经验，不使用未执行的建议更新收益。
@@ -1877,6 +2022,24 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
       extension_tree["active"].null() ||
       (extension_tree["active"].integer() > 0 &&
        extension_tree["active"].integer() < extension_tree["nodes"].items().size());
+  std::optional<v1::RuntimePolicy> checkpoint_source;
+  if (job.flag("gepa", false) && job.str("status") == "cancelled") {
+    try {
+      const auto seed_bytes = read(impl_->root / id / "seed.json", 2097152);
+      if (agent_version_id(seed_bytes) == job.str("seed_version")) {
+        checkpoint_source = proto<v1::RuntimePolicy>(Json::parse(seed_bytes)["policy"]);
+        PolicyRuntime checked(*checkpoint_source);
+      }
+    } catch (const std::exception &) {
+      checkpoint_source.reset();
+    }
+  }
+  const bool closed_reflection_resume =
+      unconditional_resume && job.flag("gepa", false) &&
+      closed_reflection_checkpoint(extension_tree, job, impl_->evaluation_fingerprint(),
+                                   read_evaluation_dataset(impl_->dataset_path).dataset_version(),
+                                   current_candidate_context,
+                                   checkpoint_source ? &*checkpoint_source : nullptr);
   const bool resume_context_rebind =
       unconditional_resume && job.flag("gepa", false) && extension_tree.object() &&
       extension_tree.str("seed_version") == job.str("seed_version") &&
@@ -1885,7 +2048,7 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
        extension_tree.str("status") == "error" ||
        extension_tree.str("status") == "inconclusive") &&
       !extension_tree.flag("holdout_started", false) && active_checkpoint &&
-      extension_tree["batch"].null() &&
+      (extension_tree["batch"].null() || closed_reflection_resume) &&
       extension_tree["selected_version"].null() &&
       job.str("context") != impl_->context;
   const auto lane_key = lane(user, job.str("level"));
@@ -2025,14 +2188,37 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
         current_candidate_context;
     job["final_holdout_replay"]["state"] = "queued";
   }
-  if (resume_context_rebind) {
+  if (resume_context_rebind || closed_reflection_resume) {
     if (!extension_tree["resume_context_revisions"].array())
       extension_tree["resume_context_revisions"] = Json::Array{};
     extension_tree["resume_context_revisions"].push(
         Json{{"previous", job["context"]},
              {"current", impl_->context},
-             {"reason", "unconditional_checkpoint_resume"},
+             {"reason", closed_reflection_resume ? "closed_reflection_checkpoint"
+                                                  : "unconditional_checkpoint_resume"},
              {"resumed_ms", now_ms()}});
+    if (closed_reflection_resume) {
+      auto &revision = extension_tree["resume_context_revisions"].items().back();
+      revision["retained_evaluations"] = Json::Array{};
+      std::map<std::string, Json> closed_children;
+      for (const auto &node : extension_tree["nodes"].items())
+        if (node.str("kind") == "reflection" && !node.str("version").empty() &&
+            node["screening"].object() && node["tasks"].array()) {
+          const auto artifact_path = tree_path.parent_path() / "versions" /
+                                     (std::to_string(node["id"].integer()) + ".json");
+          const auto bytes = read(artifact_path);
+          require(agent_version_id(bytes) == node.str("version"), "evaluation_artifact_changed");
+          closed_children.emplace(node.str("version"), node["tasks"]);
+        }
+      for (const auto &entry : extension_tree["evaluations"].fields()) {
+        const auto child = closed_children.find(entry.second.str("version"));
+        if (entry.second.str("version") == job.str("seed_version") ||
+            (child != closed_children.end() && entry.second.str("split") == "train" &&
+             (entry.second.str("status") == "complete" || entry.second.str("status") == "inconclusive") &&
+             entry.second["task_ids"].dump() == child->second.dump()))
+          revision["retained_evaluations"].push(entry.first);
+      }
+    }
     extension_tree["context"] = impl_->context;
     extension_tree["evaluation_context"] = impl_->evaluation_fingerprint();
     extension_tree["candidate_evaluation_context"] = current_candidate_context;
@@ -2041,7 +2227,7 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
     job["candidate_evaluation_context"] = current_candidate_context;
     write(tree_path, extension_tree.dump());
   }
-  if (rebind_candidate_execution_context) {
+  if (rebind_candidate_execution_context && !closed_reflection_resume) {
     // 普通搜索只刷新候选执行身份；搜索树中的父子、分数和任务集合不变。
     extension_tree["candidate_evaluation_context"] = current_candidate_context;
     job["candidate_evaluation_context"] = current_candidate_context;

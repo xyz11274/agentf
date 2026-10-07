@@ -53,8 +53,7 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     return out;
   };
 
-  FileDataBusBridge file_databus(
-      request.databus_root_dir.empty() ? FileDataBusBridge::make_temp_root() : request.databus_root_dir);
+  FileDataBusBridge file_databus(request.databus_root_dir);
   if(file_databus.initialize()) {
     exec_config.env_vars.push_back("AF_DATABUS_DIR=" + file_databus.root_dir().string());
     exec_config.env_vars.push_back("AF_DATABUS_KV_DIR=" + file_databus.kv_dir().string());

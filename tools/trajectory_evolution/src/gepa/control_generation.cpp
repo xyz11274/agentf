@@ -156,6 +156,11 @@ Json control_generation_input(const v1::ShadowPolicySnapshot &snapshot,
       {"loop_conditions",
        Json{{"error_codes", "Optional exact structured failure codes observed in the same "
                             "execution; any listed code matches."},
+            {"replan_context", "Optional only for replan_on_failure with exactly one of "
+                               "appworld_auth_401 or appworld_missing_access_token and at most "
+                               "one authorized replan: copy the "
+                               "primary approved memory's experience text exactly, within the "
+                               "unchanged context budget. Free-form instructions are rejected."},
             {"after_action_rejection",
              "Optional true: requires a verified settled L2 rejection in this execution. "
              "Successful progress suppresses stale conditions; pending branches continue."},
@@ -427,7 +432,7 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot &snapshot,
   for (const auto &item : draft["loop_rules"].items()) {
     keys(item, {"memory_id", "max_iterations", "max_no_progress", "max_replans",
                 "replan_on_failure", "reason", "match_mode", "actor_id", "error_codes",
-                "after_action_rejection", "require_finalization"});
+                "after_action_rejection", "require_finalization", "replan_context"});
     require(base.requested_level() >= v1::L3, "control_loop_level_required");
     const auto memory_id = item.str("memory_id");
     const auto &experience = source(snapshot, base, memory_id);
@@ -452,13 +457,29 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot &snapshot,
             "control_failure_replan_not_authorized");
     require(!original->replan_on_failure() || failure_replan || replans < original->max_replans(),
             "control_loop_relaxes_limit");
+    const bool source_context = item.has("replan_context");
+    if (source_context) {
+      require(item["replan_context"].string() && !experience.content().empty() &&
+                  item.str("replan_context") == experience.content(),
+              "control_replan_context_source_mismatch");
+      require(failure_replan && replans > 0 && replans <= 1 &&
+                  original->no_progress_decision() == "replan" &&
+                  item["error_codes"].array() && item["error_codes"].items().size() == 1 &&
+                  item["error_codes"].items()[0].string() &&
+                  (item["error_codes"].items()[0].text() == "appworld_auth_401" ||
+                   item["error_codes"].items()[0].text() == "appworld_missing_access_token"),
+              "control_replan_context_condition_invalid");
+      require(experience.content().size() + 128 <= base.max_context_bytes(),
+              "control_replan_context_too_large");
+    }
     require(
         iterations <= 10000 && no_progress <= 10000 &&
             tighter(iterations, original->max_iterations(), options.num("min_iterations", 2)) &&
             tighter(no_progress, original->max_no_progress(), options.num("min_no_progress", 1)),
         "control_loop_relaxes_limit");
     if (iterations == original->max_iterations() && no_progress == original->max_no_progress() &&
-        failure_replan == original->replan_on_failure() && replans == original->max_replans())
+        failure_replan == original->replan_on_failure() && replans == original->max_replans() &&
+        (!source_context || experience.content() == original->replan_context()))
       continue;
     // 可执行条件仅使用当前分支的观测事实，不把 reason 当作语义条件。
     // 保守模式仅放行有明确 actor 和收尾约束的候选。GEPA 仍须用完整轨迹预检
@@ -475,6 +496,8 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot &snapshot,
     rule->set_reason(item.str("reason"));
     rule->set_replan_on_failure(failure_replan);
     rule->set_max_replans(replans);
+    if (source_context)
+      rule->set_replan_context(experience.content());
     if (!replans) {
       rule->set_no_progress_decision("stop");
       rule->clear_replan_context();
@@ -628,6 +651,16 @@ bool generated_controls_authorized(const v1::RuntimePolicy &candidate,
           item["after_action_rejection"] = true;
         if (rule.require_finalization())
           item["require_finalization"] = true;
+        const v1::LoopRule *original = nullptr;
+        for (const auto &base_rule : candidate.options().loop_rules())
+          if (!base_rule.has_source_experience() &&
+              base_rule.target_scope() == entry.target_scope() &&
+              (base_rule.actor_id().empty() || base_rule.actor_id() == rule.actor_id()) &&
+              (!original || original->actor_id().empty()))
+            original = &base_rule;
+        if (rule.max_replans() &&
+            (!original || rule.replan_context() != original->replan_context()))
+          item["replan_context"] = rule.replan_context();
         draft["loop_rules"].push(std::move(item));
       }
     for (const auto &rule : candidate.options().schedule_rules())

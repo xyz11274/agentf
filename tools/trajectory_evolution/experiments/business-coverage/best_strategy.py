@@ -23,15 +23,20 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import tarfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import layout
+import common_goal
 
 ROOT = layout.ROOT
 OUTPUT = layout.OUTPUT
 SOURCE = layout.SOURCE_DATASET
+PACK = Path(__file__).resolve().parent / "datasets" / "pack"
+FIXED_COMPARISON = PACK / "comparison-500.jsonl"
 GEPA_RUNTIME = Path(__file__).resolve().parent / "gepa-deployment/runtime"
 BINARY = ROOT / "build/trajectory-evolution/trajectory_evolution"
 JOB_ROOT = layout.GEPA / "workspace/agent-evaluation"
@@ -1233,6 +1238,37 @@ def _source_rows() -> tuple[list[dict], dict[str, str]]:
     return rows, by_id
 
 
+def _fixed_comparison_rows() -> tuple[list[dict], dict[str, str]]:
+    """Load the immutable 500-task acceptance selection by its recorded split.
+
+    The selection is a checked-in copy of the historical seed004 acceptance
+    scope.  It is read for task identity only; execution still goes through the
+    native evaluator against the pack dataset and both variants are measured.
+    """
+    if not FIXED_COMPARISON.is_file():
+        raise RuntimeError("fixed_comparison_dataset_missing")
+    rows = [json.loads(line) for line in FIXED_COMPARISON.read_text(
+        encoding="utf-8").splitlines() if line.strip()]
+    by_id = {row.get("task_id"): row.get("split") for row in rows
+             if isinstance(row, dict) and row.get("task_id")}
+    if (len(rows) != 500 or len(by_id) != 500 or
+            {split: sum(value == split for value in by_id.values())
+             for split in ("train", "val", "holdout")} !=
+            {"train": 200, "val": 151, "holdout": 149}):
+        raise RuntimeError("fixed_comparison_scope_invalid")
+    # Every selected row must be executable from the immutable pack files.  Do
+    # not silently substitute a same-ID row from another dataset version.
+    pack_rows = {
+        json.loads(line)["task_id"]
+        for split in ("train", "val", "holdout")
+        for line in (PACK / f"{split}.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    if set(by_id) - pack_rows:
+        raise RuntimeError("fixed_comparison_task_missing")
+    return rows, by_id
+
+
 def _comparison_config(temp: Path, selection: dict, rows: list[dict],
                        splits: tuple[str, ...] = ("val", "holdout"),
                        task_ids: list[str] | None = None,
@@ -1373,7 +1409,9 @@ def _summarize_report(report: dict, task_splits: dict[str, str],
     for variant in ("L0", "best"):
         selected = [row for row in trials if row.get("variant_id") == variant]
         by_split = {}
-        for split in ("val", "holdout"):
+        for split in sorted(set(task_splits.values())):
+            if planned_scope is not None and split not in planned_scope:
+                continue
             split_rows = [row for row in selected if row.get("split") == split]
             planned = ((planned_scope or {}).get(split, 0) if planned_scope is not None
                        else 200)
@@ -1396,6 +1434,60 @@ def _comparison_is_complete(report: dict, summary: dict, expected_scope: dict[st
                     or metrics.get("scored") != planned or metrics.get("errors", 0)):
                 return False
     return True
+
+
+def fixed_comparison_gate(comparison: dict) -> dict:
+    """Apply the historical seed004 acceptance rules to measured 500-task data."""
+    scope = comparison.get("scope") or {}
+    metrics = comparison.get("metrics") or {}
+    baseline = (metrics.get("L0") or {}).get("all") or {}
+    candidate = (metrics.get("best") or {}).get("all") or {}
+    reasons: list[str] = []
+
+    def number(value):
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) \
+            and math.isfinite(float(value)) else None
+
+    def require(name: str, predicate: bool) -> None:
+        if not predicate:
+            reasons.append(name)
+
+    require("scope_500", scope.get("total") == 500 and
+            scope.get("train") == 200 and scope.get("val") == 151 and
+            scope.get("holdout") == 149)
+    require("comparison_complete", comparison.get("status") == "complete")
+    for key in ("quality", "strict_passed", "invalid_loop", "tokens", "llm_calls", "latency_ms"):
+        require(f"{key}_measured", number(baseline.get(key)) is not None and
+                number(candidate.get(key)) is not None)
+    baseline_goal_metrics = {**baseline, "avg_invalid_loop": baseline.get("invalid_loop"),
+                             "model_calls": baseline.get("llm_calls")}
+    candidate_goal_metrics = {**candidate, "avg_invalid_loop": candidate.get("invalid_loop"),
+                              "model_calls": candidate.get("llm_calls")}
+    # A paired task map is mandatory. Expanding a scalar mean into a fake
+    # scope row would make missing loop review look like valid evidence.
+    baseline_loop_by_task = baseline.get("loop_by_task") or {}
+    candidate_loop_by_task = candidate.get("loop_by_task") or {}
+    goal = common_goal.evaluate(
+        baseline_goal_metrics, candidate_goal_metrics,
+        baseline_loop_by_task=baseline_loop_by_task,
+        candidate_loop_by_task=candidate_loop_by_task,
+        baseline_loop_basis=baseline.get("loop_basis"),
+        candidate_loop_basis=candidate.get("loop_basis"),
+        same_scope=True,
+        complete=comparison.get("status") == "complete",
+    )
+    if not reasons:
+        names = {
+            "quality_relative_gain_5pct": "quality_plus_5pct",
+            "strict_relative_gain_5pct": "strict_plus_5pct",
+            "invalid_loop_reduction_15pct": "invalid_loop_reduction_15pct",
+            "resources_not_increased": "resources_not_increased",
+            "intent_not_degraded": "intent_not_degraded",
+        }
+        for key, ok in goal["checks"].items():
+            require(names.get(key, key), ok)
+    return {"passed": not reasons, "reasons": reasons,
+            "baseline": baseline, "candidate": candidate}
 
 
 def _reuse_candidate_holdout(selection: dict, task_ids: list[str], purpose: str) -> dict | None:
@@ -1444,8 +1536,11 @@ def run_comparison(selection: dict, retries: int = 2,
                    task_ids: list[str] | None = None,
                    include_l0: bool = True,
                    purpose: str = "final_comparison",
-                   resume_report_path: str | Path | None = None) -> dict:
-    rows, task_splits = _source_rows()
+                   resume_report_path: str | Path | None = None,
+                   rows_override: tuple[list[dict], dict[str, str]] | None = None,
+                   dataset_dir: Path | None = None) -> dict:
+    rows, task_splits = rows_override or _source_rows()
+    dataset_dir = Path(dataset_dir or SOURCE)
     selected_ids = (list(task_ids) if task_ids is not None else
                     [row["task_id"] for row in rows if row.get("split") in set(splits)])
     selected_splits = {split: sum(task_splits.get(task_id) == split for task_id in selected_ids)
@@ -1470,7 +1565,8 @@ def run_comparison(selection: dict, retries: int = 2,
         "version": selection["version"], "source_dataset": str(SOURCE.relative_to(ROOT)),
         "task_ids_sha256": task_hash,
         "include_l0": include_l0,
-        "source_dataset_sha256": _sha256(SOURCE / "val.jsonl") + ":" + _sha256(SOURCE / "holdout.jsonl"),
+        "source_dataset_sha256": ":".join(
+            _sha256(dataset_dir / name) for name in ("train.jsonl", "val.jsonl", "holdout.jsonl")),
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     previous_result = None
@@ -1519,7 +1615,7 @@ def run_comparison(selection: dict, retries: int = 2,
             config = _comparison_config(config_dir, selection, rows, splits,
                                         selected_ids, include_l0)
             output = run_root / f"attempt-{attempt}" / "evaluation"
-            command = [str(BINARY), "dataset", "run", str(SOURCE), "--config", str(config),
+            command = [str(BINARY), "dataset", "run", str(dataset_dir), "--config", str(config),
                        "--output-root", str(output), "--allow-unreviewed"]
             if last_report_path and last_report_path.is_file():
                 command.extend(["--resume-report", str(last_report_path)])
@@ -1798,6 +1894,15 @@ def build_best(job_id: str = "", run_full_comparison: bool = True) -> dict:
     _atomic_json(BEST_FILE, result)
     if run_full_comparison and selection.get("artifact") is not None:
         validation = _final_validation(selection)
+        # The release decision is based on the immutable 500-task acceptance
+        # scope, including the 200 replay rows used by seed004.  This is an
+        # actual paired evaluator run; cached historical scores are never
+        # treated as evidence for the new candidate.
+        fixed = run_comparison(
+            selection, splits=("train", "val", "holdout"),
+            rows_override=_fixed_comparison_rows(), dataset_dir=PACK,
+            purpose="fixed_comparison_500")
+        fixed_gate = fixed_comparison_gate(fixed)
         comparison = {
             **validation,
             "scope": {"val": 200, "holdout": 200, "total": 400},
@@ -1816,6 +1921,8 @@ def build_best(job_id: str = "", run_full_comparison: bool = True) -> dict:
             "posthoc_showcase_only": True,
             "candidate_scope": selection.get("candidate_scope"),
             "selection_reason": selection.get("selection_reason"),
+            "fixed_500": fixed,
+            "fixed_500_gate": fixed_gate,
             "formal_gate_status": {
                 "tree_status": selection.get("tree_status"),
                 "node_optimization_passed": (selection.get("optimization") or {}).get("passed"),
@@ -1838,6 +1945,7 @@ def build_best(job_id: str = "", run_full_comparison: bool = True) -> dict:
                                  and selection.get("l0_holdout", {}).get("quality_complete")
                                  and not (selection.get("candidate_scope") or {}).get("shortfall")
                                  and not (selection.get("candidate_scope") or {}).get("holdout_shortfall")
+                                 and fixed_gate.get("passed")
                                  else "incomplete")
     else:
         comparison = {

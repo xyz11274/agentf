@@ -16,6 +16,9 @@ from evolution_local import LocalEvolution
 
 request = json.load(sys.stdin)
 mode, library = sys.argv[1:3]
+resource_growth = mode == "gepa_resource_growth"
+if resource_growth:
+    mode = "gepa"
 recovery_budget = mode == "gepa_recovery_budget"
 if recovery_budget:
     mode = "gepa_failure_replan"
@@ -192,6 +195,8 @@ if mode in (
 if mode in ("gepa_actions", "gepa_schema_actions", "gepa_loops", "gepa_failure_replan"):
     result = 0
 missing_metric = False
+if resource_growth and level != "L0":
+    time.sleep(0.4)
 if (
     mode == "gepa_review"
     and level != "L0"
@@ -211,7 +216,7 @@ evo.invoke(
         actual_input=call["input"],
         executed=True,
         **(
-            {"metrics": {"tokens": 100}}
+            {"metrics": {"tokens": 1000 if resource_growth and level != "L0" else 100}}
             if mode.startswith("gepa") and not missing_metric
             else {}
         ),

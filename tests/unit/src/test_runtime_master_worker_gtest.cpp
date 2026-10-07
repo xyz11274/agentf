@@ -457,6 +457,49 @@ TEST(RuntimeMasterWorkerTest, WorkerProvidesFileDatabusAndMockLlmStreaming) {
   fs::remove(script);
 }
 
+TEST(RuntimeMasterWorkerTest, WorkerCleansOnlyOwnedDatabusWhenNotRetained) {
+  namespace fs = std::filesystem;
+  const fs::path script = unique_build_script_path("test_worker_databus_cleanup");
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "test -d \"$AF_DATABUS_DIR/kv\" || exit 1\n";
+    ofs << "printf '%s' retained > \"$AF_DATABUS_DIR/sentinel\"\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  request.command = script.string();
+  auto response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+  ASSERT_EQ(response.outputs.count("databus_dir"), 1u);
+  const fs::path owned_root = std::get<std::string>(response.outputs.at("databus_dir"));
+  EXPECT_FALSE(fs::exists(owned_root));
+  fs::remove_all(owned_root);
+
+  request.keep_databus_files = true;
+  response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+  const fs::path retained_root = std::get<std::string>(response.outputs.at("databus_dir"));
+  EXPECT_TRUE(fs::exists(retained_root / "sentinel"));
+  fs::remove_all(retained_root);
+
+  const fs::path custom_root = script.string() + ".databus";
+  fs::create_directories(custom_root);
+  { std::ofstream(custom_root / "existing") << "caller-owned"; }
+  request.databus_root_dir = custom_root.string();
+  request.keep_databus_files = false;
+  response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+  EXPECT_EQ(std::get<std::string>(response.outputs.at("databus_dir")), custom_root.string());
+  EXPECT_TRUE(fs::exists(custom_root / "existing"));
+  EXPECT_TRUE(fs::exists(custom_root / "sentinel"));
+  fs::remove_all(custom_root);
+  fs::remove(script);
+}
+
 TEST(RuntimeMasterWorkerTest, StreamingClientRemovesTempBodyFileWhenCallbackThrows) {
   const std::string prompt =
       "streaming-client-cleanup-" +

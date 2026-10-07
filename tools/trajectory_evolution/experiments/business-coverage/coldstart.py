@@ -13,16 +13,18 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import shutil
 import subprocess
 import sys
 import time
 
 import run as coverage
+import layout
 
 ROOT = coverage.ROOT
 CONFIG = coverage.CONFIG / 'coldstart-deployment'
 OUTPUT = ROOT / 'trace_output/business-simulator/training'
-DATASET = coverage.CONFIG / 'datasets/training-reviewed'
+DATASET = coverage.layout.TRAINING_DATASET if hasattr(coverage, 'layout') else Path('/tmp/business-simulator-dataset')
 PLAN = CONFIG / 'plan.json'
 BINARY = coverage.BINARY
 read, save = coverage.read, coverage.save
@@ -118,6 +120,8 @@ def prepare():
         raise RuntimeError('训练集为空或任务身份重复')
     OUTPUT.mkdir(parents=True)
     CONFIG.mkdir(parents=True)
+    if DATASET.exists():
+        shutil.rmtree(DATASET)
     for task in rows:
         task['review_status'] = 'reviewed'
     source = CONFIG / 'training.jsonl'
@@ -437,7 +441,7 @@ def compact_completed_outputs():
     """Drop regenerable training copies after the full training stage succeeds."""
     state_file = OUTPUT / 'status.json'
     state = read(state_file)
-    if state.get('status') != 'completed' or state.get('captured_tasks') != 400:
+    if state.get('status') != 'completed' or state.get('captured_tasks') != len((coverage.CONFIG / 'datasets/pack/train.jsonl').read_text().splitlines()):
         raise RuntimeError('training_not_complete_for_compaction')
     removed_bytes = 0
     removed_files = 0

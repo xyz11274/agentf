@@ -5134,6 +5134,144 @@ class GepaSearchTests(unittest.TestCase):
         config.update(overrides)
         fixture.write(self.root / "gepa.json", config)
 
+    def run_full_pool_without_loop_scores(self):
+        """无正式 loop 评分的真实任务仍须保留明确缺测信息。"""
+        import io
+
+        self.judge_requests = []
+        self.config.update(
+            max_level="L2",
+            evaluation_levels=["L2"],
+            control_learning=dict(
+                enabled=True,
+                prompt_file="prompts/gepa-reflection.txt",
+                actions={"calculate": ["verified"]},
+                max_rules=2,
+            ),
+        )
+        fixture.write(self.root / "service.json", self.config)
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(
+            reflection_strategy="combee",
+            max_rounds=1,
+            max_model_calls=6,
+            max_feedback_trials=1,
+            max_input_bytes=65536,
+            component_selector="round_robin",
+            objective=dict(
+                invalid_loop_weight=0,
+                token_weight=0,
+                latency_weight=0,
+            ),
+        )
+        fixture.write(self.root / "gepa.json", config)
+        # 宿主真实记录三轮；运行时次数不能当作未评分的无效循环次数。
+        self.evaluation["variants"][0]["command"][-2] = "gepa_failure_replan"
+        self.evaluation["checks"] = {
+            "train-a": [dict(
+                id="missing-required-state", path="/state/required_external_field",
+                op="equals", value="required")]
+        }
+        self.evaluation["judge"] = dict(
+            enabled=True,
+            assessment_mode="objectives",
+            runtime_config="model.json",
+            prompt="prompts/task-judge-system.txt",
+            max_model_calls=100,
+            max_input_bytes=1048576,
+        )
+        self.assessment["gate"].pop("min_invalid_loop_reduction", None)
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        original_handler = self.server.RequestHandlerClass
+        owner = self
+
+        class ScoredFactsModel(original_handler):
+            def do_POST(handler):
+                body = handler.rfile.read(int(handler.headers["Content-Length"]))
+                packet = json.loads(json.loads(body)["messages"][-1]["content"])
+                if packet.get("kind") == "task-judge-consistency.v1":
+                    stream = handler.rfile
+                    handler.rfile = io.BytesIO(body)
+                    try:
+                        return original_handler.do_POST(handler)
+                    finally:
+                        handler.rfile = stream
+                if "assessment" in packet or "loop_inventory" in packet:
+                    owner.judge_requests.append(packet)
+                    hard_failed = packet["task_input"].startswith("TRAIN_VISIBLE 甲类")
+                    reply = dict(
+                        verdict="failed" if hard_failed else "passed",
+                        reason="目标已完成；甲类训练任务的独立硬检查仍未通过。"
+                        if hard_failed else "测试目标按可见证据完成。",
+                        evidence_paths=["/traces"],
+                        goal_verdicts=[dict(
+                            id=goal["id"], status="passed", reason="本目标按测试事实完成。",
+                            evidence_paths=["/traces"])
+                            for goal in packet.get("assessment", {}).get("goals", [])],
+                    )
+                    if "turn_expectations" in packet:
+                        reply["turn_verdicts"] = [dict(
+                            turn=turn["turn"], verdict="passed", reason="本轮目标已完成。")
+                            for turn in packet["turn_expectations"]]
+                else:
+                    owner.requests.append(packet)
+                    phase = packet.get("phase", "")
+                    if phase in ("pool_diagnostic_reduce", "pool_counterexample_review"):
+                        proposal = next(row for row in packet["intermediate_proposals"]
+                                        if "action_rules" in row["candidate_values"])
+                        reply = dict(
+                            reason="选择已经验证绑定的动作规则。",
+                            selected_proposals={"action_rules": proposal["id"]},
+                        )
+                    else:
+                        reply = dict(
+                            reason="使用真实训练动作的核验参数。",
+                            controls=dict(action_rules=[dict(
+                                memory_id="test-experience", operation="calculate",
+                                required_arguments=["verified"],
+                                reason="缺少核验参数时返回可恢复的拒绝。")]),
+                        )
+                response = json.dumps(dict(choices=[dict(
+                    finish_reason="stop", message=dict(content=json.dumps(
+                        reply, ensure_ascii=False)))])).encode()
+                handler.send_response(200)
+                handler.send_header("Content-Type", "application/json")
+                handler.send_header("Content-Length", str(len(response)))
+                handler.end_headers()
+                handler.wfile.write(response)
+
+        self.server.RequestHandlerClass = ScoredFactsModel
+        self.start()
+        job_id, job, _ = self.wait_search("L2")
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertNotEqual(job["status"], "error", job)
+        maps = [packet for packet in self.requests
+                if packet.get("phase") == "pool_diagnostic_map"]
+        self.assertEqual(len(maps), 2, (tree, self.requests))
+        self.assertTrue(all(packet["selected_components"] == ["action_rules"]
+                            for packet in maps))
+        review = next(packet for packet in self.requests
+                      if packet.get("phase") == "pool_counterexample_review")
+        self.assertEqual({row["task_id"] for row in review["case_outcomes"]},
+                         {"train-a", "train-b"})
+        return maps, review
+
+    def test_full_pool_action_reflection_keeps_unscored_loops_missing(self):
+        """无正式 loop 评分时保留缺值，运行时循环次数不能冒充正式零值。"""
+        maps, review = self.run_full_pool_without_loop_scores()
+        rows = [row for packet in maps for row in packet["feedback"]]
+        facts = ([row["trial"]["metrics"] for row in rows]
+                 + [row for packet in maps for row in packet["training_batch_summary"]]
+                 + review["case_outcomes"])
+        for fact in facts:
+            self.assertNotIn("invalid_loops", fact, fact)
+            self.assertNotIn("invalid_loop_count", fact, fact)
+            self.assertEqual(fact["metric_coverage"], dict(
+                effective_quality=True, strict_passed=True, invalid_loop_count=False), fact)
+        for row in rows:
+            self.assertEqual(row["trial"]["metrics"]["loop_count"], 3, row)
+
     # 回归用例：test_combee_map_reduce_uses_training_evidence_and_counts_every_call。
     # 关键断言：self.assertTrue(job.get("published", False), job)；此处只验证测试构造的场景。
     def test_combee_map_reduce_uses_training_evidence_and_counts_every_call(self):
@@ -7100,6 +7238,16 @@ for routing_iteration in range(1, 5):
                 for row in packet["feedback"]
             )
         )
+        summary = {row["task_id"]: row for row in packet["training_batch_summary"]}
+        for row in packet["feedback"]:
+            metrics = row["trial"]["metrics"]
+            self.assertEqual(metrics["metric_coverage"], dict(
+                effective_quality=True, strict_passed=True, invalid_loop_count=True), row)
+            self.assertEqual(metrics["quality"], 0, row)
+            self.assertFalse(metrics["strict_passed"], row)
+            for field in ("quality", "strict_pass_rate", "strict_passed", "invalid_loops",
+                          "invalid_loop_count", "metric_coverage"):
+                self.assertEqual(metrics[field], summary[row["task_id"]][field], row)
         loops = [
             action["loop_control"]
             for row in packet["feedback"]
@@ -8214,6 +8362,353 @@ entries { memory_id: "test-control" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
                     timeout=10,
                 )
                 self.assertNotEqual(result.returncode, 0)
+
+
+    def prepare_external_holdout(self, *, wrong_task=False, incomplete=False, unknown_cost=False):
+        tasks = [json.loads(line) for line in (self.root / "gepa-tasks.jsonl").read_text().splitlines()]
+        tasks = [task for task in tasks if task["split"] == "holdout"]
+        if wrong_task:
+            tasks[0]["task_input"] += " DIFFERENT PUBLIC TASK"
+        (self.root / "external-tasks.jsonl").write_text("\n".join(json.dumps(task) for task in tasks))
+        build = json.loads((self.root / "gepa-dataset.json").read_text())
+        build["sources"] = [dict(kind="golden", path=str(self.root / "external-tasks.jsonl"))]
+        fixture.write(self.root / "external-dataset.json", build)
+        done = subprocess.run([str(fixture.CLI), "dataset", "build", "--config",
+            str(self.root / "external-dataset.json"), "--output-root", str(self.root / "external-dataset")],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        agent = json.loads(json.dumps(self.assessment["agent"]))
+        if isinstance(agent.get("appworld_options"), dict):
+            agent["appworld_options"].pop("l1_window_mode", None)
+            agent["appworld_options"].pop("l1_observed_phase_experiences", None)
+            if not agent["appworld_options"]:
+                agent.pop("appworld_options")
+        artifact = dict(schema_version=1, agent=agent, user_id="user-a", level="L0", policy=None)
+        version = subprocess.run([str(fixture.CLI), "artifact-version"], input=json.dumps(artifact),
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(version.returncode, 0, version.stderr)
+        source_config = json.loads(json.dumps(self.evaluation))
+        source_config.update(splits=["holdout"], max_trials=2,
+            artifact_retention=dict(retain_report_pb=False, retain_markdown=False, retain_jsonl=False))
+        source_config.setdefault("resources", dict(nice=10, address_space_bytes=1073741824, cpu_seconds=300))
+        source_config["variants"][0].update(id="candidate", version=version.stdout.strip(), artifact=artifact)
+        fixture.write(self.root / "external-evaluation.json", source_config)
+        captured = subprocess.run([str(fixture.CLI), "dataset", "run", str(self.root / "external-dataset"),
+            "--config", str(self.root / "external-evaluation.json"), "--output-root", str(self.root / "external-capture")],
+            capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertIn(captured.returncode, (0, 1), captured.stderr)
+        self.external_source = self.root / "external-capture/report.json"
+        self.external_bytes = self.external_source.read_bytes()
+        report = json.loads(self.external_bytes)
+        self.assertFalse((self.external_source.parent / "report.pb").exists())
+        fixture.write(self.root / "external-result.json", dict(status="partial" if incomplete else "complete",
+            host_version=artifact["agent"]["revision"], source_report=str(self.external_source),
+            metrics=dict(tokens_complete=not unknown_cost),
+            items=[dict(task_id=row["task_id"], tokens_complete=not unknown_cost,
+                        execution_costs_complete=not unknown_cost) for row in report["trials"]]))
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1,
+            holdout_baseline_result_file=str(self.root / "external-result.json"),
+            holdout_baseline_dataset=str(self.root / "external-dataset"),
+            holdout_baseline_evaluation_file=str(self.root / "external-evaluation.json"))
+        fixture.write(self.root / "gepa.json", config)
+        return report
+
+    def test_external_holdout_reuses_native_json_source_without_reexecution(self):
+        original = self.prepare_external_holdout()
+        self.start()
+        job_id, job, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["status"], "hit", tree)
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+        entry = next(row for row in tree["evaluations"].values()
+                     if row["split"] == "holdout" and row.get("baseline_source"))
+        self.assertNotIn("report_hash", entry["baseline_source"])
+        self.assertNotIn("manifest_hash", entry["baseline_source"])
+        self.assertEqual(entry["trials_reserved"], 0)
+        paired = json.loads((self.root / "production/agent-evaluation" / job_id / "search" / entry["report"]).read_text())
+        baseline = {row["trial_id"]: row for row in paired["trials"] if row["variant_id"] == "baseline"}
+        self.assertEqual(set(baseline), {row["trial_id"] for row in original["trials"]})
+        for row in original["trials"]:
+            projected = baseline[row["trial_id"]]
+            for field in ["metrics", "duration_ms", "checks", "verdict", "execution_status"]:
+                self.assertEqual(projected[field], row[field])
+            for field in ["assessment", "loop_review", "loaded_version"]:
+                if field in row["evidence"]:
+                    self.assertEqual(projected["evidence"][field], row["evidence"][field])
+            self.assertNotIn("trace", projected["evidence"])
+            self.assertEqual(projected["evidence"]["source_reference"]["report"], str(self.external_source))
+        self.assertEqual(paired["summary"]["reused_baseline_trials"], 2)
+
+    def test_external_holdout_task_difference_refuses_reuse_without_l0_fallback(self):
+        self.prepare_external_holdout(wrong_task=True)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["status"], "invalid", tree)
+        self.assertEqual(tree["holdout_baseline_cache"]["reason"], "gepa_external_baseline_task_mismatch", tree)
+        self.assertFalse(any(row["split"] == "holdout" for row in tree["evaluations"].values()))
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+
+    def test_external_holdout_pending_source_never_executes_l0(self):
+        self.prepare_external_holdout(incomplete=True)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["status"], "pending", tree)
+        self.assertFalse(any(row["split"] == "holdout" for row in tree["evaluations"].values()))
+
+    def test_external_holdout_unknown_attempt_cost_cannot_pass_resource_gate(self):
+        self.prepare_external_holdout(unknown_cost=True)
+        self.assessment["gate"]["max_latency_ratio"] = 1000000
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job["status"], "rejected", job)
+        self.assertIn("historical_resource_cost_incomplete", job["gate"]["reasons"])
+
+    def test_report_only_resources_preserve_core_gain_and_unknown_costs(self):
+        self.evaluation["variants"][0]["command"][-2] = "gepa_resource_growth"
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.prepare_external_holdout(unknown_cost=True)
+        search_config = json.loads((self.root / "gepa.json").read_text())
+        search_config.update(max_rounds=3, max_model_calls=3)
+        fixture.write(self.root / "gepa.json", search_config)
+        self.assessment["gate"].update(resources_report_only=True,
+            max_latency_ratio=1, max_token_ratio=1, max_llm_call_ratio=1)
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job["status"], "passed", {
+            "gate_reasons": (job.get("gate") or {}).get("reasons"),
+            "report_only": (job.get("gate") or {}).get("resources_report_only"),
+        })
+        self.assertTrue(job["gate"]["resources_report_only"])
+        self.assertGreater(job["gate"]["candidate"]["host_reported_metrics"]["tokens"]["mean"],
+                           job["gate"]["baseline"]["host_reported_metrics"]["tokens"]["mean"])
+        contracts = [r["optimization_contract"] for r in self.requests if "optimization_contract" in r]
+        self.assertTrue(contracts)
+        self.assertTrue(all(c.get("resources_report_only") is True for c in contracts))
+        self.assertTrue(all(not any(k in c for k in ("max_latency_ratio", "max_token_ratio", "max_llm_call_ratio")) for c in contracts))
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        final = next(r for r in tree["evaluations"].values()
+                     if r["split"] == "holdout" and r.get("baseline_source"))
+        report = json.loads((self.root / "production/agent-evaluation" / job_id / "search" / final["report"]).read_text())
+        self.assertFalse(report["summary"]["resource_costs_complete"])
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+
+    def test_default_resources_still_reject_growth(self):
+        self.evaluation["variants"][0]["command"][-2] = "gepa_resource_growth"
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.prepare_external_holdout()
+        self.assessment["gate"].update(max_latency_ratio=1, max_token_ratio=1, max_llm_call_ratio=1)
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        self.start()
+        _, job, _ = self.wait_search()
+        self.assertEqual(job["status"], "rejected")
+        self.assertFalse(job["gate"]["passed"])
+        self.assertNotIn("resources_report_only", job["gate"])
+
+    def test_report_only_resources_still_reject_failed_core_holdout(self):
+        self.evaluation["variants"][0]["command"][-2] = "gepa_holdout_failure"
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.prepare_external_holdout()
+        self.assessment["gate"].update(resources_report_only=True,
+            max_latency_ratio=1, max_token_ratio=1, max_llm_call_ratio=1)
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        self.start()
+        _, job, _ = self.wait_search()
+        self.assertEqual(job["status"], "rejected")
+        self.assertFalse(job["gate"]["passed"])
+        self.assertTrue(job["gate"]["resources_report_only"])
+        self.assertTrue(any(c in job["gate"]["reasons"] for c in ("quality_below_threshold", "quality_regression", "min_pass_rate_gain")))
+
+    def check_l1_mode_baseline_identity(self, mode, other_options=None):
+        self.assessment["agent"]["appworld_options"] = dict(other_options or {}, l1_window_mode=mode)
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        self.prepare_external_holdout()
+        self.start()
+        job_id, job, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        source_config = json.loads((self.root / "external-evaluation.json").read_text())
+        self.assertEqual(tree["baseline_version"], source_config["variants"][0]["version"])
+        self.assertEqual(tree["holdout_baseline_cache"]["status"], "hit", tree["holdout_baseline_cache"])
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+
+    def test_external_l0_v1_mode_has_canonical_identity(self):
+        self.check_l1_mode_baseline_identity("observed_phase")
+
+    def test_external_l0_v2_mode_has_canonical_identity(self):
+        self.check_l1_mode_baseline_identity("observed_phase_v2")
+
+    def test_external_l0_v3_mode_preserves_other_options(self):
+        self.check_l1_mode_baseline_identity("observed_phase_v3", {"keep_option": "fixture"})
+
+    def test_external_l0_observed_filter_has_same_canonical_identity(self):
+        self.check_l1_mode_baseline_identity("observed_phase_v3", {
+            "l1_observed_phase_experiences": [{"memory_id": "fixture-ref", "content_revision": "fixture-revision"}]})
+
+    def test_external_holdout_artifact_difference_refuses_l0_fallback(self):
+        self.prepare_external_holdout()
+        path = self.root / "external-evaluation.json"
+        config = json.loads(path.read_text())
+        config["variants"][0]["artifact"]["agent"]["revision"] = "different-real-agent"
+        fixture.write(path, config)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["reason"], "gepa_external_baseline_artifact_mismatch")
+        self.assertFalse(any(row["split"] == "holdout" for row in tree["evaluations"].values()))
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+
+    def test_external_holdout_resolves_actual_grading_config_when_source_finishes(self):
+        self.prepare_external_holdout()
+        fallback = self.root / "external-evaluation.json"
+        config = json.loads(fallback.read_text())
+        actual = self.external_source.parent.with_name(self.external_source.parent.name + ".regrade.config.json")
+        fixture.write(actual, config)
+        config["timeout_ms"] += 1
+        fixture.write(fallback, config)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["status"], "hit", tree["holdout_baseline_cache"])
+        self.assertEqual(tree["holdout_baseline_cache"]["source"]["source_evaluation_file"], str(actual))
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+
+    def regrade_external_holdout(self):
+        config = json.loads((self.root / "external-evaluation.json").read_text())
+        config["parallelism"] = self.evaluation.get("parallelism", 1) + 1
+        path = self.root / "external-review.regrade.config.json"
+        fixture.write(path, config)
+        original = self.external_source
+        completed = subprocess.run([
+            str(fixture.CLI), "dataset", "run", str(self.root / "external-dataset"),
+            "--config", str(path), "--regrade-report", str(original),
+            "--output-root", str(self.root / "external-review")],
+            capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertIn(completed.returncode, (0, 1), completed.stderr)
+        self.external_source = self.root / "external-review/report.json"
+        self.external_bytes = self.external_source.read_bytes()
+        report = json.loads(self.external_bytes)
+        self.assertTrue(report["configuration"]["model_only_regrade"])
+        self.assertEqual(report["summary"]["regraded_trials"], 2)
+        self.assertEqual(report["summary"]["not_started_trials"], 0)
+        result = json.loads((self.root / "external-result.json").read_text())
+        result["source_report"] = str(self.external_source)
+        fixture.write(self.root / "external-result.json", result)
+        return report
+
+    def enable_external_judge(self):
+        self.judge_requests = []
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        self.evaluation["judge"] = dict(
+            enabled=True, runtime_config="model.json", assessment_mode="objectives",
+            prompt="prompts/task-judge-system.txt",
+            loop_review_prompt="prompts/task-loop-review.txt",
+            consistency_prompt="prompts/task-consistency.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+
+    def test_external_holdout_model_only_review_parallelism_preserves_agent_execution(self):
+        self.enable_external_judge()
+        original = self.prepare_external_holdout()
+        reviewed = self.regrade_external_holdout()
+        for before, after in zip(original["trials"], reviewed["trials"]):
+            for field in ["trial_id", "duration_ms", "metrics", "execution_status"]:
+                self.assertEqual(before[field], after[field])
+        self.start()
+        job_id, _, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["status"], "hit", tree["holdout_baseline_cache"])
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+        source = next(e for e in tree["evaluations"].values() if e.get("baseline_source"))
+        self.assertEqual(source["trials_reserved"], 0)
+
+    def test_external_holdout_capture_parallelism_difference_still_rejected(self):
+        self.prepare_external_holdout()
+        path = self.root / "external-evaluation.json"
+        config = json.loads(path.read_text())
+        config["parallelism"] = self.evaluation.get("parallelism", 1) + 1
+        fixture.write(path, config)
+        self.start()
+        job_id, _, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["reason"], "gepa_external_baseline_execution_mismatch")
+        self.assertFalse(any(e["split"] == "holdout" for e in tree["evaluations"].values()))
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+
+    def ordinary_resumed_external_holdout(self):
+        self.enable_external_judge()
+        self.evaluation["parallelism"] = 2
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        original = self.prepare_external_holdout()
+        self.evaluation["parallelism"] = 1
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        config = json.loads((self.root / "external-evaluation.json").read_text())
+        path = self.root / "external-resume.regrade.config.json"
+        fixture.write(path, config)
+        completed = subprocess.run([
+            str(fixture.CLI), "dataset", "run", str(self.root / "external-dataset"),
+            "--config", str(path), "--resume-report", str(self.external_source),
+            "--output-root", str(self.root / "external-resume")],
+            capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertIn(completed.returncode, (0, 1), completed.stderr)
+        self.external_source = self.root / "external-resume/report.json"
+        self.external_bytes = self.external_source.read_bytes()
+        report = json.loads(self.external_bytes)
+        self.assertNotIn("execution_source", report["configuration"])
+        self.assertEqual(report["summary"]["reused_trials"], 2)
+        self.assertEqual(report["summary"]["not_started_trials"], 0)
+        for before, after in zip(original["trials"], report["trials"]):
+            for field in ["trial_id", "duration_ms", "metrics", "execution_status"]:
+                self.assertEqual(before[field], after[field])
+        result = json.loads((self.root / "external-result.json").read_text())
+        result["source_report"] = str(self.external_source)
+        fixture.write(self.root / "external-result.json", result)
+        return report
+
+    def test_external_holdout_ordinary_resume_checks_saved_parent_execution(self):
+        self.ordinary_resumed_external_holdout()
+        self.start()
+        job_id, _, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["status"], "hit", tree["holdout_baseline_cache"])
+        self.assertEqual(self.external_source.read_bytes(), self.external_bytes)
+        source = next(e for e in tree["evaluations"].values() if e.get("baseline_source"))
+        self.assertEqual(source["trials_reserved"], 0)
+
+    def test_external_holdout_ordinary_resume_changed_execution_still_rejected(self):
+        report = self.ordinary_resumed_external_holdout()
+        report["trials"][0]["duration_ms"] += 1
+        fixture.write(self.external_source, report)
+        self.external_bytes = self.external_source.read_bytes()
+        path = self.external_source.parent / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["files"]["report.json"] = hashlib.sha256(self.external_bytes).hexdigest()
+        fixture.write(path, manifest)
+        self.start()
+        job_id, _, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["reason"], "gepa_external_baseline_execution_mismatch")
+        self.assertFalse(any(e["split"] == "holdout" for e in tree["evaluations"].values()))
+
+    def test_external_holdout_regrade_wrong_parent_still_rejected(self):
+        self.enable_external_judge()
+        self.prepare_external_holdout()
+        report = self.regrade_external_holdout()
+        report["configuration"]["execution_source"]["run_id"] = "evaluation:wrong-parent"
+        fixture.write(self.external_source, report)
+        self.external_bytes = self.external_source.read_bytes()
+        manifest_path = self.external_source.parent / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"]["report.json"] = hashlib.sha256(self.external_bytes).hexdigest()
+        fixture.write(manifest_path, manifest)
+        self.start()
+        job_id, _, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["holdout_baseline_cache"]["reason"], "gepa_external_baseline_execution_mismatch")
+        self.assertFalse(any(e["split"] == "holdout" for e in tree["evaluations"].values()))
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ namespace trajectory::evolution {
 
 // 报告文件的统一安全硬上限；具体批次仍遵守 max_report_bytes，默认容量不变。
 // 只限制离线落盘/读取，不扩大模型请求、单题轨迹或 HTTP 消息的上限。
-inline constexpr std::size_t kMaxEvaluationReportBytes = 1073741824;
+inline constexpr std::size_t kMaxEvaluationReportBytes = std::size_t{2} * 1024 * 1024 * 1024;
 
 struct TaskEvaluationOptions {
   std::filesystem::path model_config;

@@ -19,7 +19,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[4]
 CONFIG = Path(__file__).resolve().parent
-DATASET = CONFIG/'datasets/source'
+DATASET = CONFIG/'datasets/pack'
 SCENARIO_CONFIG = CONFIG/'scenario-deployment'
 SCENARIO_PLAN = CONFIG/'scenario-plan.json'
 OUTPUT = ROOT/'trace_output/business-coverage'

@@ -53,6 +53,7 @@ int run_task_evaluation_cli(int argc, char **argv) {
              "NEW_DIR\n"
              "  [--model-config runtime.json] [--allow-unreviewed]\n"
              "  [--resume-report PREVIOUS_REPORT] (same configuration; reuse completed execution)\n"
+             "  [--resume-rerun-trial TRIAL_ID ...] (recapture selected infrastructure failures)\n"
              "  [--regrade-report PREVIOUS_REPORT] (model judgment only; no Agent execution)\n"
              "  [--recheck] (with --regrade-report: also recheck configured rules on saved "
              "evidence)\n"
@@ -70,12 +71,19 @@ int run_task_evaluation_cli(int argc, char **argv) {
         dataset = arg;
         continue;
       }
-      require(seen.insert(arg).second, "evaluation_duplicate_argument");
+      if (arg != "--resume-rerun-trial")
+        require(seen.insert(arg).second, "evaluation_duplicate_argument");
       if (arg == "--allow-unreviewed")
         options.allow_unreviewed = true;
       else if (arg == "--recheck")
         options.recheck = true;
-      else if (arg == "--config" || arg == "--output-root" || arg == "--model-config" ||
+      else if (arg == "--resume-rerun-trial") {
+        require(++i < argc, "evaluation_missing_argument");
+        const std::string trial_id = argv[i];
+        require(!trial_id.empty() && trial_id.size() <= 256 && trial_id.front() != '-',
+                "evaluation_trial_identity_invalid");
+        options.resume_rerun_trial_ids.insert(trial_id);
+      } else if (arg == "--config" || arg == "--output-root" || arg == "--model-config" ||
                arg == "--regrade-report" || arg == "--resume-report") {
         require(++i < argc, "evaluation_missing_argument");
         if (arg == "--config")
@@ -93,6 +101,9 @@ int run_task_evaluation_cli(int argc, char **argv) {
     }
     require(!dataset.empty() && !config.empty() && !output.empty(),
             "evaluation_arguments_required");
+    require(options.resume_rerun_trial_ids.empty() ||
+                (!options.resume_report.empty() && options.regrade_report.empty()),
+            "evaluation_rerun_requires_resume");
     Signals signals;
     options.cancelled = [] { return interrupted != 0; };
     const auto report = run_task_evaluation(dataset, config, output, options);
