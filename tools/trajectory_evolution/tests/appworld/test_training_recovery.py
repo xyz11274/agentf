@@ -6830,3 +6830,128 @@ def test_development_foreign_anchor_cannot_prioritize_current_failures(tmp_path,
     packet = learning._development_public_feedback(local, latest['policy'], [])
     assert all(row['was_l0_success'] for row in packet['failure_examples'])
     assert 'foreign-holdout-task' not in json.dumps(packet)
+def _development100_fixture(tmp_path, monkeypatch):
+    import learning, stage_gate
+    c,anchor,latest,authority,target,search,path,native,mid,healthy=_development_feedback_fixture(tmp_path,monkeypatch)
+    source=json.loads(native.read_text());report=json.loads(path.read_text());base=json.loads(Path(report['source_l0']).read_text())
+    source_rows,items,originals=[],[],[]
+    for i in range(100):
+        row=copy.deepcopy(source['trials'][i%32]);old=copy.deepcopy(report['items'][i%32]);origin=copy.deepcopy(base['items'][i%32])
+        task=f'validation-{i}';row['task_id']=old['task_id']=origin['task_id']=task
+        row['trial_id']=old['trial_id']=f'validation-trial-{i}'
+        # The public list must contain this successful-but-wasted-loop case;
+        # it retains the truth: completed goal, completed requested code block.
+        passed=i not in (0,1,2,3,4)
+        old.update(strict_passed=int(passed),quality=int(passed),avg_invalid_loop=9 if i==99 else 5 if i==0 else 0)
+        row['verdict']='passed' if passed else 'failed'
+        row['evidence']['loop_review']['count']=old['avg_invalid_loop']
+        row['evidence']['trace']['events'][-1]['output'].update(task_completed=passed,
+            termination_reason='completed' if passed else 'bounded_recovery_exhausted')
+        if i==99:
+            events=row['evidence']['trace']['events']
+            for event in events:
+                if event.get('kind')=='action.start':
+                    event['input']['code']='apis.gmail.show_api_doc(api_name="PRIVATE_VALUE")'
+        if i==0:
+            events=row['evidence']['trace']['events']
+            for event in events:
+                if event.get('kind')=='action.end' and event.get('action_id')=='read':
+                    event.update(status='failed',error={'code':'appworld_code_error'})
+        source_rows.append(row);items.append(old);originals.append(origin)
+    folder=c.GEPA/'seed-search-8-stage100';comparison=folder/'comparison.json';native100=folder/'shards/shard-00/capture/report.json'
+    base100=c.GEPA/'l0-current-stage100/result.json';save(base100,dict(base,items=originals))
+    save(comparison,dict(report,items=items,source_l0=str(base100)))
+    save(native100,dict(source,trials=source_rows));save(native100.with_name('manifest.json'),{'complete':True,'summary':{'planned_trials':100}})
+    save(folder/'progress.json',{'artifact':latest,'shards':{'shard-00':{'source_report':str(native100)}}})
+    search['attempts'][-1].update(validation_comparison=str(comparison),last_stage=100,status='failed')
+    save(c.GEPA/'status.json',{'seed_search':search})
+    return c,authority,target,search,comparison,native100,mid,latest
+
+
+def test_complete_failed100_guides_next_seed_and_preserves_successful_loop_counterexample(tmp_path,monkeypatch):
+    import learning
+    c,authority,target,search,comparison,native,mid,latest=_development100_fixture(tmp_path,monkeypatch)
+    protected={p:p.read_bytes() for p in (comparison,native,c.GEPA/'status.json')}
+    feedback=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    assert feedback['latest']['tasks']==100 and feedback['latest']['comparison']==comparison
+    assert len(feedback['latest']['current'])==100 and feedback['anchor']['tasks']==100
+    assert all(task.startswith('validation-') for task in feedback['latest']['current'])
+    packet=learning._development_public_feedback(feedback,latest['policy'],[])
+    assert packet['tasks']==100 and packet['scope']=='development100_proposal_guidance_only'
+    assert any(example['goal_completed'] and example['steps'][0]['requested_api']=='apis.gmail.show_api_doc'
+               for example in packet['failure_examples'])
+    assert any(step['error_code']=='appworld_code_error' for ex in packet['failure_examples'] for step in ex['steps'])
+    assert len(packet['failure_examples'])<=4 and len(json.dumps(packet).encode())<=4096
+    assert set(packet)=={'scope','tasks','source_summary','failure_examples'}
+    assert not any(value in json.dumps(packet) for value in ('PRIVATE','validation-','trial-','_reviewed','_strict','_anchor'))
+    for p,before in protected.items():assert p.read_bytes()==before
+
+
+@pytest.mark.parametrize('problem',['partial','foreign','wrong_version','scope500','unreviewed','wrong_host'])
+def test_development100_prefers_only_complete_bound_native_same_scope(tmp_path,monkeypatch,problem):
+    import learning
+    c,authority,target,search,path,native,mid,latest=_development100_fixture(tmp_path,monkeypatch)
+    if problem=='partial':
+        value=c.read(path);value['status']='pending';save(path,value)
+        feedback=learning._development_seed_feedback(c,target,'candidate-next',authority)
+        assert feedback['latest']['tasks']==32 and feedback['latest']['comparison']!=path
+        return
+    if problem=='foreign':
+        elsewhere=tmp_path/'foreign-comparison.json';save(elsewhere,c.read(path));search['attempts'][-1]['validation_comparison']=str(elsewhere)
+        save(c.GEPA/'status.json',{'seed_search':search})
+    elif problem=='scope500':
+        save(native.with_name('manifest.json'),{'complete':True,'summary':{'planned_trials':500}})
+        original=c.read
+        def read(p):
+            if Path(p)==native:raise AssertionError('500 body must not be read')
+            return original(p)
+        c.read=read
+    else:
+        value=c.read(path)
+        if problem=='wrong_version':value['items'][0]['loaded_version']='foreign'
+        elif problem=='wrong_host':value['host_version']='foreign'
+        else:value['items'][0]['avg_invalid_loop']=None
+        save(path,value)
+    with pytest.raises(RuntimeError,match='development_feedback'):
+        learning._development_seed_feedback(c,target,'candidate-next',authority)
+
+
+def test_duplicate_feedback_uses_the_same_complete100_native_scope(tmp_path,monkeypatch):
+    import learning
+    c,authority,target,search,path,native,mid,latest=_development100_fixture(tmp_path,monkeypatch)
+    # The existing duplicate application reader owns retained per-trial paths.
+    # Keep the exact actual source trial bytes at its standard location.
+    compact=c.read(path)
+    for row,item in zip(c.read(native)['trials'],compact['items']):
+        item['source_shard']='shard-00'
+        save(path.parent/'shards/shard-00/capture/trials'/f"{item['trial_id']}.json",row)
+    save(path,compact)
+    counts,source=learning._duplicate_l1_applications(c,search,latest)
+    assert source==path and counts
+    assert sum(value['passed_tasks']+value['failed_tasks'] for value in counts.values())==15  # All 100 rows, not the pilot's four applications.
+
+
+def test_code_error_fallback_requires_exact_training_pair_and_keeps_shared_budget(tmp_path,monkeypatch):
+    import learning
+    learning,c,rows,policy,feedback,memory=_fallback_fixture(tmp_path)
+    c.BINARY=ROOT/'tools/trajectory_evolution/build-v4/trajectory_evolution'
+    options=copy.deepcopy(policy['options'])
+    for rule in options['loop_rules']:
+        if not rule.get('source_experience'):rule['error_codes']=['appworld_code_error']
+    policy=json.loads(c.native(c.BINARY,c.ROOT,['runtime','recompile'],{'policy':policy,'options':options}))
+    for event in rows[2]['evidence']['trace']['events']:
+        if event.get('error',{}).get('code')=='appworld_auth_401':event['error']['code']='appworld_code_error'
+    save(c.TRAINING/'full-captures/batch/report.json',{'complete':True,'trials':rows})
+    feedback=learning.seed_control_feedback(c,{row['task_id'] for row in rows})
+    draft,provenance=learning._evidence_bounded_control_draft(c,policy,feedback,preferred_failure_codes=['appworld_code_error'])
+    assert len(draft['loop_rules'])==1 and draft['loop_rules'][0]['error_codes']==['appworld_code_error']
+    controls=c.read(c.RUNTIME/'service.json')['control_learning'];controls['enabled']=True
+    try:
+        compiled=learning.compile_seed_controls(c,policy,controls,draft,{})
+    except RuntimeError as error:
+        raise AssertionError(getattr(error,'native_reason',str(error))) from None
+    learned=[r for r in compiled['options']['loop_rules'] if r.get('source_experience')]
+    assert len(learned)==1 and learned[0]['max_replans']==1 and compiled['snapshot']==policy['snapshot']
+    # Same broad error family, but absent exact TRAIN citation, grants nothing.
+    m=c.read(memory);m['entries'][0]['candidate']['support_evidence']=[];save(memory,m)
+    with pytest.raises(RuntimeError):learning._evidence_bounded_control_draft(c,policy,feedback,preferred_failure_codes=['appworld_code_error'])

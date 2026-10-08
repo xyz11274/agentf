@@ -855,7 +855,7 @@ def _validated_cited_failure_pairs(candidate, source_views, *, memory_id=None,
                     (event.get('attributes') or {}).get('observed_error_code'))
             failed = event.get('status') == 'failed' and code in (
                 'appworld_auth_401', 'appworld_missing_access_token', 'appworld_validation_422',
-                'appworld_type_error_positional')
+                'appworld_type_error_positional', 'appworld_code_error')
             if failed and previous is not None:
                 previous_event, previous_start, previous_code = previous
                 same_execution = (event.get('execution_id') and
@@ -974,8 +974,8 @@ def _approved_development_feedback(value, source_ids):
     """Reject free text, credentials, answers, raw events and unbound source IDs."""
     fields = {'scope', 'tasks', 'source_summary', 'failure_examples'}
     if (not isinstance(value, dict) or set(value) != fields
-            or value.get('scope') != 'development32_proposal_guidance_only'
-            or type(value.get('tasks')) is not int or value['tasks'] != 32
+            or type(value.get('tasks')) is not int or value['tasks'] not in (32, 100)
+            or value.get('scope') != f"development{value['tasks']}_proposal_guidance_only"
             or not isinstance(value.get('source_summary'), list) or len(value['source_summary']) > 8
             or not isinstance(value.get('failure_examples'), list) or len(value['failure_examples']) > 4
             or len(json.dumps(value).encode()) > 4096):
@@ -985,7 +985,7 @@ def _approved_development_feedback(value, source_ids):
     for row in value['source_summary']:
         if (not isinstance(row, dict) or set(row) != summary_fields or row.get('memory_id') not in source_ids
                 or type(row['observed_failed_api_context']) is not bool
-                or any(type(row[name]) is not int or not 0 <= row[name] <= 32
+                or any(type(row[name]) is not int or not 0 <= row[name] <= value['tasks']
                        for name in ('regressed_tasks', 'improved_tasks', 'failed_tasks', 'passed_tasks'))
                 or not isinstance(row['train_supported_failure_codes'], list)
                 or len(row['train_supported_failure_codes']) > 4
@@ -1263,8 +1263,11 @@ def _control_model_reply(controller, packet, repair_reason=None, transport=None)
         + CONTROL_DRAFT_FIELDS
     )
     if packet.get('development_feedback'):
-        instructions += (' The bounded development32 feedback is proposal guidance, not TRAIN authority. '
+        instructions += (' The bounded development32/100 feedback is proposal guidance, not TRAIN authority. '
             'Repair the observed failure using only exact TRAIN-supported sources and budgets; '
+            'A completed goal with repeated requested code and reviewed wasted loops is an efficiency '
+            'counterexample, not a business failure. Do not use a failure-code rule to stop successful '
+            'queries; use only an already supported typed progress/budget mechanism. '
             'distinguish successful login from passing access_token to later protected calls. '
             'A source applied before a failed action is associated, not proven harmful. '
             'requested_api and parameter_names describe requested code only, with evidence_basis=requested_code. '
@@ -1348,7 +1351,8 @@ def _evidence_bounded_control_draft(controller, policy, feedback, *, preferred_f
             'loop.decide' not in policy.get('options', {}).get('host_capabilities', [])):
         raise RuntimeError('appworld_evidence_recovery_host_unavailable')
     preferred = set(preferred_failure_codes or ())
-    if not preferred <= {'appworld_auth_401', 'appworld_missing_access_token'}:
+    if not preferred <= {'appworld_auth_401', 'appworld_missing_access_token',
+                         'appworld_validation_422', 'appworld_type_error_positional', 'appworld_code_error'}:
         raise ValueError('appworld_evidence_recovery_preferred_codes_invalid')
     approved = {(item['memory_id'], item['content_revision']) for item in
                 policy['options'].get('approved_experiences') or []}
@@ -1454,7 +1458,7 @@ def _evidence_bounded_control_draft(controller, policy, feedback, *, preferred_f
                 rule.update(match_mode='predicate',
                     after_action_rejection=bool(base.get('after_action_rejection', False)),
                     require_finalization=bool(base.get('require_finalization', False)))
-            if code in preferred:
+            if code in preferred and code in ('appworld_auth_401', 'appworld_missing_access_token'):
                 context = evidence['experience'].get('content')
                 if not isinstance(context, str) or not context or len(context.encode()) > int(policy['options']['max_context_bytes']):
                     raise RuntimeError('appworld_evidence_recovery_source_context_over_budget')
@@ -2191,7 +2195,7 @@ def _english_trigger_model_reply(controller, packet, repair_reason=None, transpo
         'with a current operation or its targeted public API documentation; do not invent abstract readiness flags. '
         'Output complete JSON only; no prose or truncation. Omit unsupported items rather than widening them.')
     if outgoing.get('development_feedback'):
-        instructions += (' Use the supplied development32 feedback to prioritize existing source mechanisms '
+        instructions += (' Use the supplied development32/100 feedback to prioritize existing source mechanisms '
             'that were missing before unfinished goals. Do not learn a task answer or alter card meaning. '
             'Successful authentication alone does not pass access_token to a subsequent API. '
             'requested_api/parameter_names are requested code, not observed calls; code_block status does not prove each API ran. '
@@ -4869,9 +4873,17 @@ def _duplicate_l1_applications(controller, search, base):
     attempt = next((item for item in reversed(search.get('attempts') or [])
         if isinstance(item.get('seed'), str) and Path(item['seed']).is_file()
         and controller.version(controller.read(Path(item['seed']))) == version), None)
-    if not attempt or not isinstance(attempt.get('pilot_comparison'), str):
+    if not attempt:
         raise RuntimeError('appworld_duplicate_l1_feedback_missing')
-    path = Path(attempt['pilot_comparison']).resolve()
+    count = _development_feedback_count(controller, attempt)
+    field = 'pilot_comparison' if count == 32 else 'validation_comparison'
+    if not isinstance(attempt.get(field), str):
+        raise RuntimeError('appworld_duplicate_l1_feedback_missing')
+    if count == 100:
+        verified = _verified_development_seed(controller, attempt, count=100)
+        if verified['artifact'] != base:
+            raise RuntimeError('appworld_duplicate_l1_feedback_invalid')
+    path = Path(attempt[field]).resolve()
     if not path.is_relative_to(root):
         raise RuntimeError('appworld_duplicate_l1_feedback_invalid')
     comparison = controller.read(path)
@@ -5044,13 +5056,28 @@ def _freeze_duplicate_l1_candidate(controller, target, label, current_snapshot, 
     return artifact
 
 
-def _verified_development_seed(controller, attempt, expected_ids=None):
+def _development_feedback_count(controller, attempt):
+    """Prefer this seed's complete 100 gate; never fall back from an invalid one."""
+    reference = attempt.get('validation_comparison')
+    if isinstance(reference, str):
+        path = Path(reference).resolve()
+        if path.is_file():
+            if not path.is_relative_to(controller.GEPA.resolve()):
+                raise RuntimeError('appworld_development_feedback_binding_invalid')
+            if controller.read(path).get('status') == 'complete':
+                return 100
+    return 32
+
+
+def _verified_development_seed(controller, attempt, expected_ids=None, *, count=32):
     """Development grades choose proposals; only TRAIN remains source authority."""
     import stage_gate
     root = controller.GEPA.resolve()
     published = controller.PUBLISHED.resolve()
     seed = Path(attempt.get('seed') or '').resolve()
-    path = Path(attempt.get('pilot_comparison') or '').resolve()
+    if count not in (32, 100):
+        raise RuntimeError('appworld_development_feedback_binding_invalid')
+    path = Path(attempt.get('pilot_comparison' if count == 32 else 'validation_comparison') or '').resolve()
     if not seed.is_relative_to(published) or not seed.is_file() or not path.is_relative_to(root) or not path.is_file():
         raise RuntimeError('appworld_development_feedback_binding_invalid')
     artifact = controller.read(seed)
@@ -5059,7 +5086,7 @@ def _verified_development_seed(controller, attempt, expected_ids=None):
     baseline_path = Path(report.get('source_l0') or '').resolve()
     if not baseline_path.is_relative_to(root) or not baseline_path.is_file():
         raise RuntimeError('appworld_development_feedback_binding_invalid')
-    _, verified = stage_gate.verify_stage('32', path, baseline_path, seed)
+    _, verified = stage_gate.verify_stage(str(count), path, baseline_path, seed)
     if verified.get('coverage_pass') is not True or verified.get('seed_match') is not True:
         raise RuntimeError('appworld_development_feedback_incomplete')
     progress = controller.read(path.with_name('progress.json'))
@@ -5068,8 +5095,8 @@ def _verified_development_seed(controller, attempt, expected_ids=None):
     current = {row.get('task_id'): row for row in items}
     original = {row.get('task_id'): row for row in originals}
     if (report.get('status') != 'complete' or baseline.get('status') != 'complete'
-            or len(items) != 32 or len(current) != 32 or current.keys() != original.keys()
-            or len(originals) != 32 or progress.get('artifact') != artifact
+            or len(items) != count or len(current) != count or current.keys() != original.keys()
+            or len(originals) != count or progress.get('artifact') != artifact
             or report.get('host_version') != baseline.get('host_version')
             or report.get('judge_projection') != baseline.get('judge_projection')
             or expected_ids is not None and set(current) != set(expected_ids)):
@@ -5082,14 +5109,14 @@ def _verified_development_seed(controller, attempt, expected_ids=None):
                 or type(row.get('quality')) not in (int, float) or not 0 <= row['quality'] <= 1
                 or type(row.get('avg_invalid_loop')) not in (int, float) or row['avg_invalid_loop'] < 0):
             raise RuntimeError('appworld_development_feedback_incomplete')
-    return {'seed': seed, 'comparison': path, 'artifact': artifact, 'version': version,
+    return {'tasks': count, 'seed': seed, 'comparison': path, 'artifact': artifact, 'version': version,
             'current': current, 'baseline': original, 'progress': progress,
             'rank': (sum(row['strict_passed'] for row in items), sum(row['quality'] for row in items),
                      -sum(row['avg_invalid_loop'] for row in items))}
 
 
 def _development_trial_rows(controller, evidence, reports):
-    """Read only the bound 32 native grade sources, once per local invocation."""
+    """Read only the bound development gate native grade sources, once per local invocation."""
     root = controller.GEPA.resolve()
     rows = {}
     for shard in (evidence['progress'].get('shards') or {}).values():
@@ -5098,7 +5125,7 @@ def _development_trial_rows(controller, evidence, reports):
             raise RuntimeError('appworld_development_feedback_native_source_missing')
         manifest = controller.read(path.with_name('manifest.json'))
         planned = (manifest.get('summary') or {}).get('planned_trials')
-        if manifest.get('complete') is not True or type(planned) not in (int, float) or not 0 < planned <= 32:
+        if manifest.get('complete') is not True or type(planned) not in (int, float) or not 0 < planned <= evidence.get('tasks', 32):
             raise RuntimeError('appworld_development_feedback_native_scope_invalid')
         if path not in reports:
             reports[path] = controller.read(path)
@@ -5218,11 +5245,12 @@ def _development_observations(controller, evidence, rows, authority, anchor_curr
             record['improved_tasks'] += int(prior == 0 and passed == 1)
             record['failed_tasks'] += int(passed == 0)
             record['passed_tasks'] += int(passed == 1)
-        if not passed:
+        if not passed or compact.get('avg_invalid_loop', 0) > 0:
             reason = terminal.get('termination_reason')
             reason = reason if reason in ('max_steps', 'max_iterations', 'bounded_recovery_exhausted',
                 'task_timeout', 'completed', 'task_completed', 'normal', 'budget_exhausted') else 'other'
-            examples.append({'_anchor_success': bool(anchor_current is not None and
+            examples.append({'_strict_success': bool(passed), '_reviewed_loops': compact['avg_invalid_loop'],
+                '_anchor_success': bool(not passed and anchor_current is not None and
                 anchor_current[task]['strict_passed'] == 1),
                 'was_l0_success': prior == 1, 'goal_completed': terminal.get('task_completed') is True,
                 'termination_reason': reason, 'applied_source_ids': [pair[0] for pair in sorted(used)][:3],
@@ -5255,13 +5283,14 @@ def _development_seed_feedback(controller, target, label, snapshot):
         raise RuntimeError('appworld_development_feedback_binding_invalid')
     if attempt.get('status') not in ('failed', 'pilot_passed'):
         return None  # Other normal reservation reasons have no failed pilot feedback.
-    latest = _verified_development_seed(controller, attempt)
+    count = _development_feedback_count(controller, attempt)
+    latest = _verified_development_seed(controller, attempt, count=count)
     choices = [latest]
     for previous in search.get('attempts') or []:
         if previous == attempt:
             continue
         try:
-            value = _verified_development_seed(controller, previous, latest['current'])
+            value = _verified_development_seed(controller, previous, latest['current'], count=count)
         except (OSError, ValueError, RuntimeError, KeyError, TypeError):
             continue
         # A historical source remains usable only under today's exact TRAIN authority.
@@ -5334,11 +5363,18 @@ def _development_public_feedback(local, policy, training_support):
     cards = {card['memory_id']: card for card in policy['snapshot'].get('experiences', [])}
     approved = {ref['memory_id'] for ref in policy['options'].get('approved_experiences', [])}
     support = {row['memory_id']: row for row in training_support}
-    examples = sorted(deepcopy(local['failure_examples']), key=lambda row: (row.get('_anchor_success', False) and not row['was_l0_success'],
+    ranked_examples = sorted(deepcopy(local['failure_examples']), key=lambda row: (row.get('_anchor_success', False) and not row['was_l0_success'],
                       row.get('_anchor_success', False), row['was_l0_success'],
-                      row['termination_reason'] in ('max_steps', 'bounded_recovery_exhausted')), reverse=True)[:4]
+                      row['termination_reason'] in ('max_steps', 'bounded_recovery_exhausted')), reverse=True)
+    examples = ranked_examples[:4]
+    loop_only = [row for row in ranked_examples if row.get('_strict_success') and row.get('_reviewed_loops', 0) > 0]
+    if loop_only:
+        representative = max(loop_only, key=lambda row: row['_reviewed_loops'])
+        if representative not in examples:
+            examples = examples[:3] + [representative]
     for example in examples:
-        example.pop('_anchor_success', None)  # Local ranking only; the public contract is unchanged.
+        for key in ('_anchor_success', '_strict_success', '_reviewed_loops'):
+            example.pop(key, None)  # Local ranking only; the public contract is unchanged.
     counts = {pair[0]: value for pair, value in local['source_counts'].items() if pair[0] in approved}
     related, observed_context = set(counts), set()
     for example in examples:
@@ -5359,7 +5395,8 @@ def _development_public_feedback(local, policy, training_support):
         example['applied_source_ids'] = [mid for mid in example['applied_source_ids'] if mid in allowed]
         for step in example['steps']:
             step['applied_before'] = [mid for mid in step['applied_before'] if mid in allowed]
-    result = {'scope': 'development32_proposal_guidance_only', 'tasks': 32,
+    count = (local.get('latest') or {}).get('tasks', 32)
+    result = {'scope': f'development{count}_proposal_guidance_only', 'tasks': count,
         'source_summary': summaries, 'failure_examples': examples}
     if len(json.dumps(result).encode()) > 4096:
         for example in examples:
@@ -5500,7 +5537,7 @@ def _save_development_ablation(controller, target, label, local, artifact, pair,
     diagnostic.update(published=True, development_feedback={
         'source_seed': str(local['latest']['seed']), 'source_comparison': str(local['latest']['comparison']),
         'anchor_seed': str(anchor['seed']), 'anchor_comparison': str(anchor['comparison']),
-        'scope': 'development32_proposal_guidance_only', 'change': 'single_l1_ablation',
+        'scope': f"development{local['latest'].get('tasks', 32)}_proposal_guidance_only", 'change': 'single_l1_ablation',
         'source_experience': dict(zip(('memory_id', 'content_revision'), pair)),
         'association': 'paired_regression_not_proven_causality',
         'regressed_tasks': local['anchor_counts'][pair]['regressed_tasks'],
@@ -5625,7 +5662,7 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
                 'source_comparison': str(development['latest']['comparison']),
                 'anchor_seed': str(development['anchor']['seed']),
                 'anchor_comparison': str(development['anchor']['comparison']),
-                'scope': 'development32_proposal_guidance_only',
+                'scope': f"development{development['latest'].get('tasks', 32)}_proposal_guidance_only",
                 'authority': 'canonical_training_only', 'model_calls': 0}
             if not retained_paid:
                 ablation = _compile_development_l1_candidate(controller, development, snapshot)
