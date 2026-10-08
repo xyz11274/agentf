@@ -45,6 +45,81 @@ void initial_review_retry_context_regressions() {
   std::cout << "initial_review_context_guard=PASS cases=10\n";
 }
 
+namespace trajectory::evolution {
+bool gepa_final_holdout_review_pending(const integration::Json &);
+bool gepa_final_holdout_review_retryable(const GepaResult &);
+}
+
+void gepa_final_holdout_review_regressions() {
+  using namespace trajectory::evolution;
+  GepaResult result;
+  result.summary = Json{{"status", "inconclusive"}, {"final_holdout", Json{{"status", "inconclusive"},
+      {"candidates", Json::Array{Json{{"status", "complete"}}, Json{{"status", "inconclusive"}}}}}}};
+  result.artifact = Json{{"selected", "formal-passing-candidate"}};
+  result.finalists.resize(2);
+  for (auto &finalist : result.finalists) {
+    finalist.holdout.set_complete(true);
+    auto *trial = finalist.holdout.add_trials();
+    trial->set_execution_status("completed"); trial->set_verdict("passed");
+    *trial->mutable_evidence() = proto<google::protobuf::Struct>(Json{
+        {"output", Json{{"framework_capture", Json{{"status", "complete"}}}}},
+        {"trace", Json{{"events", Json::Array{Json{{"kind", "run.start"}}, Json{{"kind", "run.end"}}}}}}});
+  }
+  auto *trial = result.finalists[1].holdout.mutable_trials(0);
+  trial->set_verdict("error"); trial->set_error_code("evaluation_judge_failed");
+  auto *check = trial->add_checks(); check->set_check_id("model"); check->set_status("error");
+  unsigned cases = 0;
+  for (const auto &reason : {"evaluation_judge_http_408", "evaluation_judge_http_429",
+      "evaluation_judge_http_500", "evaluation_judge_http_502", "evaluation_judge_http_503",
+      "evaluation_judge_http_504", "evaluation_judge_transport_18", "evaluation_judge_transport_28",
+      "evaluation_judge_reason_conflict"}) {
+    check->set_reason(reason);
+    const auto original = result.finalists[1].holdout.SerializeAsString();
+    expect_robust(gepa_final_holdout_review_pending(result.summary) &&
+                  gepa_final_holdout_review_retryable(result), "closed temporary partial Top-K was not retryable");
+    expect_robust(result.finalists[1].holdout.SerializeAsString() == original &&
+                  result.artifact.str("selected") == "formal-passing-candidate", "terminal check changed a formal result");
+    ++cases;
+  }
+  for (const auto &reason : {"evaluation_judge_http_401", "evaluation_judge_http_403",
+      "evaluation_judge_schema_invalid", "evaluation_judge_uncertain", "invalid_json"}) {
+    check->set_reason(reason);
+    expect_robust(!gepa_final_holdout_review_retryable(result), "permanent/unknown review failure was auto-retryable");
+    ++cases;
+  }
+  auto mixed = result;
+  auto *first = mixed.finalists[0].holdout.mutable_trials(0);
+  first->set_error_code("evaluation_judge_failed"); first->set_verdict("error");
+  auto *first_check = first->add_checks(); first_check->set_check_id("model");
+  first_check->set_status("error"); first_check->set_reason("evaluation_judge_http_503");
+  mixed.finalists[1].holdout.mutable_trials(0)->mutable_checks(0)->set_reason("evaluation_judge_http_401");
+  expect_robust(!gepa_final_holdout_review_retryable(mixed), "temporary peer hid permanent finalist failure"); ++cases;
+  check->set_reason("evaluation_judge_http_503");
+  auto changed = result; changed.finalists[1].holdout.mutable_trials(0)->set_execution_status("error");
+  expect_robust(!gepa_final_holdout_review_retryable(changed), "failed execution was treated as judge-only"); ++cases;
+  changed = result; changed.finalists[1].holdout.set_complete(false);
+  expect_robust(!gepa_final_holdout_review_retryable(changed), "incomplete report granted retry"); ++cases;
+  changed = result; changed.finalists[1].holdout.mutable_trials(0)->clear_evidence();
+  expect_robust(!gepa_final_holdout_review_retryable(changed), "missing closed capture granted retry"); ++cases;
+  changed = result;
+  auto *events = &(*changed.finalists[1].holdout.mutable_trials(0)->mutable_evidence()->mutable_fields())["trace"];
+  (*events->mutable_struct_value()->mutable_fields())["events"].mutable_list_value()->mutable_values()->RemoveLast();
+  expect_robust(!gepa_final_holdout_review_retryable(changed), "unclosed trace granted retry"); ++cases;
+  changed = result; changed.finalists[1].holdout.mutable_trials(0)->clear_error_code();
+  changed.finalists[1].holdout.mutable_trials(0)->set_verdict("uncertain");
+  expect_robust(!gepa_final_holdout_review_retryable(changed), "real uncertainty granted retry"); ++cases;
+  changed = result; changed.finalists[1].holdout.mutable_trials(0)->clear_checks();
+  expect_robust(!gepa_final_holdout_review_retryable(changed), "missing fixed model failure granted retry"); ++cases;
+  changed = result; changed.finalists.pop_back();
+  expect_robust(!gepa_final_holdout_review_retryable(changed), "different frozen finalist count granted retry"); ++cases;
+  changed = result; changed.summary["status"] = "completed";
+  changed.summary["final_holdout"]["status"] = "completed";
+  expect_robust(!gepa_final_holdout_review_pending(changed.summary), "complete campaign remained pending"); ++cases;
+  changed = result; changed.summary["final_holdout"]["candidates"] = Json::Array{};
+  expect_robust(!gepa_final_holdout_review_pending(changed.summary), "empty/no-candidate plan became pending"); ++cases;
+  std::cout << "partial_holdout_terminal_review=PASS cases=" << cases << "\n";
+}
+
 void global_selection_regressions() {
   // 实际 Node13 的完整 VAL 失败集合：局部两题净 +1，全局 11/12 -> 10/12。
   // 桩保持实际 Q/strict 总数与 loop 总数，避免依赖已清理的实验目录。
@@ -1552,6 +1627,10 @@ void rate_limit_budget_completion_regressions() {
 
 int main(int argc, char **argv) {
   try {
+    if (argc == 2 && std::string(argv[1]) == "--partial-holdout-review") {
+      gepa_final_holdout_review_regressions();
+      return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--initial-review-retry") {
       initial_review_retry_context_regressions();
       std::cout << "external_model_calls=0 agent_executions=0\n";

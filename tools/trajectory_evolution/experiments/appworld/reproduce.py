@@ -1605,6 +1605,56 @@ def status(seed: Path | None = None) -> dict:
     return result
 
 
+def _status_display(value: dict) -> dict:
+    """Bound CLI output; full receipts remain in their existing source files."""
+    metric_keys = ('planned', 'completed', 'scored', 'strict_passed', 'quality',
+        'avg_invalid_loop', 'invalid_loop_coverage', 'latency_ms', 'tokens',
+        'token_covered_trials', 'model_calls', 'model_call_covered_trials',
+        'execution_costs_complete', 'levels', 'intent_f1', 'intent_measured')
+    def metrics(data):
+        if not isinstance(data, dict):
+            return data
+        if any(key in data for key in metric_keys):
+            return {key: data[key] for key in metric_keys if key in data}
+        return {name: {key: row[key] for key in metric_keys if key in row}
+                for name, row in data.items() if isinstance(row, dict)}
+    result = {}
+    for name in ('training', 'seed', 'pilot32', 'validation100', 'gepa', 'published', 'delivery'):
+        entry = dict(value.get(name) or {})
+        if 'metrics' in entry:
+            entry['metrics'] = metrics(entry['metrics'])
+        if isinstance(entry.get('nodes'), list):
+            entry['nodes'] = len(entry['nodes'])
+        result[name] = entry
+    experiment = dict(value.get('native_experiment') or value.get('experiment') or {})
+    pid = experiment.get('pid')
+    alive = False
+    if type(pid) is int and pid > 0:
+        try:
+            args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+            alive = any(arg.endswith(b'/reproduce.py') for arg in args)
+        except OSError:
+            pass
+    experiment['controller_alive'] = alive
+    if experiment.get('status') == 'running' and not alive:
+        experiment['status'] = 'not_running'
+    result['experiment'] = experiment
+    if experiment.get('status') in ('interrupted', 'stage_failed', 'not_running'):
+        result['gepa']['status'] = experiment['status']
+    search = value.get('seed_search') or {}
+    attempts = search.get('attempts') or []
+    result['seed_search'] = {key: search[key] for key in ('round', 'status', 'current_seed') if key in search}
+    result['seed_search']['attempts_count'] = len(attempts)
+    result['seed_search']['recent_attempts'] = [{key: row[key] for key in
+        ('attempt', 'round', 'seed', 'status', 'last_stage', 'goal_checks', 'pilot_comparison', 'validation_comparison')
+        if key in row} for row in attempts[-3:]]
+    generation = search.get('automatic_seed_generation') or {}
+    result['seed_search']['automatic_seed_generation'] = {key: generation[key] for key in
+        ('round', 'status', 'seed_label', 'seed', 'source_seed', 'method') if key in generation}
+    result['details'] = str(OUTPUT / 'gepa/status.json')
+    return result
+
+
 def _active_output_processes() -> list[int]:
     """Find real writers to this output tree without contacting a service."""
     entries = {str((HERE / name).resolve()) for name in (
@@ -2886,6 +2936,31 @@ def _initial_native_review_progress(state: dict, seed: Path | None = None) -> di
         return None
 
 
+def _final_native_review_progress(state: dict, seed: Path | None = None) -> dict | None:
+    if state.get('phase') != 'gepa_run' or state.get('cancel_requested'):
+        return None
+    reference = (state.get('candidate') or {}).get('seed_artifact')
+    if not isinstance(reference, str):
+        return None
+    candidate = Path(reference).resolve()
+    if seed is not None and candidate != Path(seed).resolve():
+        return None
+    import offline_gepa
+    try:
+        if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
+                or _read(offline_gepa.PLAN).get('seed') != str(candidate)):
+            return None
+        artifact = _read(candidate)
+        job_id = offline_gepa._recorded_job(artifact)
+        receipt = _read(offline_gepa.STATUS).get('job_id')
+        lifecycle = ((((state.get('stage_results') or {}).get('gepa_run') or {}).get('data') or {}).get('job_id'))
+        if not job_id or any(value is not None and value != job_id for value in (receipt, lifecycle)):
+            return None
+        return offline_gepa.progress(job_id) if offline_gepa.final_holdout_review_recovery(artifact, job_id) else None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        return None
+
+
 def _autonomous_retry_reason(error: Exception, state: dict) -> str | None:
     """Classify saved temporary faults without relaxing a source or score gate."""
     import re
@@ -2900,7 +2975,8 @@ def _autonomous_retry_reason(error: Exception, state: dict) -> str | None:
         return transport.group(1)
     if re.fullmatch(r'offline_gepa\.py_failed:[0-9]+', reason):
         if (_rate_limited_native_resume_progress(state) is not None
-                or _initial_native_review_progress(state) is not None):
+                or _initial_native_review_progress(state) is not None
+                or _final_native_review_progress(state) is not None):
             return 'appworld_native_gepa_checkpoint_requires_resume'
     if (re.fullmatch(r'compare\.py_failed:[0-9]+', reason)
             or reason == f"stage_gate_not_passed:{state.get('phase')}"
@@ -3128,7 +3204,8 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
                     seed, label = _reserve_after_unqualified_native_search(seed)
                 continue
             if (result.get('status') == 'pending'
-                    and _initial_native_review_progress(_read(state_path)) is not None):
+                    and (_initial_native_review_progress(_read(state_path)) is not None
+                         or _final_native_review_progress(_read(state_path)) is not None)):
                 raise RuntimeError('appworld_native_gepa_checkpoint_requires_resume')
             return result
         except Exception as error:
@@ -3142,6 +3219,7 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
                 return blocked(_stage_failure_reason(error))
             rate_limited_resume = None
             initial_review_resume = None
+            final_review_resume = None
             if state.get('phase') == 'gepa_run' or reason.startswith('appworld_native_gepa_'):
                 import offline_gepa
                 try:
@@ -3150,16 +3228,17 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
                     return blocked(_stage_failure_reason(binding_error))
                 rate_limited_resume = _rate_limited_native_resume_progress(state, seed)
                 initial_review_resume = _initial_native_review_progress(state, seed)
-                progress = rate_limited_resume or initial_review_resume or offline_gepa.progress()
+                final_review_resume = _final_native_review_progress(state, seed)
+                progress = rate_limited_resume or initial_review_resume or final_review_resume or offline_gepa.progress()
                 if progress.get('cancel_requested') or progress.get('job_status') == 'cancelled':
                     return blocked('appworld_native_gepa_cancelled', cancelled=True)
                 used, limit = progress.get('model_calls'), progress.get('max_model_calls')
-                if (rate_limited_resume is None
+                if (rate_limited_resume is None and final_review_resume is None
                         and isinstance(used, (int, float)) and isinstance(limit, (int, float))
                         and used >= limit):
                     return blocked('appworld_gepa_model_budget_exhausted')
                 deadline = progress.get('deadline_ms')
-                if (rate_limited_resume is None
+                if (rate_limited_resume is None and final_review_resume is None
                         and isinstance(deadline, (int, float)) and time.time() * 1000
                         >= deadline - progress.get('holdout_reserve_ms', 0)):
                     return blocked('appworld_gepa_deadline_exhausted')
@@ -3170,7 +3249,7 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
             retries += 1
             delay = (15, 30, 60)[min(retries - 1, 2)]
             # A validated rate checkpoint must resume its own frozen seed.
-            if rate_limited_resume is None and initial_review_resume is None:
+            if rate_limited_resume is None and initial_review_resume is None and final_review_resume is None:
                 search = seed_search()
                 generation = search.get('automatic_seed_generation') or {}
                 if (generation.get('round') == search.get('round', 1)
@@ -3698,7 +3777,7 @@ def main() -> int:
             raise RuntimeError('appworld_seed_artifact_must_match_publish_label')
     if args.status:
         selected = seed if args.seed_artifact or args.seed_label else None
-        print(json.dumps(status(selected), ensure_ascii=False, indent=2)); return 0
+        print(json.dumps(_status_display(status(selected)), ensure_ascii=False, indent=2)); return 0
     if args.plan:
         print(json.dumps({'order': ['training', 'memory', 'seed', 'pilot32', 'validation100', 'GEPA', 'top3-comparison500', 'publish'], 'parallelism': 16, 'gepa_rounds': 30, 'model_calls_started': False}, ensure_ascii=False, indent=2)); return 0
     if args.deliver_best_available:

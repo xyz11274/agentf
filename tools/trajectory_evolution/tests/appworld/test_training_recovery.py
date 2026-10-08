@@ -6955,3 +6955,119 @@ def test_code_error_fallback_requires_exact_training_pair_and_keeps_shared_budge
     # Same broad error family, but absent exact TRAIN citation, grants nothing.
     m=c.read(memory);m['entries'][0]['candidate']['support_evidence']=[];save(memory,m)
     with pytest.raises(RuntimeError):learning._evidence_bounded_control_draft(c,policy,feedback,preferred_failure_codes=['appworld_code_error'])
+
+@pytest.mark.parametrize('same_request', [True, False])
+def test_development100_packet_keeps_real_requested_repeats_under_budget(tmp_path, monkeypatch, same_request):
+    import learning
+    c,authority,target,search,path,native,mid,latest=_development100_fixture(tmp_path,monkeypatch)
+    report=c.read(native);row=report['trials'][-1];events=row['evidence']['trace']['events'];terminal=events[-1]
+    start=next(e for e in events if e.get('kind')=='action.start' and e.get('loop_id')=='main')
+    end=next(e for e in events if e.get('kind')=='action.end' and e.get('loop_id')=='main')
+    actual=[]
+    names=['argument_'+str(i)+'_'+'x'*40 for i in range(16)]
+    for i in range(9):
+        begin,finish=copy.deepcopy(start),copy.deepcopy(end);key='doc-'+str(i)
+        begin['action_id']=finish['action_id']=key
+        value='PRIVATE_REQUEST' if same_request else 'PRIVATE_REQUEST_'+str(i)
+        begin['input']['code']='apis.api_docs.show_api_doc('+','.join(name+'='+repr(value) for name in names)+')'
+        finish.update(status='completed',output={'observation':'public documentation'})
+        finish.pop('error',None);finish['attributes'].update(executed=True,semantic='action')
+        actual.extend([begin,finish])
+    for i in range(7):
+        begin,finish=copy.deepcopy(start),copy.deepcopy(end);key='tail-'+str(i)
+        begin['action_id']=finish['action_id']=key;begin['input']['code']='apis.amazon.show_order(order_id='+str(i)+')'
+        finish.update(status='completed',output={'observation':'public result'})
+        finish.pop('error',None);finish['attributes'].update(executed=True,semantic='action')
+        actual.extend([begin,finish])
+    row['evidence']['trace']['events']=actual+[terminal];save(native,report)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    loop=next(ex for ex in local['failure_examples'] if ex.get('_reviewed_loops')==9)
+    assert loop['_repeat_requested_steps']==(2 if same_request else 0)
+    if same_request:assert [step['requested_api'] for step in loop['steps'][:2]]==['apis.api_docs.show_api_doc']*2
+    packet=learning._development_public_feedback(local,latest['policy'],[])
+    assert len(json.dumps(packet).encode())<=4096 and len(packet['source_summary'])<=8
+    assert all(ex['steps'] for ex in packet['failure_examples'])
+    docs=[ex for ex in packet['failure_examples'] if sum(step['requested_api']=='apis.api_docs.show_api_doc' for step in ex['steps'])>=2]
+    assert bool(docs)==same_request
+    assert not any(value in json.dumps(packet) for value in ('PRIVATE_REQUEST','_local_request_key','_repeat_requested_steps','validation-','trial-'))
+    assert set(packet)=={'scope','tasks','source_summary','failure_examples'}
+    supplied={ref['memory_id'] for ref in packet['source_summary']}
+    assert all(set(ex['applied_source_ids'])<=supplied and all(set(step['applied_before'])<=supplied for step in ex['steps']) for ex in packet['failure_examples'])
+
+
+def _saved_result_training_case(tmp_path):
+    import learning
+    from types import SimpleNamespace
+    c = SimpleNamespace(ROOT=ROOT, WORLD=ROOT/'examples/agent/business-simulator/appworld/runtime/world',
+                        read=lambda path: json.loads(Path(path).read_text()))
+    card = {'trigger_pattern':'需要展示已保存的API返回结果时',
+            'content':'保存结果变量，后续print变量及type(...).__name__，无stdout不等于失败。'}
+    def event(eid,stamp,code,observation):
+        return {'event_id':eid,'kind':'action.end','timestamp_us':stamp,'status':'completed',
+            'actor_id':'main','execution_id':'same-execution','loop_id':'main',
+            'step_id':eid+'-step','action_id':eid+'-action','input':{'code':code},
+            'attributes':{'semantic':'action','executed':True},'output':{'observation':observation}}
+    saved=event('saved',3,'saved = apis.amazon.show_wish_list(access_token=token)','Execution successful.')
+    displayed=event('displayed',5,'print(saved)\nprint(type(saved).__name__)','[]\nlist')
+    def start(end):
+        result=copy.deepcopy(end);result.update(kind='action.start',timestamp_us=end['timestamp_us']-1,operation='appworld.execute')
+        result.pop('output');return result
+    trace={'events':[{'kind':'run.start','timestamp_us':1},start(saved),saved,start(displayed),displayed,
+        {'kind':'run.end','timestamp_us':6}]}
+    return learning,c,card,trace
+
+
+def test_saved_result_normal_training_requires_cited_simple_completed_collection(tmp_path):
+    learning,c,card,trace=_saved_result_training_case(tmp_path)
+    original=copy.deepcopy(trace)
+    assert learning._saved_result_training_support(c,card,trace,{'saved','displayed'})
+    assert trace==original
+    assert not learning._saved_result_training_support(c,card,trace,{'saved'})
+    assert not learning._saved_result_training_support(c,{'content':'General print advice.'},trace,{'saved','displayed'})
+
+
+@pytest.mark.parametrize('fault',['conditional','docs','write','failed','unclosed','rebound','type_only','wrong_actor','no_world_start','wrapper','empty_identity','prior_api_rebind'])
+def test_saved_result_normal_training_rejects_unproven_or_wrong_phase(tmp_path,fault):
+    learning,c,card,trace=_saved_result_training_case(tmp_path)
+    saved=next(e for e in trace['events'] if e.get('event_id')=='saved' and e['kind']=='action.end')
+    display=next(e for e in trace['events'] if e.get('event_id')=='displayed' and e['kind']=='action.end')
+    if fault=='conditional': saved['input']['code']='if False:\n saved=apis.amazon.show_wish_list(access_token=token)'
+    elif fault=='docs': saved['input']['code']='saved=apis.api_docs.show_api_doc(app_name="amazon",api_name="show_wish_list")'
+    elif fault=='write': saved['input']['code']='saved=apis.amazon.clear_cart(access_token=token)'
+    elif fault=='failed': saved['status']='error'
+    elif fault=='unclosed': trace['events'].pop()
+    elif fault=='rebound': display['input']['code']='saved=[]\nprint(saved)\nprint(type(saved).__name__)'
+    elif fault=='type_only': display['input']['code']='print(type(saved).__name__)'
+    elif fault=='wrong_actor': display['actor_id']='different'
+    elif fault=='no_world_start': trace['events']=[e for e in trace['events'] if e['kind']!='action.start']
+    elif fault=='wrapper':
+        for e in trace['events']:
+            if e['kind']=='action.start': e['operation']='run_skill'
+    elif fault=='empty_identity': saved['execution_id']=''
+    else:
+        early=copy.deepcopy(saved);early.update(event_id='rebind',timestamp_us=2,action_id='rebind-action',step_id='rebind-step')
+        early['input']['code']='apis=other_object';early['output']['observation']='Execution successful.'
+        start=copy.deepcopy(early);start.update(kind='action.start',operation='appworld.execute',timestamp_us=1)
+
+        for event in trace['events']: event['timestamp_us'] += 3
+        start['timestamp_us']=2;early['timestamp_us']=3
+        trace['events'][0]['timestamp_us']=1
+        trace['events'][1:1]=[start,early]
+    assert not learning._saved_result_training_support(c,card,trace,{'saved','displayed'})
+
+
+def test_saved_result_normal_final_artifact_no_unapproved_or_disabled_refs(tmp_path,monkeypatch):
+    learning,c,card,trace=_saved_result_training_case(tmp_path)
+    assert learning._saved_result_training_support(c,card,trace,{'saved','displayed'})
+    # The existing native/Host qualification remains the authority after the
+    # normal-training helper proposes a phase; no source identity shortcut.
+    from appworld_skill import appworld_saved_result_experiences
+    ref={'memory_id':'approved-saved-result','content_revision':'exact-revision'}
+    artifact={'level':'L3','agent':{'appworld_options':{'l1_saved_result_experiences':[ref]}},
+        'policy':{'options':{'approved_experiences':[ref]},
+                  'snapshot':{'experiences':[{**ref,'content':'Original approved result-display lesson.'}]}}}
+    assert appworld_saved_result_experiences(artifact)['refs']==[ref]
+    changed=copy.deepcopy(artifact);changed['policy']['options']['approved_experiences']=[]
+    with pytest.raises(ValueError,match='source_invalid'):appworld_saved_result_experiences(changed)
+    changed=copy.deepcopy(artifact);changed['agent']['appworld_options']['l1_saved_result_experiences'][0]['content_revision']='wrong'
+    with pytest.raises(ValueError,match='source_invalid'):appworld_saved_result_experiences(changed)

@@ -5510,3 +5510,88 @@ class StageKnownTransientConsistencyTests(unittest.TestCase):
                 state['cancel_requested']=True
                 self.assertIsNone(reproduce._baseline100_worker_checkpoint(seed,state))
                 for p,old in before.items():self.assertEqual(p.read_bytes(),old)
+
+class FinalNativeReviewBudgetRecoveryTests(InitialNativeReviewRecoveryTests):
+    def final_fixture(self, directory):
+        artifact,seed,native,tree_path,report,write,lifecycle=self.review_fixture(directory,reason='evaluation_judge_http_503')
+        dataset=offline_gepa.read(offline_gepa.DATASET/'manifest.json');dataset['summary']={'splits':{'holdout':2}};offline_gepa.save(offline_gepa.DATASET/'manifest.json',dataset)
+        (offline_gepa.DATASET/'holdout.jsonl').write_bytes((offline_gepa.DATASET/'val.jsonl').read_bytes())
+        plan=offline_gepa.read(offline_gepa.PLAN);plan['split_counts']={'holdout':2};offline_gepa.save(offline_gepa.PLAN,plan)
+        report['configuration']['splits']=['holdout']
+        for row in report['trials']:row['split']='holdout'
+        write(report)
+        tree=offline_gepa.read(tree_path);tree.pop('error');tree.update(status='inconclusive',rounds=4.0,model_calls=64.0,holdout_started=True)
+        tree['evaluations']['entry'].update(split='holdout')
+        final={'protocol':'top-k-v1','campaign_id':'frozen-campaign','status':'inconclusive','candidates':[{'node':0.0,'rank':1.0,'version':'native-seed','status':'inconclusive','report_kind':'task_evaluation.v1','trials':2.0}]}
+        tree['final_holdout']=final;offline_gepa.save(tree_path,tree);offline_gepa.save(tree_path.parent/'versions/0.json',artifact)
+        state=offline_gepa.read(native);job=state['jobs']['original'];job.pop('error');job.update(status='inconclusive',gepa=True,search={'final_holdout':final});offline_gepa.save(native,state)
+        offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','job_status':'inconclusive'})
+        return artifact,seed,native,tree_path,report,write,lifecycle
+
+    def test_final_pending_at_reflection_cap_resumes_same_job_without_new_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree,report,write,state=self.final_fixture(directory)
+            protected={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+            calls=[]
+            def prefix(actual,label,**budgets):
+                calls.append((actual,budgets));return {'status':'pending' if len(calls)==1 else 'complete','phase':'gepa_run'}
+            with self.identity(),patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix), \
+                    patch.object(reproduce,'_autonomous_native_seed',return_value=(seed,'strategy')), \
+                    patch.object(reproduce,'_rate_limited_native_resume_progress',return_value=None), \
+                    patch.object(reproduce,'_initial_native_review_progress',return_value=None), \
+                    patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep'),redirect_stdout(io.StringIO()):
+                self.assertTrue(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+                self.assertIsNotNone(reproduce._final_native_review_progress(state,seed))
+                self.assertEqual(reproduce._run_all_autonomously(seed,'strategy')['status'],'complete')
+                self.assertEqual(calls,[(seed,{}),(seed,{})])
+            for path,before in protected.items():self.assertEqual(path.read_bytes(),before)
+
+    def test_final_review_source_unknown_cancel_expired_and_prior_denial_do_not_allow_cap_exception(self):
+        for failure in ('401','schema','unknown','cancel','source','context','version','open','hash','deadline','denial'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree_path,report,write,state=self.final_fixture(directory)
+                tree=offline_gepa.read(tree_path);jobs=offline_gepa.read(native)
+                if failure in ('401','schema','unknown'):
+                    report['trials'][0]['checks'][0]['reason']={'401':'evaluation_judge_http_401','schema':'evaluation_judge_schema_invalid','unknown':'evaluation_judge_uncertain'}[failure];write(report)
+                elif failure=='cancel':jobs['jobs']['original']['cancel_requested']=True
+                elif failure=='source':report['trials'][0]['task_version']='foreign';write(report)
+                elif failure=='context':tree['candidate_evaluation_context']='foreign'
+                elif failure=='version':tree['final_holdout']['candidates'][0]['version']='foreign'
+                elif failure=='open':report['trials'][0]['evidence']['trace']['events'].pop();write(report)
+                elif failure=='hash':tree['evaluations']['entry']['report_hash']='changed'
+                elif failure=='deadline':
+                    cfg=offline_gepa.read(offline_gepa.CONFIG/'gepa.json');cfg['timeout_ms']=1;offline_gepa.save(offline_gepa.CONFIG/'gepa.json',cfg)
+                else:offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','retry_error':{'job_id':'original','code':'evaluation_context_changed'}})
+                # The writer owns report_hash updates; never revert its newest source pointer.
+                if failure in ('context','version','hash'):offline_gepa.save(tree_path,tree)
+                offline_gepa.save(native,jobs)
+                with self.identity():
+                    self.assertFalse(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+                    self.assertIsNone(reproduce._final_native_review_progress(state,seed))
+
+
+    def test_native_cached_final_pair_selects_frozen_report_without_fresh_entry_ambiguity(self):
+        import copy
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree_path,report,write,state=self.final_fixture(directory)
+            tree=offline_gepa.read(tree_path)
+            fresh=copy.deepcopy(tree['evaluations']['entry'])
+            tree['evaluations']['fresh-candidate']=fresh
+            tree['evaluations']['entry'].update(baseline_version='native-L0',baseline_source={'kind':'locked-native-source'})
+            final=tree['final_holdout']['candidates'][0]
+            final.update(report_kind='gepa_cached_pair.v1',trials=4.0,baseline_source={'kind':'locked-native-source'})
+            offline_gepa.save(tree_path,tree)
+            jobs=offline_gepa.read(native);jobs['jobs']['original']['search']['final_holdout']=tree['final_holdout'];offline_gepa.save(native,jobs)
+            report['report_kind']='gepa_cached_pair.v1'
+            report['configuration']['variants'].insert(0,{'id':'baseline','version':'native-L0'})
+            baseline=copy.deepcopy(report['trials'])
+            for row in baseline:
+                row.update(variant_id='baseline',trial_id=row['trial_id']+'-baseline',verdict='passed',error_code='',checks=[])
+                row['evidence']['loaded_version']='native-L0'
+            report['trials']=baseline+report['trials'];write(report)
+            with self.identity():
+                self.assertTrue(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+                self.assertIsNotNone(reproduce._final_native_review_progress(state,seed))
+                changed=offline_gepa.read(tree_path);changed['final_holdout']['candidates'][0]['baseline_source']={'kind':'different'}
+                offline_gepa.save(tree_path,changed);jobs['jobs']['original']['search']['final_holdout']=changed['final_holdout'];offline_gepa.save(native,jobs)
+                self.assertFalse(offline_gepa.final_holdout_review_recovery(artifact,'original'))

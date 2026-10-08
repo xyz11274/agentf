@@ -2292,6 +2292,113 @@ def _approved_historical_trigger_views(controller, policy, feedback):
     return added
 
 
+def _saved_result_training_support(controller, card, trace, cited):
+    """Exact cited successful single-read assignment followed by observed display."""
+    import ast
+    text = card.get('trigger_pattern', '') + '\n' + card.get('content', '')
+    if not ('print' in text and ('__name__' in text or 'type(' in text)
+            and re.search(r'变量|variable|saved|保存|存入', text, re.I)):
+        return False
+    from types import SimpleNamespace
+    import sys
+    adapter = str(controller.ROOT / 'examples/agent/business-simulator/appworld')
+    if adapter not in sys.path:
+        sys.path.insert(0, adapter)  # Same function-local AppWorld replay import convention.
+    from appworld_host import public_saved_result_contracts
+    contracts = getattr(controller, '_seed_saved_result_contracts', None)
+    if contracts is None:
+        directory = getattr(controller, 'WORLD', controller.ROOT /
+            'examples/agent/business-simulator/appworld/runtime/world') / 'data/api_docs/standard'
+        docs = {path.stem: controller.read(path) for path in sorted(directory.glob('*.json'))}
+        contracts = {tuple(pair) for pair in public_saved_result_contracts(
+            SimpleNamespace(task=SimpleNamespace(api_docs=docs)))}
+        controller._seed_saved_result_contracts = contracts
+    events = trace.get('events') or []
+    if (not any(e.get('kind') == 'run.start' for e in events)
+            or not any(e.get('kind') == 'run.end' and e.get('status') in (None, '', 'completed')
+                       and not e.get('error') for e in events)):
+        return False
+    def stamp(e):
+        v = e.get('timestamp_us')
+        return int(v) if not isinstance(v, bool) and (isinstance(v, int) and v > 0
+            or isinstance(v, str) and v.isdecimal() and int(v) > 0) else None
+    times = [stamp(e) for e in events]
+    if not times or any(v is None for v in times):
+        return False
+    fields = ('actor_id', 'execution_id', 'step_id', 'action_id', 'loop_id')
+    starts = {}
+    for event in events:
+        if (event.get('kind') == 'action.start' and event.get('operation') == 'appworld.execute'
+                and event.get('loop_id') == 'main'
+                and (event.get('attributes') or {}).get('semantic') == 'action'
+                and all(isinstance(event.get(key), str) and event[key] for key in fields)):
+            starts.setdefault(tuple(event[key] for key in fields), []).append(event)
+    saved, written = None, set()
+    for _, event in sorted(zip(times, events), key=lambda pair: pair[0]):
+        if event.get('kind') != 'action.end' or (event.get('attributes') or {}).get('semantic') != 'action':
+            continue
+        code = (event.get('input') or {}).get('code')
+        paired = starts.get(tuple(event.get(key) for key in fields), [])
+        if (len(paired) != 1 or stamp(paired[0]) >= stamp(event)
+                or (paired[0].get('input') or {}).get('code') != code):
+            saved = None
+            continue
+        if not isinstance(code, str):
+            saved = None
+            continue
+        try:
+            tree = ast.parse(code)
+        except (SyntaxError, ValueError, RecursionError):
+            saved = None
+            continue
+        prior_written = set(written)
+        written.update(n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
+                       and isinstance(n.ctx, (ast.Store, ast.Del)))
+        completed = (event.get('status') == 'completed' and not event.get('error')
+            and (event.get('attributes') or {}).get('executed') is True)
+        output = event.get('output') or {}
+        observation = output.get('observation') if isinstance(output, dict) else None
+        if saved is not None:
+            target, actor, execution = saved
+            writes = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
+                      and isinstance(n.ctx, (ast.Store, ast.Del))}
+            if target in writes or 'apis' in writes:
+                saved = None
+            elif (completed and event.get('event_id') in cited and event.get('actor_id') == actor
+                    and event.get('execution_id') == execution and isinstance(observation, str)
+                    and observation.strip() and not observation.startswith('Execution successful.')
+                    and all(isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+                            and isinstance(n.value.func, ast.Name) and n.value.func.id == 'print'
+                            for n in tree.body)):
+                loads = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+                if target in loads and any(isinstance(n.func, ast.Name) and n.func.id == 'print'
+                    and any(isinstance(arg, ast.Name) and arg.id == target for arg in n.args)
+                    for n in calls) and any(isinstance(n.func, ast.Name) and n.func.id == 'type'
+                    and len(n.args) == 1 and isinstance(n.args[0], ast.Name) and n.args[0].id == target
+                    for n in calls) and all(isinstance(n.func, ast.Name) and n.func.id in ('print', 'type') for n in calls):
+                    return True
+        if (not completed or event.get('event_id') not in cited
+                or observation != 'Execution successful.' or len(tree.body) != 1
+                or not isinstance(tree.body[0], ast.Assign)):
+            continue
+        assignment = tree.body[0]; call = assignment.value
+        if (len(assignment.targets) != 1 or not isinstance(assignment.targets[0], ast.Name)
+                or not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute)
+                or not isinstance(call.func.value, ast.Attribute)
+                or not isinstance(call.func.value.value, ast.Name)
+                or call.func.value.value.id != 'apis' or call.args
+                or any(k.arg is None or not isinstance(k.value, (ast.Name, ast.Constant)) for k in call.keywords)):
+            continue
+        name = assignment.targets[0].id
+        if (name in prior_written or 'apis' in prior_written
+                or re.search(r'token|password|credential|secret|login|auth', name, re.I)
+                or (call.func.value.attr, call.func.attr) not in contracts):
+            continue
+        saved = (name, event.get('actor_id'), event.get('execution_id'))
+    return False
+
+
 def _english_trigger_sources(controller, policy, feedback, *, candidate_artifact=None,
                              prevention_compilation=False):
     """Positive support binds a source run; only real model windows authorize use."""
@@ -2356,7 +2463,13 @@ def _english_trigger_sources(controller, policy, feedback, *, candidate_artifact
             continue
         content_terms = _l1_terms(' '.join(experience.get(key, '') for key in ('trigger_pattern', 'observed_problem', 'content')))
         direct_failure, _ = _memory_failure_support(candidate, feedback['local_source_evidence'])
-        evidence, included = [], set()
+        evidence, included, saved_supported = [], set(), False
+        support_citations = {}
+        for support in candidate.get('support_evidence') or []:
+            if support.get('verdict') in ('SEMANTIC_VERDICT_USEFUL', 'SEMANTIC_VERDICT_NECESSARY_RETRY'):
+                src = support.get('source') or {}
+                key = (src.get('user_id'), src.get('conversation_id'), src.get('dialogue_id'))
+                support_citations.setdefault(key, set()).update(support.get('evidence_event_ids') or [])
         for support in candidate.get('support_evidence') or []:
             if support.get('verdict') not in ('SEMANTIC_VERDICT_USEFUL', 'SEMANTIC_VERDICT_NECESSARY_RETRY'):
                 continue
@@ -2372,6 +2485,9 @@ def _english_trigger_sources(controller, policy, feedback, *, candidate_artifact
             actual = {event.get('event_id') for event in full_trace.get('events') or []}
             if not cited or not cited <= actual:
                 continue
+            exact_cited = support_citations.get((source.get('user_id'), source.get('conversation_id'), run), set())
+            if exact_cited <= actual and _saved_result_training_support(controller, experience, full_trace, exact_cited):
+                saved_supported = True
             # Existing source-bound error recovery needs the actual failure
             # first. Keep its reactive window; it is not preventive evidence.
             pre_action_queries = (None if direct_failure > 0 else
@@ -2396,6 +2512,19 @@ def _english_trigger_sources(controller, policy, feedback, *, candidate_artifact
             if candidate_options and mid in {ref['memory_id'] for ref in
                     (candidate_options.get('appworld_saved_result_experiences') or {}).get('refs', [])}:
                 sources[mid]['saved_result_qualification'] = True
+            if saved_supported:
+                sources[mid]['saved_result_training_support'] = True
+    if candidate_artifact is None and prevention_compilation:
+        refs = [{key: source['experience'][key] for key in ('memory_id', 'content_revision')}
+                for mid, source in sorted(sources.items()) if source.get('saved_result_training_support')][:4]
+        controller._seed_saved_result_refs = refs
+        controller._seed_saved_result_feedback = feedback
+        if refs:
+            artifact = deepcopy(controller.read(controller.PUBLISHED / 'L0.json'))
+            artifact.update(level='L3', policy=policy)
+            artifact = _seed_l1_window_options(controller, artifact)
+            artifact.setdefault('agent', {}).setdefault('appworld_options', {})['l1_saved_result_experiences'] = refs
+            return _english_trigger_sources(controller, policy, feedback, candidate_artifact=artifact)
     return sources
 
 
@@ -3088,11 +3217,12 @@ def _specific_english_pairs(controller, policy, sources, drafts, diagnostic, *, 
                 pairs.update(tuple(sorted((method, term))) for term in context & windows.get(key, set())
                              if term != method and early_match(key, {method, term}, {method}))
         early_pairs[mid] = pairs
-    aliases, proposed_pairs = {}, {}
+    aliases, proposed_pairs, complete_drafts = {}, {}, {}
     for draft in drafts:
         for item in draft:
             if (isinstance(item, dict) and item.get('approved_source') is True
                     and item.get('memory_id') in sources and isinstance(item.get('trigger_pattern'), str)):
+                complete_drafts.setdefault(item['memory_id'], item['trigger_pattern'])
                 pairs = set(combinations(sorted(tokens(item['trigger_pattern'])), 2))
                 aliases.setdefault(item['memory_id'], set()).update(pairs)
                 proposed_pairs.setdefault(item['memory_id'], set()).update(pairs)
@@ -3234,8 +3364,16 @@ def _specific_english_pairs(controller, policy, sources, drafts, diagnostic, *, 
         # isolated-match shortcut is involved.
         _, _, _, _, support, pair = ranked[0]
         pattern = fixed[mid] if mid in fixed and tokens(fixed[mid]) == set(pair) else ' '.join(pair)
+        original_draft = complete_drafts.get(mid)
+        if (original_draft and mid not in phase_conditions and mid not in fixed
+                and _experience_mechanism_anchors(card) == set()
+                and _experience_operation_names(card) == set()):
+            # Full translated applicability must not collapse to incidental
+            # two-word prose. It still passes all native positive/negative checks.
+            alternatives[mid] = {'memory_id': mid, 'trigger_pattern': pattern}
+            pattern = original_draft
         selected.append({'memory_id': mid, 'trigger_pattern': pattern})
-        if mid in preventive:
+        if mid in preventive and mid not in alternatives:
             alternate = next((row[5] for row in ranked[1:] if row[0] and row[5] != pair), None)
             if alternate is not None:
                 alternatives[mid] = {'memory_id': mid, 'trigger_pattern': ' '.join(alternate)}
@@ -4124,6 +4262,49 @@ def _seed_l1_window_options(controller, artifact):
         raise RuntimeError('appworld_seed_l1_window_options_invalid')
     options['l1_window_mode'] = mode
     return result
+
+
+def _compile_seed_saved_result_sources(controller, artifact, diagnostic):
+    """Final same-artifact Host replay; retain only genuinely applied phase refs."""
+    refs = ((artifact.get('agent') or {}).get('appworld_options') or {}).get('l1_saved_result_experiences')
+    if not refs:
+        return artifact
+    feedback = getattr(controller, '_seed_saved_result_feedback', None)
+    if not isinstance(feedback, dict):
+        raise RuntimeError('appworld_saved_result_training_evidence_missing')
+    candidate = deepcopy(artifact)
+    # Keep each relevant run complete, with all its native competitors and
+    # the original once/cache/three-advice transitions.
+    memory = controller.read(controller.TRAINING / 'evolution/by-user' / controller.OWNER / 'memory/evolution-memory.json')
+    ids = {ref['memory_id'] for ref in refs}
+    runs = {((support.get('source') or {}).get('dialogue_id'))
+        for entry in memory.get('entries', []) if entry.get('memory_id') in ids
+        for support in (entry.get('candidate') or {}).get('support_evidence', [])
+        if support.get('verdict') in ('SEMANTIC_VERDICT_USEFUL', 'SEMANTIC_VERDICT_NECESSARY_RETRY')}
+    views = feedback['local_source_evidence']
+    feedback = dict(feedback, local_source_evidence={run: view for run, view in views.items() if run in runs})
+    removed = []
+    while refs:
+        sources = _english_trigger_sources(controller, candidate['policy'], feedback, candidate_artifact=candidate)
+        profile = _native_l1_profile(controller, candidate['policy'], sources)
+        kept = [ref for ref in refs if ref['memory_id'] in sources
+            and sources[ref['memory_id']].get('saved_result_training_support')
+            and any(ref['memory_id'] in profile.get((point['run_id'], point['query_id']), set())
+                and {'saved_public_collection_result', 'undisplayed_api_assignment'} <= _l1_terms(point['state'])
+                for point in sources[ref['memory_id']]['evidence'])]
+        if kept == refs:
+            break
+        removed.extend(ref['memory_id'] for ref in refs if ref not in kept)
+        refs = kept
+        options = candidate['agent']['appworld_options']
+        if refs:
+            options['l1_saved_result_experiences'] = refs
+        else:
+            options.pop('l1_saved_result_experiences', None)
+    diagnostic['saved_result_learning'] = {'status': 'source_train_host_replayed', 'model_calls': 0,
+        'qualified_sources': [ref['memory_id'] for ref in refs], 'removed_sources': removed,
+        'evidence_kind': 'native_host_matching_replay_not_historical_application_or_quality'}
+    return candidate
 
 
 def _compile_seed_prevention_sources(controller, artifact, admitted_tasks, diagnostic):
@@ -5152,8 +5333,8 @@ def _development_trial_rows(controller, evidence, reports):
     return rows
 
 
-def _development_action_apis(event):
-    """Export only API identifiers and argument names; never code or values."""
+def _development_action_apis(event, *, include_request_keys=False):
+    """Public fields exclude values; optional AST keys stay in the local caller."""
     import ast
     code = (event.get('input') or {}).get('code')
     if not isinstance(code, str):
@@ -5173,6 +5354,8 @@ def _development_action_apis(event):
                 and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,79}', call.func.attr)):
             result.append({'requested_api': 'apis.' + owner.attr + '.' + call.func.attr,
                            'parameter_names': sorted({arg.arg for arg in call.keywords if arg.arg and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,63}', arg.arg)})[:16]})
+            if include_request_keys:
+                result[-1]['_local_request_key'] = ast.dump(call, include_attributes=False)
     return result[:8]
 
 
@@ -5190,7 +5373,7 @@ def _development_observations(controller, evidence, rows, authority, anchor_curr
         events = [(trace_index, trace.get('identity') or {}, event)
                   for trace_index, trace in enumerate(traces) for event in trace.get('events') or []]
         used, applied_at, actions, terminal, queries = set(), {}, {}, {}, {}
-        sequence, executed_positions = [], []
+        sequence, executed_positions, request_groups = [], [], {}
         for position, (trace_index, identity, event) in enumerate(events):
             kind, attributes = event.get('kind'), event.get('attributes') or {}
             decision = attributes.get('decision')
@@ -5221,7 +5404,7 @@ def _development_observations(controller, evidence, rows, authority, anchor_curr
                         used.add(pair); applied_at.setdefault(pair, []).append((trace_index, position))
             elif (kind == 'action.start' and event.get('loop_id') == 'main'
                     and event.get('operation') == 'appworld.execute' and attributes.get('semantic') == 'action'):
-                actions[(trace_index, event.get('action_id'))] = _development_action_apis(event)
+                actions[(trace_index, event.get('action_id'))] = _development_action_apis(event, include_request_keys=True)
             elif (kind == 'action.end' and event.get('loop_id') == 'main'
                     and attributes.get('executed') is True and attributes.get('semantic') == 'action'
                     and isinstance((event.get('output') or {}).get('observation'), str)):
@@ -5231,9 +5414,15 @@ def _development_observations(controller, evidence, rows, authority, anchor_curr
                 status = event.get('status')
                 for api in actions.get((trace_index, event.get('action_id')), []):
                     if status in ('completed', 'failed'):
-                        sequence.append(dict(api, status='code_block_' + status, evidence_basis='requested_code',
+                        fields = {key: value for key, value in api.items() if key != '_local_request_key'}
+                        sequence.append(dict(fields, status='code_block_' + status, evidence_basis='requested_code',
                             error_code=code, applied_before=[pair[0] for pair in sorted(used)
                             if any(t == trace_index and p < position for t, p in applied_at[pair])][:3]))
+                        if status == 'completed' and code is None:
+                            # Equal requested AST in distinct real World blocks, not proof
+                            # that each lexical API executed or that parameter values resolved equally.
+                            request_groups.setdefault(api['_local_request_key'], {}).setdefault(
+                                (trace_index, event.get('action_id')), len(sequence) - 1)
             elif kind == 'run.end' and isinstance(event.get('output'), dict):
                 terminal = event['output']
         timely = {pair for pair in used if any(t == trace_index and p < position
@@ -5246,15 +5435,24 @@ def _development_observations(controller, evidence, rows, authority, anchor_curr
             record['failed_tasks'] += int(passed == 0)
             record['passed_tasks'] += int(passed == 1)
         if not passed or compact.get('avg_invalid_loop', 0) > 0:
+            selected_steps, repeated_steps = sequence[-6:], 0
+            repeated = [list(group.values()) for group in request_groups.values() if len(group) >= 2]
+            if passed and compact['avg_invalid_loop'] > 0 and repeated:
+                pair = max(repeated, key=len)[:2]
+                # Keep the genuine repeat before the later task tail; no copied steps.
+                tail = [index for index in range(pair[-1] + 1, len(sequence))][-4:]
+                selected_steps = [sequence[index] for index in pair + tail]
+                repeated_steps = 2
             reason = terminal.get('termination_reason')
             reason = reason if reason in ('max_steps', 'max_iterations', 'bounded_recovery_exhausted',
                 'task_timeout', 'completed', 'task_completed', 'normal', 'budget_exhausted') else 'other'
             examples.append({'_strict_success': bool(passed), '_reviewed_loops': compact['avg_invalid_loop'],
+                '_repeat_requested_steps': repeated_steps,
                 '_anchor_success': bool(not passed and anchor_current is not None and
                 anchor_current[task]['strict_passed'] == 1),
                 'was_l0_success': prior == 1, 'goal_completed': terminal.get('task_completed') is True,
                 'termination_reason': reason, 'applied_source_ids': [pair[0] for pair in sorted(used)][:3],
-                'steps': sequence[-6:]})
+                'steps': selected_steps})
     return counts, examples
 
 
@@ -5372,8 +5570,10 @@ def _development_public_feedback(local, policy, training_support):
         representative = max(loop_only, key=lambda row: row['_reviewed_loops'])
         if representative not in examples:
             examples = examples[:3] + [representative]
+    protected_steps = [2 if example is representative and example.get('_repeat_requested_steps') == 2 else 1
+                       for example in examples] if loop_only else [1 for example in examples]
     for example in examples:
-        for key in ('_anchor_success', '_strict_success', '_reviewed_loops'):
+        for key in ('_anchor_success', '_strict_success', '_reviewed_loops', '_repeat_requested_steps'):
             example.pop(key, None)  # Local ranking only; the public contract is unchanged.
     counts = {pair[0]: value for pair, value in local['source_counts'].items() if pair[0] in approved}
     related, observed_context = set(counts), set()
@@ -5399,12 +5599,29 @@ def _development_public_feedback(local, policy, training_support):
     result = {'scope': f'development{count}_proposal_guidance_only', 'tasks': count,
         'source_summary': summaries, 'failure_examples': examples}
     if len(json.dumps(result).encode()) > 4096:
+        for example, keep in zip(examples, protected_steps):
+            steps = example['steps']
+            if keep == 2:
+                example['steps'] = steps[:2]
+            elif steps:
+                necessary = next((step for step in reversed(steps) if step['error_code']), steps[-1])
+                example['steps'] = [necessary]
+    # Exact source IDs remain approved; trimming a directory never grants a source.
+    # Preserve the representative's genuine two requests and other examples' key step.
+    while len(json.dumps(result).encode()) > 4096 and summaries:
+        summaries.pop()
+        supplied = {row['memory_id'] for row in summaries}
         for example in examples:
-            example['steps'] = example['steps'][-3:]
-    while len(json.dumps(result).encode()) > 4096 and any(example['steps'] for example in examples):
-        max(examples, key=lambda example: len(json.dumps(example)))['steps'].pop(0)
-    if len(json.dumps(result).encode()) > 4096:
-        result['failure_examples'] = examples[:2]
+            example['applied_source_ids'] = [mid for mid in example['applied_source_ids'] if mid in supplied]
+            for step in example['steps']:
+                step['applied_before'] = [mid for mid in step['applied_before'] if mid in supplied]
+    # Parameter names already have a bounded subset contract. Even worst-case
+    # identifiers cannot delete real steps or export their private values/AST keys.
+    while len(json.dumps(result).encode()) > 4096:
+        candidates = [step for example in examples for step in example['steps'] if step['parameter_names']]
+        if not candidates:
+            raise ValueError('appworld_development_payload_invalid')
+        max(candidates, key=lambda step: len(json.dumps(step['parameter_names'])))['parameter_names'].pop()
     return _approved_development_feedback(result, approved)
 
 
@@ -5743,7 +5960,17 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
     artifact = controller.read(controller.PUBLISHED / 'L0.json')
     artifact.update(level='L3', policy=policy)
     artifact = _seed_l1_window_options(controller, artifact)
+    saved_refs = getattr(controller, '_seed_saved_result_refs', [])
+    approved = {(ref['memory_id'], ref['content_revision']) for ref in policy['options']['approved_experiences']}
+    disabled = {(ref['memory_id'], ref['content_revision']) for ref in policy['options'].get('disabled_injections', [])}
+    accepted = {row['source_experience']['memory_id'] for row in policy['options'].get('experience_overrides', [])
+                if row.get('trigger_pattern') == 'saved_public_collection_result undisplayed_api_assignment'}
+    refs = [ref for ref in saved_refs if (ref['memory_id'], ref['content_revision']) in approved - disabled
+            and ref['memory_id'] in accepted]
+    if refs:
+        artifact.setdefault('agent', {}).setdefault('appworld_options', {})['l1_saved_result_experiences'] = refs
     artifact = _compile_seed_prevention_sources(controller, artifact, admitted_tasks, diagnostic)
+    artifact = _compile_seed_saved_result_sources(controller, artifact, diagnostic)
     development = getattr(controller, '_seed_development_feedback', None)
     if development is not None:
         artifact = _development_anchor_candidate(controller, artifact, development)
