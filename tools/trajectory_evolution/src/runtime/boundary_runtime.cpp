@@ -487,6 +487,19 @@ public:
       auto &failure = loop["operation_failures"][operation];
       if (!failure.has("epoch"))
         failure["epoch"] = loop["observed_actions"];
+      auto code = structured_error_code(request.has("progress_output") ? request["progress_output"]
+                                                                       : request["output"]);
+      if (code.empty() && request.has("error"))
+        code = structured_error_code(request["error"]);
+      const auto &options = cached_policy ? cached_policy->policy().options()
+                                         : proto<v1::RuntimeOptions>(run["policy"]["options"]);
+      // Only multi-mechanism policies separate families. Old single-rule
+      // policies retain the original operation-level counters.
+      if (has_multi_failure_recovery(options, qualified_scope(config, item.str("scope_id")),
+                                     item.str("actor_id")) && failure.str("error_code") != code) {
+        failure["count"] = 0;
+        failure["epoch"] = loop["observed_actions"];
+      }
       const auto prior = item.num("prior_failures", failure.num("count", 0));
       const bool same_streak =
           item.num("failure_epoch", failure.num("epoch", 0)) == failure.num("epoch", 0);
@@ -495,10 +508,6 @@ public:
       failure["count"] = std::min<std::size_t>(
           10000, std::max(failure.num("count", 0), same_streak ? prior + 1 : std::size_t(1)));
       failure["last_action"] = loop["observed_actions"];
-      auto code = structured_error_code(request.has("progress_output") ? request["progress_output"]
-                                                                       : request["output"]);
-      if (code.empty() && request.has("error"))
-        code = structured_error_code(request["error"]);
       failure["error_code"] = code;
     }
   }

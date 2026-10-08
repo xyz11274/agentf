@@ -267,10 +267,69 @@ def _baseline_evaluation_file(stage: Path) -> Path:
     return stage / "capture.config.json"
 
 
+def _default_seed_artifact() -> Path:
+    published = PUBLISHED / "strategy/strategy.json"
+    return published if published.is_file() else PUBLISHED / "seed0/strategy.json"
+
+
+def _pending_budget_extension(plan: dict, seed: Path, job_id: str | None) -> dict | None:
+    receipt = plan.get('budget_extension')
+    if not receipt:
+        return None
+    if (not isinstance(receipt, dict) or not job_id or receipt.get('job_id') != job_id
+            or receipt.get('seed') != str(seed.resolve())):
+        raise RuntimeError('offline_gepa_budget_extension_identity_invalid')
+    old, new = receipt.get('previous_limits'), receipt.get('requested_limits')
+    caps = {'max_rounds': 256, 'max_model_calls': 1024, 'max_trials': 20000,
+            'timeout_ms': 7 * 24 * 3600000}
+    if (not isinstance(old, dict) or not isinstance(new, dict)
+            or any(type(old.get(key)) is not int or type(new.get(key)) is not int
+                   or not 0 < old[key] <= new[key] <= cap for key, cap in caps.items())):
+        raise RuntimeError('offline_gepa_budget_extension_limits_invalid')
+    key = {'model_budget': 'max_model_calls', 'max_rounds': 'max_rounds',
+           'gepa_search_time_reserved': 'timeout_ms'}.get(receipt.get('stop_reason'))
+    if not key or new[key] <= old[key]:
+        raise RuntimeError('offline_gepa_budget_extension_not_increased')
+    return receipt
+
+
+def _rejected_budget_extension_ready(plan: dict, artifact: dict, job: dict,
+                                     job_id: str) -> bool:
+    receipt = _pending_budget_extension(plan, Path(plan['seed']), job_id)
+    if not receipt:
+        return False
+    tree = read(WORKSPACE / 'agent-evaluation' / job_id / 'search/tree.json')
+    if (job.get('published') is True or job.get('cancel_requested') is True
+            or tree.get('status') != 'validation_rejected'
+            or tree.get('holdout_started') is True or tree.get('final_holdout')
+            or tree.get('active') is not None or tree.get('batch') is not None
+            or tree.get('stop_reason') != receipt['stop_reason']
+            or read(WORKSPACE / 'agent-evaluation' / job_id / 'seed.json') != artifact):
+        raise RuntimeError('offline_gepa_budget_extension_checkpoint_invalid')
+    config = read(CONFIG / 'gepa.json')
+    if any(config.get(key) != value for key, value in receipt['requested_limits'].items()):
+        raise RuntimeError('offline_gepa_budget_extension_config_invalid')
+    return True
+
+
 def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
             max_model_calls: int = 512) -> dict:
-    artifact = require_seed_gates(Path(seed_artifact or PUBLISHED / "seed0/strategy.json"))
+    seed_artifact = Path(seed_artifact or _default_seed_artifact())
+    artifact = require_seed_gates(seed_artifact)
     recorded_job = _recorded_job(artifact)
+    previous_plan = read(PLAN) if PLAN.is_file() else {}
+    extension = (_pending_budget_extension(previous_plan, seed_artifact, recorded_job)
+                 if recorded_job else None)
+    if extension:
+        if max_model_calls != extension['requested_limits']['max_model_calls']:
+            raise RuntimeError('offline_gepa_budget_extension_requested_calls_invalid')
+        max_rounds = extension['requested_limits']['max_rounds']
+    elif recorded_job:
+        # A transport/runtime re-prepare must not reduce an already expanded
+        # job's cumulative limits back to this command's fresh defaults.
+        previous_search = previous_plan.get('search') or {}
+        max_rounds = max(max_rounds, previous_search.get('max_rounds', max_rounds))
+        max_model_calls = max(max_model_calls, previous_search.get('max_model_calls', max_model_calls))
     memory = _training_ready(recorded_job) if recorded_job else _training_ready()
     dataset = build_dataset(recorded_job) if recorded_job else build_dataset()
     _copy_training_configs()
@@ -319,6 +378,8 @@ def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
         "retain_jsonl": False, "retain_report_pb": True,
         "drop_intermediate_pb": True,
     }
+    if extension:
+        evaluation['max_trials'] = extension['requested_limits']['max_trials']
     save(CONFIG / "evaluation.json", evaluation)
 
     agent = artifact.get("agent") or {}
@@ -344,10 +405,18 @@ def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
                 duplication_factor=1, holdout_top_k=3,
                 holdout_max_report_bytes=2147483648,
                 candidate_selection_strategy="pareto", frontier_type="instance")
+    if extension:
+        base.update(extension['requested_limits'])
+    # Only this AppWorld search excludes the already published seed from
+    # automatic final replay. Native callers keep their default true.
+    base["final_holdout_include_seed"] = False
     # A fresh end-to-end run has no external baseline yet: native GEPA then
     # evaluates it normally. An existing capture selects authoritative reuse,
     # including a pending result, and must never fall back to a duplicate run.
     baseline_dataset = TRAINING / "datasets/comparison500"
+    for key in ("holdout_baseline_result_file", "holdout_baseline_dataset",
+                "holdout_baseline_evaluation_file"):
+        base.pop(key, None)
     if baseline_evaluation.is_file() and (baseline_dataset / "manifest.json").is_file():
         base.update(
             holdout_baseline_result_file=str(GEPA / "l0-current-stage500/result.json"),
@@ -361,12 +430,14 @@ def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
         "schema_version": 1, "stage": "train -> seed -> 32/100 gates -> GEPA -> top3 comparison500",
         "dataset": str(DATASET), "dataset_version": dataset.get("metadata", {}).get("dataset_version"),
         "split_counts": dataset.get("summary", {}).get("splits"),
-        "source_memory": str(memory), "seed": str(seed_artifact or PUBLISHED / "seed0/strategy.json"),
+        "source_memory": str(memory), "seed": str(seed_artifact),
         "search": {"pool": "official train", "validation": "canonical val.jsonl",
                    "final_holdout": "frozen comparison500", "max_rounds": max_rounds,
                    "max_model_calls": max_model_calls, "top_k": 3},
         "parallelism": 16, "prepared_at": datetime.now(timezone.utc).isoformat(),
     }
+    if extension:
+        plan['budget_extension'] = extension
     if recorded_job:
         previous_plan = read(PLAN)
         receipt = previous_plan.get('training_readiness')
@@ -405,13 +476,25 @@ def progress(job_id: str | None = None) -> dict:
     else:
         job_id, job = max(jobs, key=lambda pair: pair[1].get("queued_ms", 0))
     result = {"job_id": job_id, "job_status": job.get("status"),
+              "job_error": job.get("error"),
+              "cancel_requested": job.get("cancel_requested", False),
               "gepa": job.get("gepa", False)}
     tree = WORKSPACE / "agent-evaluation" / job_id / "search/tree.json"
     if tree.is_file():
         value = read(tree)
         result.update(nodes=len(value.get("nodes", [])), rounds=value.get("rounds", 0),
                       tree_status=value.get("status"), stop_reason=value.get("stop_reason"),
+                      model_calls=value.get("model_calls"),
                       node_states=dict(Counter(item.get("status") for item in value.get("nodes", []))))
+        settings = read(CONFIG / "gepa.json") if (CONFIG / "gepa.json").is_file() else {}
+        result["max_model_calls"] = settings.get("max_model_calls")
+        started, timeout = value.get("started_ms"), settings.get("timeout_ms")
+        if isinstance(started, (int, float)) and isinstance(timeout, (int, float)):
+            result["deadline_ms"] = started + timeout + value.get("paused_ms", 0)
+            result["holdout_reserve_ms"] = settings.get("holdout_reserve_ms", 0)
+        replay = value.get("final_holdout") or {}
+        if job.get("final_holdout_replay") and replay.get("replay_deadline_ms"):
+            result["deadline_ms"] = replay["replay_deadline_ms"]
     return result
 
 
@@ -473,8 +556,12 @@ def run(seed_artifact: Path | None = None) -> dict:
             job = (current.get("jobs") or {}).get(recorded_job)
             if not isinstance(job, dict):
                 raise RuntimeError("offline_gepa_checkpoint_unavailable")
-            if job.get("status") in {"error", "interrupted", "inconclusive", "cancelled", "superseded"}:
-                invoke("agent_evaluation.retry", job_id=recorded_job)
+            extended = (job.get('status') == 'rejected' and
+                        _rejected_budget_extension_ready(plan, artifact, job, recorded_job))
+            if job.get("status") in {"error", "interrupted", "inconclusive", "cancelled", "superseded"} or extended:
+                retried = invoke("agent_evaluation.retry", job_id=recorded_job)
+                if extended and retried.get('accepted') is not True:
+                    raise RuntimeError('offline_gepa_budget_extension_retry_not_accepted')
             job_id = recorded_job
         else:
             submitted = invoke("agent_evaluation.submit", artifact=artifact)
@@ -482,10 +569,42 @@ def run(seed_artifact: Path | None = None) -> dict:
             if not job_id:
                 raise RuntimeError("offline_gepa_submit_failed")
             save(GEPA / "submission.json", submitted)
+        transient_retries = 0
+        def retryable_rate_limit(current: dict) -> bool:
+            used, limit = current.get("model_calls"), current.get("max_model_calls")
+            deadline = current.get("deadline_ms")
+            return bool(current.get("job_status") == "error"
+                and current.get("job_error") == "gepa_model_rate_limited"
+                and not current.get("cancel_requested") and transient_retries < 3
+                and not (isinstance(used, (int, float)) and isinstance(limit, (int, float))
+                         and used >= limit)
+                and not (isinstance(deadline, (int, float))
+                         and time.time() * 1000 >= deadline - current.get("holdout_reserve_ms", 0)))
+
         while process.poll() is None:
             current = progress(job_id)
             save(STATUS, {"status": "running", **current,
                           "updated_at": datetime.now(timezone.utc).isoformat()})
+            if retryable_rate_limit(current):
+                # The native checkpoint owns the tree, cached healthy trials
+                # and model-call budget. Retry that job only; never submit a
+                # replacement search or reclassify an unrelated terminal error.
+                remaining = (15, 30, 60)[transient_retries]
+                save(STATUS, {"status": "retry_wait", **current,
+                    "transient_retry": transient_retries + 1, "retry_delay_seconds": remaining,
+                    "updated_at": datetime.now(timezone.utc).isoformat()})
+                while remaining and process.poll() is None:
+                    time.sleep(min(5, remaining))
+                    remaining -= min(5, remaining)
+                    current = progress(job_id)
+                    if not retryable_rate_limit(current):
+                        break
+                if process.poll() is None and retryable_rate_limit(current):
+                    retried = invoke("agent_evaluation.retry", job_id=job_id)
+                    if retried.get("accepted") is not True:
+                        raise RuntimeError("offline_gepa_retry_not_accepted")
+                    transient_retries += 1
+                    continue
             if current.get("job_status") in {"passed", "rejected", "error", "interrupted",
                                               "inconclusive", "cancelled"}:
                 break
@@ -612,6 +731,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         raise RuntimeError('gepa_final_dataset_scope_invalid')
     proofs = []
     baseline_rows = None
+    holdout_task_versions = None
     for finalist in candidates:
         matches = [entry for entry in (tree.get('evaluations') or {}).values()
                    if entry.get('split') == 'holdout' and entry.get('status') == 'complete'
@@ -637,6 +757,12 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         for rows in (raw_l0, raw_candidate):
             if len(rows) != holdout_count or {row.get('task_id') for row in rows} != canonical_ids:
                 raise RuntimeError('gepa_final_same_task_coverage_invalid')
+        versions = {row['task_id']: row.get('task_version') for row in raw_candidate}
+        if (not all(isinstance(version, str) and version for version in versions.values())
+                or versions != {row['task_id']: row.get('task_version') for row in raw_l0}
+                or (holdout_task_versions is not None and versions != holdout_task_versions)):
+            raise RuntimeError('gepa_final_same_task_versions_invalid')
+        holdout_task_versions = versions
         l0_items = _final_baseline_items(raw_l0, report, compare)
         items = [compare.compact_row(row, f"native-final-{finalist.get('node')}") for row in raw_candidate]
         l0_by_task = {row['task_id']: row for row in l0_items}
@@ -646,6 +772,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
             baseline_source = (read(historical_baseline)['source_report']
                                if historical_baseline.is_file() else str(source))
             save_proof(proof_root / 'L0.json', {'status': 'complete', 'items': l0_items,
+                                          'host_version': controller.HOST_VERSION,
                                           'source_report': baseline_source,
                                           'judge_projection': projection,
                                           'metrics': compare.summarize(l0_items, holdout_count)})
@@ -664,6 +791,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         save_proof(progress_path, {'shards': {'0': {'execution_complete': True, 'complete': True,
              'judge_projection': projection, 'source_report': str(source)}}})
         comparison = {'status': 'complete', 'seed': str(artifact_path), 'items': items,
+                      'host_version': controller.HOST_VERSION,
                       'judge_projection': projection, 'progress': str(progress_path),
                       'metrics': {'candidate': compare.summarize(items, holdout_count)},
                       'scope': 'same_task_native_top3_comparison500',
@@ -703,6 +831,8 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         'proof_artifact': str(Path(best['artifact']).resolve()),
         'strategy': str(target) if not proof_only else None,
         'version': controller.version(artifact),
+        'dataset_version': tree['dataset_version'], 'baseline_version': tree['baseline_version'],
+        'holdout_task_versions': holdout_task_versions,
         'source_job': job_id, 'source_tree': str(tree_path), 'selected_node': best['node'],
         'selection': 'best observed among the complete same-task final candidates',
         'final_holdout_top_k': requested_top_k, 'evaluated_candidate_count': len(candidates),
@@ -722,7 +852,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         return manifest
     import reproduce
     manifest = reproduce.deliver_best_available(Path(best['artifact']), Path(best['comparison']))
-    save(STATUS, {"status": "published", "publication": manifest,
+    save(STATUS, {"status": manifest.get('publication_status', 'published'), "publication": manifest,
                   "updated_at": datetime.now(timezone.utc).isoformat()})
     return manifest
 

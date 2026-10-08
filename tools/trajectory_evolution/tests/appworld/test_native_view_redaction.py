@@ -1970,3 +1970,55 @@ def test_private_purchase_phase_requires_actual_authenticated_cart_state(case, r
     assert state['purchase_purpose'] == '[task_wishlist_target_purchase]'
     assert bool(state.get('purchase_phase')) is ready
     assert messages == before
+
+
+def _failed_projection_dispatch_fixture(tmp_path):
+    root, request, row, atomic, log = _projection_dispatch_fixture(tmp_path)
+    events = row['evidence']['trace']['events']
+    start = {'event_id':'failed-start','sequence':'5','kind':'action.start',
+             'action_id':'failed-dispatch','actor_id':'skill_executor',
+             'caused_by':['decision-1'],'input':{'code':'print("failed proposal")'}}
+    end = {'event_id':'failed-end','sequence':'6','kind':'action.end',
+           'action_id':'failed-dispatch','actor_id':'skill_executor',
+           'caused_by':['failed-start'],'input':dict(start['input']),
+           'attributes':{'executed':True,'extensions':{'source_event_name':'skill_executor.tool_result'}},
+           'output':{'status':'error','tool_result':json.dumps({'error':'fixture dispatch failed'})}}
+    events[2:2] = [start,end]
+    atomic.write_text(json.dumps(row))
+    return root, request, row, atomic, log
+
+
+def test_projection_preserves_failed_framework_dispatch_and_projects_only_real_world(tmp_path):
+    from appworld_host import project_official_code_request
+    root,request,row,atomic,log = _failed_projection_dispatch_fixture(tmp_path)
+    before = {path:path.read_bytes() for path in (atomic,log)}
+    result = project_official_code_request(request,evidence_root=root)
+    assert result['status']=='complete'
+    assert {patch['event_id'] for patch in result['patches']} == {'dispatch-start','dispatch-end','event-2','event-3'}
+    assert all(path.read_bytes()==data for path,data in before.items())
+    assert next(event for event in row['evidence']['trace']['events'] if event['event_id']=='failed-end')['output']['status']=='error'
+
+
+@pytest.mark.parametrize('mode',['world_binding','successful_reply','missing_start','different_start_code','observation','fake_success_no_world','wrong_actor','duplicate_end'])
+def test_projection_rejects_unproven_failed_or_fake_successful_dispatch(tmp_path,mode):
+    from appworld_host import project_official_code_request
+    root,request,row,atomic,log = _failed_projection_dispatch_fixture(tmp_path)
+    events = row['evidence']['trace']['events']
+    start = next(event for event in events if event['event_id']=='failed-start')
+    end = next(event for event in events if event['event_id']=='failed-end')
+    if mode=='world_binding':
+        code=next(event for event in events if event['event_id']=='event-3')['input']['code']
+        start['input']['code']=code;end['input']['code']=code
+    elif mode=='successful_reply':end['output']['tool_result']=json.dumps({'error':'failure','reply_saved':True})
+    elif mode=='missing_start':events.remove(start)
+    elif mode=='different_start_code':start['input']['code']+='\nprint("unrelated")'
+    elif mode=='observation':end['output']['observation']='Must remain unknown.'
+    elif mode=='fake_success_no_world':end['output'].update(status='completed',tool_result=json.dumps({'status':'completed','reply_saved':True}))
+    elif mode=='wrong_actor':start['actor_id']='other_actor'
+    elif mode=='duplicate_end':
+        duplicate=json.loads(json.dumps(end));duplicate['event_id']='other-failed-end';events.append(duplicate)
+    atomic.write_text(json.dumps(row))
+    before=atomic.read_bytes()
+    result=project_official_code_request(request,evidence_root=root)
+    assert result['status']=='unknown' and result['patches']==[]
+    assert atomic.read_bytes()==before

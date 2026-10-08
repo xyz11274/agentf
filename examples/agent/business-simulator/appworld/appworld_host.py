@@ -442,7 +442,7 @@ def project_official_code_io(request, *, evidence_root=None):
         if not path.is_relative_to(folder) or not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
             raise ValueError('appworld_projection_sidecar_missing')
         blocks = _official_io_blocks(path.read_text(encoding='utf-8'))
-        seen_ids, ends, dispatches, world_actions = set(), [], [], []
+        seen_ids, ends, dispatches, failed_dispatches, world_actions = set(), [], [], [], []
         for event in events:
             event_id = event.get('event_id')
             sequence = event.get('sequence')
@@ -458,6 +458,15 @@ def project_official_code_io(request, *, evidence_root=None):
                         and extensions.get('source_event_name') == 'skill_executor.tool_result'
                         and isinstance(event.get('output', {}).get('tool_result'), str)):
                     saved = json.loads(event['output']['tool_result'])
+                    # Executing this framework tool can fail before it saves a
+                    # World proposal. Keep that real failure unchanged; only a
+                    # verified saved reply may be projected as executed code.
+                    if (executed is True and event.get('output', {}).get('status') == 'error'
+                            and isinstance(saved, dict) and set(saved) == {'error'}
+                            and isinstance(saved['error'], str) and saved['error']
+                            and 'observation' not in event.get('output', {})):
+                        failed_dispatches.append(event)
+                        continue
                     if (executed is not True or event.get('output', {}).get('status') != 'completed'
                             or not isinstance(saved, dict) or saved.get('status') != 'completed'
                             or saved.get('reply_saved') is not True
@@ -504,6 +513,20 @@ def project_official_code_io(request, *, evidence_root=None):
             if event.get('loop_id') == 'main':
                 key = (latest_decision(event), event['input']['code'])
                 worlds_by_decision_code.setdefault(key, []).append(event)
+        for dispatch in failed_dispatches:
+            starts = [event for event in events if event.get('kind') == 'action.start'
+                      and event.get('action_id') == dispatch.get('action_id')]
+            closes = [event for event in events if event.get('kind') == 'action.end'
+                      and event.get('action_id') == dispatch.get('action_id')]
+            root = latest_decision(dispatch)
+            proposed, _ = normalize_appworld_code(dispatch['input']['code'])
+            if (len(starts) != 1 or len(closes) != 1
+                    or starts[0].get('actor_id') != 'skill_executor'
+                    or starts[0].get('input', {}).get('code') != dispatch['input']['code']
+                    or positions[starts[0]['event_id']] >= positions[dispatch['event_id']]
+                    or root is None or latest_decision(starts[0]) != root
+                    or worlds_by_decision_code.get((root, proposed))):
+                raise ValueError('appworld_projection_dispatch_invalid')
         dispatch_by_action = {}
         for dispatch in dispatches:
             root = latest_decision(dispatch)

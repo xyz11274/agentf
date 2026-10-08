@@ -260,6 +260,11 @@ bool published_policy_compatible(const v1::RuntimePolicy &published,
   b.clear_experience_overrides();
   a.clear_disabled_injections();
   b.clear_disabled_injections();
+  // compile_runtime_policy has checked that these L1 windows refer only to
+  // approved, active overrides. They are mutable retrieval hints, not wider
+  // identity permissions, model budgets or executable control capabilities.
+  a.clear_l1_prevention_sources();
+  b.clear_l1_prevention_sources();
   if (json(a).dump() != json(b).dump() ||
       json(old.snapshot().options()).dump() != json(bound_current.snapshot().options()).dump())
     return false;
@@ -1933,9 +1938,7 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
         previous_timeout =
             extension_tree["budget_extensions"].items().back().num("timeout_ms", 0);
       const bool expanded =
-          (stop == "model_budget" &&
-           extension_tree.num("model_calls", SIZE_MAX) <
-               impl_->gepa.num("max_model_calls", 0)) ||
+          gepa_model_budget_extended(extension_tree, impl_->gepa) ||
           (stop == "max_rounds" &&
            extension_tree.num("rounds", SIZE_MAX) < impl_->gepa.num("max_rounds", 0)) ||
           (stop == "gepa_search_time_reserved" &&
@@ -2234,6 +2237,9 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
     write(tree_path, extension_tree.dump());
   }
   if (rewrite_search_context) {
+    // Only a proved increase of this tree's actual old call limit reopens
+    // reflection; retain every paid counter and all completed node evidence.
+    clear_extended_gepa_reflection_exhaustion(extension_tree, impl_->gepa);
     // 搜索预算属于算法调度而非执行/裁判口径。只在上述强约束全部满足时迁移
     // context，并记录旧值；其他配置变化仍由普通过期保护拒绝。
     if (!extension_tree["budget_extensions"].array())

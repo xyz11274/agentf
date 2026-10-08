@@ -31,21 +31,36 @@ AppWorld要求 `pydantic<2`，生产runtime的MCP依赖使用另一套环境；�
 填好 `.env` 后，在仓库根目录使用这一条命令启动真实API全流程：
 
 ```bash
-# 真实API全链路：训练→原生学习与审核→seed→32/100题验证→30轮GEPA→选优500题对照→发布。
-# tmux运行、每实验16路并发、禁用代理；正常门禁失败即停。
+# 真实API全链路：训练→原生学习与审核→seed→32/100题验证→GEPA持续选优→500题对照→发布。
+# tmux运行、每实验16路并发、禁用代理；seed门禁完整失败后自动生成不同候选。
 bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --fresh --seed-label strategy --gepa-max-model-calls 1024
 
-# 复用已完成执行、健康评分和检查点，继续同一流程。
-bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --resume --seed-label strategy --gepa-max-model-calls 1024
+# 复用训练、健康评分和检查点，跟随当前自动seed或原GEPA计划继续同一流程。
+# 正常恢复省略 --seed-label，避免重新指定起始策略。
+bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --resume --gepa-max-model-calls 1024
+
+# 从当前 published/strategy/strategy.json 重启完整流程，保留训练和发布结果。
+# 旧GEPA已清空时补齐缺失32/100原生证明；seed完整失败沿同一共享流程迭代。
+# 非空旧搜索先验证原32/100证明再重置；健康且来源完整的执行仍正常复用。
+bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --restart-gepa --all --gepa-max-model-calls 1024
 
 # 只读查看阶段安排及实际状态，不调用模型。
 bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --plan
 bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --status
 
-# 截止交付：先正常结束活搜索，再导出指定完整500题的最佳可用策略。
-# 该动作不调用模型、不重新评分，不代表GEPA完成或目标达标。
-bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --deliver-best-available --seed-label candidate-typeerror-causal-current --comparison trace_output/appworld/gepa/seed-search-71-stage500/comparison.json
 ```
+
+旧GEPA目录已按要求清空。`published/strategy/baseline.json` 与 `comparison.json` 保留原500题紧凑成绩，不能代替原生轨迹、任务版本和冻结裁判证明；旧 `seed-search-71-stage500` 原生来源已不存在，不能再次运行其交付核验。重启先补齐缺失32/100证明，不为这一步直接重跑500题，也不将旧Node13的32题对照当作当前发布seed证明。新的500题对照只在前置门禁与GEPA选优之后进行；缺失来源不能伪造为已验证缓存。
+
+`--resume` 内部运行共享 `--all`：完成或复用134题训练采集、评分、原生学习与批准入库，再生成seed并依次验证固定32／100题，达标后运行GEPA，再对合格新节点做完整500题对照与发布。seed的32或100题完整正式失败后，程序复用训练成果，从批准TRAIN来源重新编译不同的不可变候选；所有候选沿用原L0、裁判与门槛，不能跳过100题进入GEPA。临时429、网络或评分待补齐时保留当前候选标签和健康检查点，由同一入口自动恢复；主动取消后可用同一 `--resume` 命令继续。
+
+生成结果与历史完整策略或原生版本相同时，不重复评测该版本。程序保留重复记录，结合完整同题评测和实际L1应用记录，生成尚未尝试的L1组合；原批准经验、正文、控制和预算不变，组合的效果仍由正常32／100题门禁确认。完整正式失败后继续产生不可变候选，不再执行“连续五次失败停止”，也不需要人工重置记录。
+
+已付费草案被本地校验拒绝时，先从原批准来源执行不调用模型的备用编译；仍没有合法条件时保存生成失败及费用，自动继续不同候选，不冒充一次32题评测失败。策略冻结后的生成回执保存在既有manifest内，恢复不依赖会被下一轮覆盖的诊断文件，也不重新支付原调用。
+
+正常GEPA先运行30轮。没有合格新节点时，程序在无活评测、未开始holdout的闭合断点扩展原作业累计预算，保留原树、健康评分和费用记录；达到作业硬上限后保留完整旧作业并转入新候选搜索。初始seed或同版本策略不会被当作新节点重复跑500题。仅合格新候选进入后续对照与发布。
+
+429、临时网络故障和待补评分由同一进程退避并从检查点恢复，不需要重新执行命令；取消指令仍会停止。凭据失效、批准来源撤销、数据损坏或所有合法候选组合已耗尽会保存明确的未达标状态，不能把这些状态当成成功。退出码0表示正常收尾，只有正式发布门禁通过才表示达到目标。
 
 从头复现会使用真实模型重新采集、学习和选优，不保证重建历史批准集合或固定分数。当前正常训练范围为134题，新seed默认采用 `observed_phase_v3`，经原生来源验证生成L1条件及有真实训练支持的L3控制；模型草案及有界证据回退都必须通过原生审批、作用域和预算检查，不能手写memory。已有标签使用其不可变策略，不因追加训练数据而重新冻结。
 
@@ -67,7 +82,7 @@ bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --deliver-best
 | `comparison-500.jsonl` | 同一500题发布对照范围 |
 | `manifest.json` | 数据范围、来源与计数 |
 
-补充题训练全数量迁移、分页处理、响应容器修复、鉴权恢复、保存结果后展示及变更后定向确认，沿用公开后置条件。旧题及验证题保持不变；正常入口追加、采集、评分、学习并核验完整覆盖。134题已完成9批正常学习导入，导入完成不表示所有候选记忆已批准。当前原GEPA作业仍使用其已冻结132题范围。
+补充题训练全数量迁移、分页处理、响应容器修复、鉴权恢复、保存结果后展示及变更后定向确认，沿用公开后置条件。旧题及验证题保持不变；正常入口追加、采集、评分、学习并核验完整覆盖。134题已完成9批正常学习导入，导入完成不表示所有候选记忆已批准。当前GEPA作业使用已冻结的134题TRAIN范围，每轮父子pool采样32题。
 
 32/100题是固定500题的开发验证子集，500内含42道官方dev任务，开发也参考过其失败结果。因此500成绩属于开发对照，不能解释为独立留出集效果。题目范围按公开任务规格固定；经验只从TRAIN来源入库，不使用测试答案生成记忆。
 
@@ -83,7 +98,7 @@ bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --deliver-best
 
 ## 已完整评分的最佳500题结果
 
-下表来自父71与同一L0的权威 `comparison.json`，两边500题执行、质量与loop评分覆盖完整，执行和裁判错误均为0；后续未完成节点不能混入这个结果。
+下表来自保留的 `published/strategy/comparison.json` 与 `baseline.json`，记录原父71与同一L0的500题完整评分，原执行和裁判错误均为0；它是原始成绩记录，旧原生报告已清理，不能据此声称当前仍可完整复核轨迹。
 
 | 指标 | L0 | 最佳已完整评分策略 |
 |---|---:|---:|
@@ -99,7 +114,7 @@ bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --deliver-best
 | L2实际应用 | 0 | 0 |
 | L3实际应用 | 0 | 4 |
 
-原冻结策略为 `trace_output/appworld/published/candidate-typeerror-causal-current/strategy.json`，成绩为 `trace_output/appworld/gepa/seed-search-71-stage500/comparison.json`。5%门槛需至少339题通过，338仍未达标，不能四舍五入算通过。loop门槛已满足。L0和候选分别有34、3次额外执行尝试；缺失费用保持未知，表中原执行均值不是完整实验成本。
+当前保留策略为 `trace_output/appworld/published/strategy/strategy.json`，保留成绩为同目录 `comparison.json` 与 `baseline.json`。5%门槛需至少339题通过，338仍未达标，不能四舍五入算通过。loop门槛已满足。原记录中L0和候选分别有34、3次额外执行尝试；缺失费用保持未知，表中原执行均值不是完整实验成本。
 
 ## 指标与门禁
 
@@ -118,6 +133,6 @@ bash tools/trajectory_evolution/experiments/appworld/reproduce.sh --deliver-best
 
 当前AppWorld每题一个用户请求、一个普通验收目标，完整有效Q为0或1。模型目标完成度 `assessment.quality=1` 不保证严格通过；官方严格检查失败仍使有效Q为0。官方 `output.quality_score` 的部分检查比例只是辅助指标。多轮任务使用最新有效目标判定，关键违规保留；内部调用不是用户轮次，也不平均每一步质量。
 
-32、100和500题采用同样三核心门槛：严格通过和正式Q相对提升至少5%，平均无效loop相对下降至少15%。时延、token、调用及费用完整性如实报告，当前不作为门槛。连续5个不同seed完整失败时停在 `review_required`，审查真实轨迹和修复验证后才能显式开始新轮；不以新标签绕过门槛。
+32、100和500题采用同样三核心门槛：严格通过和正式Q相对提升至少5%，平均无效loop相对下降至少15%。时延、token、调用及费用完整性如实报告，当前不作为门槛。连续5个不同seed完整失败时正常停在 `review_required`，审查真实轨迹和修复验证后才能显式开始新轮；不以新标签绕过门槛。
 
 32通过后，100阶段复用原32题，只执行新增68题。同一不可变策略已有完整500题时，可在来源、任务范围和冻结裁判严格一致后复用其同题子集；L0也复用完整权威来源。原生有界恢复仅补失败评分，健康执行和评分不重跑；不完整重放不能替换完整检查点，其真实额外成本仍保留。 GEPA出错、中断或取消会保留待恢复状态，按上面的 `--resume` 继续同一作业；活原生服务存在时拒绝重复启动，只有真实终态完成后才进入对比发布。最终按pool／val选优再做完整500对照，未合格策略只能作为明确标注的最佳可用结果交付。

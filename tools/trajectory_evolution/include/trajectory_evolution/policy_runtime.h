@@ -19,6 +19,11 @@ namespace trajectory::evolution {
 v1::RuntimePolicy compile_runtime_policy(v1::ShadowPolicySnapshot snapshot,
                                          const v1::RuntimeOptions &options);
 
+// 同一 actor 的多机制恢复共享既有预算，条件必须互斥且来源固定。
+bool disjoint_failure_recovery_rules(const v1::LoopRule &first, const v1::LoopRule &second);
+bool has_multi_failure_recovery(const v1::RuntimeOptions &options, const std::string &scope,
+                                const std::string &actor);
+
 // 纯粹、不可变的 C++ 控制层；宿主持有执行和循环状态。
 class PolicyRuntime {
 public:
