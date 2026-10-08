@@ -18,6 +18,33 @@ void expect_robust(bool ok, const std::string &why) {
   if (!ok) throw std::runtime_error(why);
 }
 
+namespace trajectory::evolution {
+bool initial_review_retry_context_matches(const integration::Json &, const integration::Json &,
+                                          const std::string &, const std::string &);
+}
+
+void initial_review_retry_context_regressions() {
+  using trajectory::evolution::initial_review_retry_context_matches;
+  for (const auto &code : {"gepa_baseline_evaluation_inconclusive", "gepa_seed_evaluation_inconclusive"}) {
+    Json tree{{"status", "error"}, {"error", code}, {"evaluation_context", "grader"},
+              {"candidate_evaluation_context", "execution"}};
+    auto job = tree;
+    expect_robust(initial_review_retry_context_matches(tree, job, "grader", "execution"),
+                  "same initial review contexts were rejected");
+    for (const auto &field : {"evaluation_context", "candidate_evaluation_context"}) {
+      auto changed = job;
+      changed[field] = "foreign";
+      expect_robust(!initial_review_retry_context_matches(tree, changed, "grader", "execution"),
+                    "initial review accepted a mismatched stored context");
+    }
+    expect_robust(!initial_review_retry_context_matches(tree, job, "new-grader", "execution") &&
+                    !initial_review_retry_context_matches(tree, job, "grader", "new-execution") &&
+                    !initial_review_retry_context_matches(tree, job, "", "execution"),
+                  "initial review migrated the real grader or Agent execution");
+  }
+  std::cout << "initial_review_context_guard=PASS cases=10\n";
+}
+
 void global_selection_regressions() {
   // 实际 Node13 的完整 VAL 失败集合：局部两题净 +1，全局 11/12 -> 10/12。
   // 桩保持实际 Q/strict 总数与 loop 总数，避免依赖已清理的实验目录。
@@ -1525,6 +1552,11 @@ void rate_limit_budget_completion_regressions() {
 
 int main(int argc, char **argv) {
   try {
+    if (argc == 2 && std::string(argv[1]) == "--initial-review-retry") {
+      initial_review_retry_context_regressions();
+      std::cout << "external_model_calls=0 agent_executions=0\n";
+      return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--rate-limit-budget") {
       rate_limit_budget_completion_regressions();
       std::cout << "external_model_calls=0 agent_executions=0\n";

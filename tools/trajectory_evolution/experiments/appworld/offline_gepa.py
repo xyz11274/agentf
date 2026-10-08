@@ -87,6 +87,139 @@ def _recorded_job(artifact: dict) -> str | None:
     return job_id if read(frozen_seed) == artifact else None
 
 
+def initial_review_recovery(artifact: dict, job_id: str) -> bool:
+    """Authorize only a frozen initial VAL's closed, known judge-only checkpoint.
+
+    Native retry atomically checks the current execution/grader identities;
+    this local proof never authorizes migration of a historical checkpoint.
+    """
+    import re
+    import compare
+    try:
+        if _recorded_job(artifact) != job_id or read(PLAN).get('seed') is None:
+            return False
+        rejection = read(STATUS).get('retry_error') if STATUS.is_file() else None
+        if rejection is not None:
+            if not isinstance(rejection, dict) or not isinstance(rejection.get('job_id'), str):
+                return False
+            if rejection['job_id'] == job_id:
+                # A prior native refusal is not permission to retry the old
+                # report again, even when its judge checkpoint remains valid.
+                return False
+        if read(Path(read(PLAN)['seed'])) != artifact:
+            return False
+        job = (read(WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {}).get(job_id) or {}
+        root = WORKSPACE / 'agent-evaluation' / job_id
+        search = root / 'search'
+        tree = read(search / 'tree.json')
+        code = job.get('error')
+        target = {'gepa_baseline_evaluation_inconclusive': 'baseline.json',
+                  'gepa_seed_evaluation_inconclusive': 'seed.json'}.get(code)
+        if (not target or job.get('status') != 'error' or tree.get('status') != 'error'
+                or tree.get('error') != code or job.get('cancel_requested')
+                or job.get('published') or job.get('final_holdout_replay')
+                or tree.get('holdout_started') or tree.get('final_holdout')
+                or tree.get('rounds', 0) != 0 or tree.get('active') is not None
+                or tree.get('batch') is not None or len(tree.get('nodes') or []) != 1):
+            return False
+        for field in ('evaluation_context', 'candidate_evaluation_context'):
+            if not tree.get(field) or tree[field] != job.get(field):
+                return False
+        dataset = read(DATASET / 'manifest.json')
+        if (dataset.get('metadata') or {}).get('dataset_version') != tree.get('dataset_version'):
+            return False
+        if compare._native_gepa_evaluation_context(CONFIG / 'evaluation.json', tree['dataset_version']) != tree['evaluation_context']:
+            return False
+        version = controller.version(read(root / target))
+        if target == 'baseline.json' and version != tree.get('baseline_version'):
+            return False
+        if controller.version(artifact) != tree.get('seed_version') or job.get('seed_version') != tree['seed_version']:
+            return False
+        tasks = [json.loads(line) for line in (DATASET / 'val.jsonl').read_text().splitlines() if line.strip()]
+        revisions = {row['task_id']: row['task_version'] for row in tasks}
+        if not revisions or len(revisions) != len(tasks):
+            return False
+        entries = [(key, entry) for key, entry in (tree.get('evaluations') or {}).items()
+                   if entry.get('version') == version and entry.get('split') == 'val']
+        if len(entries) != 1:
+            return False
+        key, entry = entries[0]
+        attempt = entry.get('attempt')
+        if (type(attempt) not in (int, float) or not 1 <= attempt < 1000000 or int(attempt) != attempt or entry.get('status') != 'inconclusive'
+                or set(entry.get('task_ids') or []) != set(revisions)
+                or len(entry.get('task_ids') or []) != len(revisions)
+                or any(entry.get(field) != tree[field] for field in ('evaluation_context', 'candidate_evaluation_context'))):
+            return False
+        relative = Path('evaluations') / key / f'attempt-{int(attempt)}' / 'report.json'
+        path = (search / relative).resolve()
+        if entry.get('report') != str(relative) or not path.is_relative_to(search.resolve()):
+            return False
+        payload = path.read_bytes()
+        # Verify the original native digest, without minting or storing one.
+        digest = entry.get('report_hash')
+        manifest = read(path.with_name('manifest.json'))
+        report = json.loads(payload)
+        cfg = report.get('configuration') or {}
+        if (not digest or hashlib.sha256(payload).hexdigest() != digest
+                or (manifest.get('files') or {}).get('report.json') != digest
+                or manifest.get('complete') is not True or report.get('complete') is not True
+                or report.get('report_kind') != 'task_evaluation.v1'
+                or not report.get('run_id') or manifest.get('run_id') != report['run_id']
+                or report.get('dataset_version') != tree['dataset_version']
+                or manifest.get('dataset_version') != tree['dataset_version']
+                or cfg.get('splits') != ['val'] or cfg.get('repetitions') != 1
+                or cfg.get('model_enabled') is not True or cfg.get('allow_unreviewed') is not False
+                or not cfg.get('judge_fingerprint')
+                or cfg.get('variants') != [{'id': 'candidate', 'version': version}]):
+            return False
+        settings = read(CONFIG / 'gepa.json')
+        authority = read(CONFIG / 'agent-evaluation.json')
+        needs_tokens = (not (authority.get('gate') or {}).get('resources_report_only', False)
+                        and (settings.get('objective') or {}).get('token_weight', 0.05)
+                        and settings.get('unknown_token_policy', 'reject') != 'worst_case')
+        rows, seen, failed = report.get('trials') or [], set(), False
+        if len(rows) != len(revisions):
+            return False
+        for row in rows:
+            task = row.get('task_id')
+            evidence = row.get('evidence') or {}
+            if (task not in revisions or task in seen or row.get('task_version') != revisions[task]
+                    or row.get('split') != 'val' or row.get('variant_id') != 'candidate'
+                    or row.get('repetition') != 1 or not row.get('trial_id')
+                    or row.get('execution_status') != 'completed'
+                    or evidence.get('loaded_version') != version
+                    or not controller.framework_capture_complete(row)
+                    or controller._execution_error_code(row)):
+                return False
+            seen.add(task)
+            traces = evidence.get('traces') if isinstance(evidence.get('traces'), list) else [evidence.get('trace')]
+            if not traces or any(not isinstance(trace, dict)
+                    or not any(event.get('kind') == 'run.start' for event in trace.get('events') or [])
+                    or not any(event.get('kind') == 'run.end' for event in trace.get('events') or []) for trace in traces):
+                return False
+            judge = controller._judge_error_code(row)
+            if judge is not None:
+                errors = [check.get('reason') for check in row.get('checks') or []
+                          if check.get('check_id') == 'model' and check.get('status') == 'error']
+                if len(errors) != 1 or row.get('error_code') not in ('evaluation_judge_failed', errors[0]):
+                    return False
+                judge = errors[0]
+            if judge is not None:
+                if not re.fullmatch(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|500|502|503|504)|transport_(?:6|7|18|28|52|55|56|exhausted))', judge):
+                    return False
+                failed = True
+            elif (row.get('verdict') not in {'passed', 'failed'}
+                    or controller.assessed_quality(row) is None or not controller._has_complete_loop_review(row)):
+                return False
+            # Incomplete execution telemetry would cause native task replay;
+            # pure review recovery must retain every actual execution instead.
+            if needs_tokens and (row.get('metrics') or {}).get('tokens') is None:
+                return False
+        return failed
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        return False
+
+
 def build_dataset(recorded_job: str | None = None) -> dict:
     """Build the canonical disjoint train/validation/comparison view."""
     from dataset import materialize
@@ -521,6 +654,18 @@ def run(seed_artifact: Path | None = None) -> dict:
         if not line.startswith(prefix):
             raise RuntimeError("offline_gepa_management_start_failed")
         port = int(line[len(prefix):])
+        def record_initial_retry_rejection(operation: str, fields: dict, code: str, http_status: int) -> None:
+            if (operation not in {'agent_evaluation.status', 'agent_evaluation.retry'}
+                    or http_status in (408, 429) or http_status >= 500):
+                return
+            bound_job = fields.get('job_id') or recorded_job
+            if not bound_job or not initial_review_recovery(artifact, bound_job):
+                return
+            previous = read(STATUS) if STATUS.is_file() else {}
+            save(STATUS, {**previous, 'job_id': bound_job, 'status': 'retry_rejected',
+                'retry_error': {'job_id': bound_job, 'code': code, 'http_status': http_status},
+                'updated_at': datetime.now(timezone.utc).isoformat()})
+
         def invoke(operation: str, **fields) -> dict:
             request = urllib.request.Request(f"http://127.0.0.1:{port}/v1/invoke",
                 data=json.dumps({"operation": operation,
@@ -543,10 +688,26 @@ def run(seed_artifact: Path | None = None) -> dict:
                         code = candidate
                 except (ValueError, OSError, TypeError, AttributeError):
                     pass
+                record_initial_retry_rejection(operation, fields, code, error.code)
                 raise RuntimeError('offline_gepa_' + operation.rsplit('.', 1)[-1] + '_failed:' + code) from None
-            if response_value.get("ok") is not True:
+            except (ValueError, TypeError, AttributeError):
+                record_initial_retry_rejection(operation, fields, 'management_response_invalid', 200)
+                raise RuntimeError('offline_gepa_' + operation.rsplit('.', 1)[-1] + '_failed') from None
+            if not isinstance(response_value, dict) or response_value.get("ok") is not True:
+                record_initial_retry_rejection(operation, fields, "management_response_invalid", 200)
                 raise RuntimeError("offline_gepa_" + operation.rsplit(".", 1)[-1] + "_failed")
-            return response_value.get("result") or {}
+            result = response_value.get('result')
+            if (not isinstance(result, dict)
+                    or (operation == 'agent_evaluation.retry' and result.get('accepted') is not True)
+                    or (operation == 'agent_evaluation.status' and recorded_job
+                        and (not isinstance(result.get('jobs'), dict)
+                             or not isinstance(result['jobs'].get(recorded_job), dict)
+                             or result['jobs'][recorded_job].get('status') not in {
+                                 'pending', 'running', 'passed', 'rejected', 'error', 'interrupted',
+                                 'inconclusive', 'cancelled', 'superseded'}))):
+                record_initial_retry_rejection(operation, fields, 'management_response_invalid', 200)
+                raise RuntimeError('offline_gepa_' + operation.rsplit('.', 1)[-1] + '_failed')
+            return result
 
         if recorded_job:
             # Native restart already requeues a running checkpoint. Failed
@@ -556,6 +717,9 @@ def run(seed_artifact: Path | None = None) -> dict:
             job = (current.get("jobs") or {}).get(recorded_job)
             if not isinstance(job, dict):
                 raise RuntimeError("offline_gepa_checkpoint_unavailable")
+            if (job.get('error') in {'gepa_baseline_evaluation_inconclusive', 'gepa_seed_evaluation_inconclusive'}
+                    and not initial_review_recovery(artifact, recorded_job)):
+                raise RuntimeError('offline_gepa_initial_review_checkpoint_invalid')
             extended = (job.get('status') == 'rejected' and
                         _rejected_budget_extension_ready(plan, artifact, job, recorded_job))
             if job.get("status") in {"error", "interrupted", "inconclusive", "cancelled", "superseded"} or extended:
@@ -570,11 +734,18 @@ def run(seed_artifact: Path | None = None) -> dict:
                 raise RuntimeError("offline_gepa_submit_failed")
             save(GEPA / "submission.json", submitted)
         transient_retries = 0
-        def retryable_rate_limit(current: dict) -> bool:
+
+        def retryable_initial_review(current: dict) -> bool:
+            if (current.get("job_status") != "error" or current.get("job_error") not in
+                    {"gepa_baseline_evaluation_inconclusive", "gepa_seed_evaluation_inconclusive"}):
+                return False
+            return initial_review_recovery(artifact, job_id)
+        def retryable_transient(current: dict) -> bool:
             used, limit = current.get("model_calls"), current.get("max_model_calls")
             deadline = current.get("deadline_ms")
             return bool(current.get("job_status") == "error"
-                and current.get("job_error") == "gepa_model_rate_limited"
+                and (current.get("job_error") == "gepa_model_rate_limited"
+                     or retryable_initial_review(current))
                 and not current.get("cancel_requested") and transient_retries < 3
                 and not (isinstance(used, (int, float)) and isinstance(limit, (int, float))
                          and used >= limit)
@@ -585,7 +756,7 @@ def run(seed_artifact: Path | None = None) -> dict:
             current = progress(job_id)
             save(STATUS, {"status": "running", **current,
                           "updated_at": datetime.now(timezone.utc).isoformat()})
-            if retryable_rate_limit(current):
+            if retryable_transient(current):
                 # The native checkpoint owns the tree, cached healthy trials
                 # and model-call budget. Retry that job only; never submit a
                 # replacement search or reclassify an unrelated terminal error.
@@ -597,9 +768,9 @@ def run(seed_artifact: Path | None = None) -> dict:
                     time.sleep(min(5, remaining))
                     remaining -= min(5, remaining)
                     current = progress(job_id)
-                    if not retryable_rate_limit(current):
+                    if not retryable_transient(current):
                         break
-                if process.poll() is None and retryable_rate_limit(current):
+                if process.poll() is None and retryable_transient(current):
                     retried = invoke("agent_evaluation.retry", job_id=job_id)
                     if retried.get("accepted") is not True:
                         raise RuntimeError("offline_gepa_retry_not_accepted")

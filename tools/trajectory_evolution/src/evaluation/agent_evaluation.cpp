@@ -385,6 +385,15 @@ bool closed_reflection_checkpoint(const Json &tree, const Json &job,
   return true;
 }
 
+bool initial_review_retry_context_matches(const Json &tree, const Json &job,
+                                          const std::string &grading,
+                                          const std::string &execution) {
+  return !grading.empty() && !execution.empty() &&
+      tree.str("evaluation_context") == grading && job.str("evaluation_context") == grading &&
+      tree.str("candidate_evaluation_context") == execution &&
+      job.str("candidate_evaluation_context") == execution;
+}
+
 struct AgentEvaluationService::Impl {
   struct Lock {
     int fd = -1;
@@ -1964,6 +1973,20 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
   bool rebind_holdout_execution_context = false;
   bool rebind_candidate_execution_context = false;
   std::string current_candidate_context;
+
+  // A closed initial validation with a temporary judge failure must retry
+  // under its original execution and grader identities. Unlike a general
+  // search resume, this path may not migrate its cache and replay the Agent.
+  if (job.flag("gepa", false) &&
+      (job.str("error") == "gepa_baseline_evaluation_inconclusive" ||
+       job.str("error") == "gepa_seed_evaluation_inconclusive")) {
+    if (!extension_tree.object())
+      extension_tree = Json::parse(read(tree_path, 16777216));
+    const auto grading = impl_->evaluation_fingerprint();
+    const auto execution = impl_->candidate_evaluation_fingerprint();
+    require(initial_review_retry_context_matches(extension_tree, job, grading, execution),
+            "evaluation_initial_review_context_changed", 409);
+  }
 
   // 一棵树的父子成绩必须来自同一评分口径和同一 Agent 执行身份。
   // 评测管理器重编译不改变 Agent 身份；恢复时只迁移管理器造成的候选上下文

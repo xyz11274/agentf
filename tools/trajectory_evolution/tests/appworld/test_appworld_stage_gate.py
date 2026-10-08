@@ -5239,3 +5239,226 @@ class Baseline100InterruptedWorkerRecoveryTests(unittest.TestCase):
             newer=baseline/'capture-retry-01';reproduce._APPWORLD_LAYOUT.save(newer/'started.json',reproduce._read(baseline/'capture/started.json'))
             reproduce._APPWORLD_LAYOUT.save(newer/'trials/failure.json',{'task_id':'task-000','task_version':'version-task-000','variant_id':'candidate','execution_status':'error','error_code':'evaluation_entry_capture_contract_invalid','evidence':{'loaded_version':'baseline-native'}})
             with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),0)
+class InitialNativeReviewRecoveryTests(unittest.TestCase):
+    fixture = OfflineGepaRecoveryTests.fixture
+
+    def review_fixture(self, directory, *, baseline=False, reason='evaluation_judge_reason_conflict'):
+        import hashlib
+        artifact, old_seed, jobs, native, tree_path = self.fixture(directory, status='error')
+        seed = old_seed.parent / 'strategy' / 'strategy.json'
+        seed.parent.mkdir(); old_seed.replace(seed)
+        offline_gepa.save(offline_gepa.PLAN, {'seed': str(seed)})
+        offline_gepa.save(offline_gepa.STATUS, {'job_id': 'original', 'job_status': 'error'})
+        source = tree_path.parent.parent
+        offline_gepa.save(source/'baseline.json', {'level': 'L0'})
+        code = 'gepa_baseline_evaluation_inconclusive' if baseline else 'gepa_seed_evaluation_inconclusive'
+        version = 'native-L0' if baseline else 'native-seed'
+        offline_gepa.DATASET.mkdir(parents=True)
+        offline_gepa.save(offline_gepa.DATASET/'manifest.json', {'metadata': {'dataset_version':'native-dataset'}})
+        (offline_gepa.DATASET/'val.jsonl').write_text(''.join(json.dumps({'task_id':f'val-{i}', 'task_version':f'v-{i}'})+'\n' for i in range(2)))
+        offline_gepa.save(offline_gepa.CONFIG/'evaluation.json', {'fixture':True})
+        offline_gepa.save(offline_gepa.CONFIG/'gepa.json', {'max_model_calls':64, 'timeout_ms':100000000000000, 'objective':{'token_weight':0.05}})
+        offline_gepa.save(offline_gepa.CONFIG/'agent-evaluation.json', {'gate':{'resources_report_only':True}})
+        report_path = tree_path.parent/'evaluations/entry/attempt-2/report.json'
+        report_path.parent.mkdir(parents=True)
+        rows=[]
+        for i in range(2):
+            rows.append({'trial_id':f'trial-{i}','task_id':f'val-{i}','task_version':f'v-{i}',
+                'variant_id':'candidate','split':'val','repetition':1.0,'execution_status':'completed',
+                'verdict':'passed' if i else 'error', 'error_code':'' if i else 'evaluation_judge_failed',
+                'checks':[] if i else [{'check_id':'model','status':'error','reason':reason}],
+                'metrics':{'tokens':100}, 'evidence':{'loaded_version':version,
+                    'trace':{'events':[{'kind':'run.start'},{'kind':'run.end'}]},
+                    'assessment':{'quality':1,'coverage':1},'loop_review':{'status':'complete','count':0}}})
+        report={'schema_version':1,'report_kind':'task_evaluation.v1','complete':True,
+            'dataset_version':'native-dataset','run_id':'native-report',
+            'configuration':{'splits':['val'],'repetitions':1.0,'model_enabled':True,
+                'allow_unreviewed':False,'judge_fingerprint':'native-judge',
+                'variants':[{'id':'candidate','version':version}]},'trials':rows}
+        def write_report(value):
+            payload=json.dumps(value).encode();report_path.write_bytes(payload)
+            digest=hashlib.sha256(payload).hexdigest()
+            offline_gepa.save(report_path.with_name('manifest.json'),{'complete':True,'run_id':'native-report',
+                'dataset_version':'native-dataset','files':{'report.json':digest}})
+            value_tree=offline_gepa.read(tree_path)
+            if value_tree.get('evaluations'):
+                value_tree['evaluations']['entry']['report_hash']=digest
+                offline_gepa.save(tree_path,value_tree)
+            return digest
+        digest=write_report(report)
+        contexts={'evaluation_context':'native-grading','candidate_evaluation_context':'native-execution'}
+        jobs['original'].update(error=code,seed_version='native-seed',**contexts)
+        offline_gepa.save(native,{'jobs':jobs})
+        offline_gepa.save(tree_path,dict(contexts,status='error',error=code,rounds=0.0,
+            seed_version='native-seed',baseline_version='native-L0',dataset_version='native-dataset',model_calls=0.0,started_ms=1,
+            active=None,batch=None,nodes=[{'id':0.0,'status':'seed'}],trials_used=4.0,
+            evaluations={'entry':dict(contexts,version=version,split='val',status='inconclusive',attempt=2.0,
+                task_ids=['val-0','val-1'],report='evaluations/entry/attempt-2/report.json',report_hash=digest)}))
+        lifecycle={'status':'pending','phase':'gepa_run','candidate':reproduce._candidate_identity(seed,'strategy'),
+            'stage_results':{'gepa_run':{'status':'pending','reason':'appworld_native_gepa_checkpoint_requires_resume',
+                'data':{'job_id':'original'}}}}
+        offline_gepa.save(offline_gepa.GEPA/'lifecycle.json',lifecycle)
+        binding=patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',offline_gepa.GEPA)
+        binding.start();self.addCleanup(binding.stop)
+        return artifact,seed,native,tree_path,report,write_report,lifecycle
+
+    @contextmanager
+    def identity(self):
+        import compare
+        with patch.object(offline_gepa.controller,'version',side_effect=lambda a:'native-L0' if a.get('level')=='L0' else 'native-seed'), \
+             patch.object(compare,'_native_gepa_evaluation_context',return_value='native-grading'):
+            yield
+
+    def test_actual_native_double_attempt_and_generic_judge_error_are_resumable(self):
+        for baseline in (False,True):
+            with self.subTest(baseline=baseline),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory,baseline=baseline)
+                protected={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+                with self.identity():
+                    self.assertTrue(offline_gepa.initial_review_recovery(artifact,'original'))
+                    self.assertIsNotNone(reproduce._initial_native_review_progress(lifecycle,seed))
+                    self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError('offline_gepa.py_failed:1'),lifecycle),
+                        'appworld_native_gepa_checkpoint_requires_resume')
+                    with patch.object(reproduce,'_worker_checkpoint_seed',return_value=seed), \
+                         patch.object(reproduce,'_active_output_processes',return_value=[]):
+                        self.assertEqual(reproduce._worker_resume_check(),75)
+                    with patch.object(reproduce,'_worker_checkpoint_seed',return_value=seed), \
+                         patch.object(reproduce,'_active_output_processes',return_value=['healthy writer']):
+                        self.assertEqual(reproduce._worker_resume_check(),76)
+                for path,payload in protected.items():self.assertEqual(path.read_bytes(),payload)
+
+    def test_unknown_schema_auth_uncertainty_bad_execution_and_scope_are_not_resumed(self):
+        for change in ('http_401','http_403','schema_invalid','uncertain','runner','loaded','task','trace','digest',
+                       'holdout','cancel','contexts','attempt-bool','attempt-fraction','attempt-nan','wrong-job'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+                value=offline_gepa.read(tree)
+                if change in ('http_401','http_403','schema_invalid'):
+                    report['trials'][0]['checks'][0]['reason']='evaluation_judge_'+change;write(report)
+                elif change=='uncertain':
+                    report['trials'][0].update(error_code='',verdict='uncertain',checks=[]);write(report)
+                elif change=='runner':
+                    report['trials'][0].update(error_code='runner_nonzero_exit',execution_status='failed');write(report)
+                elif change=='loaded':report['trials'][0]['evidence']['loaded_version']='foreign';write(report)
+                elif change=='task':report['trials'][0]['task_version']='foreign';write(report)
+                elif change=='trace':report['trials'][0]['evidence']['trace']['events'].pop();write(report)
+                elif change=='digest':(tree.parent/'evaluations/entry/attempt-2/report.json').write_text('{}')
+                elif change=='holdout':value['holdout_started']=True;offline_gepa.save(tree,value)
+                elif change=='contexts':value['candidate_evaluation_context']='changed';offline_gepa.save(tree,value)
+                elif change.startswith('attempt-'):
+                    value['evaluations']['entry']['attempt']={'attempt-bool':True,'attempt-fraction':2.5,'attempt-nan':float('nan')}[change];offline_gepa.save(tree,value)
+                elif change=='wrong-job':offline_gepa.save(offline_gepa.STATUS,{'job_id':'newer'})
+                else:
+                    jobs=offline_gepa.read(native);jobs['jobs']['original']['cancel_requested']=True;offline_gepa.save(native,jobs)
+                with self.identity():
+                    if change!='wrong-job':self.assertFalse(offline_gepa.initial_review_recovery(artifact,'original'))
+                    self.assertIsNone(reproduce._initial_native_review_progress(lifecycle,seed))
+
+    def test_pending_normal_return_and_flattened_child_failure_retry_exact_current_seed(self):
+        for flattened in (False,True):
+            with self.subTest(flattened=flattened),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+                before={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+                calls=[]
+                def inner(actual_seed,label,**budgets):
+                    calls.append((actual_seed,label))
+                    if len(calls)==1:
+                        if flattened:raise RuntimeError('offline_gepa.py_failed:1')
+                        return {'status':'pending'}
+                    return {'status':'complete'}
+                with self.identity(),patch.object(reproduce,'_run_all_with_seed_search',side_effect=inner), \
+                     patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep') as sleep,redirect_stdout(io.StringIO()):
+                    result=reproduce._run_all_autonomously(seed,'strategy')
+                self.assertEqual(result['status'],'complete')
+                self.assertEqual(calls,[(seed,'strategy')]*2);sleep.assert_called_once_with(15)
+                for path,payload in before.items():self.assertEqual(path.read_bytes(),payload)
+
+    def test_offline_native_poll_retries_only_the_original_job_and_keeps_paid_cache(self):
+        # Reuse the existing real offline.run/LifecycleController fake-native
+        # contract. Source proof is tested above, transport only is stubbed here.
+        with patch.object(offline_gepa,'initial_review_recovery',return_value=True):
+            test=OfflineGepaCommandRetryTests()
+            test._testMethodName='test_one_command_recovers_429_same_job_without_resetting_cache_or_budget'
+            try:
+                state,retries,delay=test.run_command_fixture(error='gepa_baseline_evaluation_inconclusive')
+            finally:
+                test.doCleanups()
+            self.assertEqual((state['status'],retries),('complete',1))
+            self.assertGreaterEqual(delay,15)
+
+
+class InitialNativeReviewRetryRejectionTests(InitialNativeReviewRecoveryTests):
+    def rejection_fixture(self, http_status, body, *, operation='agent_evaluation.retry'):
+        import urllib.error
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+            protected={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+            calls=[]
+            class Process:
+                def __init__(inner):
+                    inner.stdout=io.StringIO('trajectory-integration.v1 listening=127.0.0.1:1\n');inner.closed=False
+                def poll(inner):return 0 if inner.closed else None
+                def terminate(inner):inner.closed=True
+                def wait(inner,timeout=None):inner.closed=True;return 0
+            process=Process()
+            class Opener:
+                @contextmanager
+                def open(inner,request,timeout=None):
+                    message=json.loads(request.data);calls.append(message['operation'])
+                    if message['operation']==operation:
+                        if http_status!=200:
+                            raise urllib.error.HTTPError(request.full_url,http_status,'redacted',{},io.BytesIO(body.encode()))
+                        yield io.StringIO(body)
+                    else:
+                        self.assertEqual(message['operation'],'agent_evaluation.status')
+                        yield io.StringIO(json.dumps({'ok':True,'result':{'jobs':{'original':{'status':'error','error':'gepa_seed_evaluation_inconclusive'}}}}))
+            with self.identity(),patch.object(offline_gepa,'require_seed_gates',return_value=artifact),                  patch.object(offline_gepa.controller,'environment',return_value={}),                  patch.object(offline_gepa.subprocess,'Popen',return_value=process),                  patch.object(offline_gepa.select,'select',return_value=([process.stdout],[],[])),                  patch.object(offline_gepa.urllib.request,'build_opener',return_value=Opener()):
+                self.assertTrue(offline_gepa.initial_review_recovery(artifact,'original'))
+                with self.assertRaises(RuntimeError):offline_gepa.run(seed)
+                receipt=offline_gepa.read(offline_gepa.STATUS).get('retry_error')
+                transient=http_status in (408,429,500,502,503,504)
+                self.assertEqual(receipt is None,transient)
+                self.assertEqual(offline_gepa.initial_review_recovery(artifact,'original'),transient)
+                self.assertEqual(reproduce._initial_native_review_progress(lifecycle,seed) is not None,transient)
+                reason=reproduce._autonomous_retry_reason(RuntimeError('offline_gepa.py_failed:1'),lifecycle)
+                self.assertEqual(reason is not None,transient)
+                if not transient:
+                    self.assertEqual(set(receipt),{'job_id','code','http_status'})
+                    self.assertEqual(receipt['job_id'],'original');self.assertEqual(receipt['http_status'],http_status)
+                    self.assertNotIn('private-payload',json.dumps(receipt))
+                    # A later launch checks the saved denial before retrying,
+                    # so flattening the child exception cannot authorize a loop.
+                    with patch.object(reproduce,'_worker_checkpoint_seed',return_value=seed),                          patch.object(reproduce,'_active_output_processes',return_value=[]):
+                        self.assertEqual(reproduce._worker_resume_check(),0)
+                for path,payload in protected.items():self.assertEqual(path.read_bytes(),payload)
+            self.assertTrue(process.closed)
+            self.assertEqual(calls.count('agent_evaluation.retry'),0 if operation.endswith('status') else 1)
+
+    def test_permanent_native_retry_denial_stops_flattened_outer_retries(self):
+        for status,code in ((409,'evaluation_initial_review_context_changed'),(409,'evaluation_job_obsolete'),
+                            (409,'evaluation_job_not_retryable'),(401,'unauthorized'),
+                            (400,'runtime_rule_source_not_approved')):
+            with self.subTest(code=code):
+                self.rejection_fixture(status,json.dumps({'error':{'code':code,'private':'private-payload'}}))
+        self.rejection_fixture(401,json.dumps({'error':{'code':'unauthorized'}}),operation='agent_evaluation.status')
+
+    def test_management_transients_do_not_create_permanent_denial_receipt(self):
+        for status in (408,429,500,502,503,504):
+            with self.subTest(status=status):self.rejection_fixture(status,'{}')
+
+    def test_unknown_response_is_not_initial_review_authority(self):
+        for status,body in ((409,'not JSON private-payload'),(200,'not JSON private-payload'),
+                            (200,'[]'),(200,'{"ok":true,"result":[]}'),(200,'{"ok":true,"result":{"accepted":false}}'),
+                            (200,'{"ok":false,"private":"private-payload"}')):
+            with self.subTest(status=status,body_type=body[:1]):self.rejection_fixture(status,body)
+        for result in ({}, {'jobs':[]}, {'jobs':{'foreign':{}}},
+                       {'jobs':{'original':{}}}, {'jobs':{'original':{'status':'unknown'}}}):
+            with self.subTest(status_response=result):
+                self.rejection_fixture(200,json.dumps({'ok':True,'result':result}),operation='agent_evaluation.status')
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+            with self.identity():
+                offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','retry_error':{'job_id':'foreign','code':'unauthorized','http_status':401}})
+                self.assertTrue(offline_gepa.initial_review_recovery(artifact,'original'))
+                offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','retry_error':[]})
+                self.assertFalse(offline_gepa.initial_review_recovery(artifact,'original'))

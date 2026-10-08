@@ -2861,6 +2861,31 @@ def _rate_limited_native_resume_progress(state: dict, seed: Path | None = None) 
         return None
 
 
+def _initial_native_review_progress(state: dict, seed: Path | None = None) -> dict | None:
+    if state.get('phase') != 'gepa_run' or state.get('cancel_requested'):
+        return None
+    reference = (state.get('candidate') or {}).get('seed_artifact')
+    if not isinstance(reference, str):
+        return None
+    candidate = Path(reference).resolve()
+    if seed is not None and candidate != Path(seed).resolve():
+        return None
+    import offline_gepa
+    try:
+        if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
+                or _read(offline_gepa.PLAN).get('seed') != str(candidate)):
+            return None
+        artifact = _read(candidate)
+        job_id = offline_gepa._recorded_job(artifact)
+        receipt = _read(offline_gepa.STATUS).get('job_id')
+        lifecycle = ((((state.get('stage_results') or {}).get('gepa_run') or {}).get('data') or {}).get('job_id'))
+        if not job_id or any(value is not None and value != job_id for value in (receipt, lifecycle)):
+            return None
+        return offline_gepa.progress(job_id) if offline_gepa.initial_review_recovery(artifact, job_id) else None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        return None
+
+
 def _autonomous_retry_reason(error: Exception, state: dict) -> str | None:
     """Classify saved temporary faults without relaxing a source or score gate."""
     import re
@@ -2874,7 +2899,8 @@ def _autonomous_retry_reason(error: Exception, state: dict) -> str | None:
     if transport:
         return transport.group(1)
     if re.fullmatch(r'offline_gepa\.py_failed:[0-9]+', reason):
-        if _rate_limited_native_resume_progress(state) is not None:
+        if (_rate_limited_native_resume_progress(state) is not None
+                or _initial_native_review_progress(state) is not None):
             return 'appworld_native_gepa_checkpoint_requires_resume'
     if (re.fullmatch(r'compare\.py_failed:[0-9]+', reason)
             or reason == f"stage_gate_not_passed:{state.get('phase')}"
@@ -3101,6 +3127,9 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
                 else:
                     seed, label = _reserve_after_unqualified_native_search(seed)
                 continue
+            if (result.get('status') == 'pending'
+                    and _initial_native_review_progress(_read(state_path)) is not None):
+                raise RuntimeError('appworld_native_gepa_checkpoint_requires_resume')
             return result
         except Exception as error:
             state = _read(state_path)
@@ -3112,6 +3141,7 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
             if reason is None:
                 return blocked(_stage_failure_reason(error))
             rate_limited_resume = None
+            initial_review_resume = None
             if state.get('phase') == 'gepa_run' or reason.startswith('appworld_native_gepa_'):
                 import offline_gepa
                 try:
@@ -3119,7 +3149,8 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
                 except (RuntimeError, ValueError) as binding_error:
                     return blocked(_stage_failure_reason(binding_error))
                 rate_limited_resume = _rate_limited_native_resume_progress(state, seed)
-                progress = rate_limited_resume or offline_gepa.progress()
+                initial_review_resume = _initial_native_review_progress(state, seed)
+                progress = rate_limited_resume or initial_review_resume or offline_gepa.progress()
                 if progress.get('cancel_requested') or progress.get('job_status') == 'cancelled':
                     return blocked('appworld_native_gepa_cancelled', cancelled=True)
                 used, limit = progress.get('model_calls'), progress.get('max_model_calls')
@@ -3133,12 +3164,13 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
                         >= deadline - progress.get('holdout_reserve_ms', 0)):
                     return blocked('appworld_gepa_deadline_exhausted')
                 if (progress.get('job_status') == 'error'
-                        and progress.get('job_error') != 'gepa_model_rate_limited'):
+                        and progress.get('job_error') != 'gepa_model_rate_limited'
+                        and initial_review_resume is None):
                     return blocked('appworld_native_gepa_unclassified_error')
             retries += 1
             delay = (15, 30, 60)[min(retries - 1, 2)]
             # A validated rate checkpoint must resume its own frozen seed.
-            if rate_limited_resume is None:
+            if rate_limited_resume is None and initial_review_resume is None:
                 search = seed_search()
                 generation = search.get('automatic_seed_generation') or {}
                 if (generation.get('round') == search.get('round', 1)
@@ -3543,7 +3575,8 @@ def _worker_resume_check() -> int:
         native = offline_gepa.progress()
         if (native.get('cancel_requested') or native.get('job_status') == 'cancelled'
                 or native.get('job_status') == 'error'
-                and native.get('job_error') != 'gepa_model_rate_limited'):
+                and native.get('job_error') != 'gepa_model_rate_limited'
+                and _initial_native_review_progress(state) is None):
             return 0
     if _active_output_processes():
         return 76
