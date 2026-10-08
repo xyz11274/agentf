@@ -3908,6 +3908,10 @@ def generate_english_triggers(controller, policy, admitted_tasks, diagnostic, *,
         'payload_kind': 'approved_five_field_cards_and_anonymous_counts_only'}
     if previous.get('draft_source'):
         status['draft_source'] = deepcopy(previous['draft_source'])
+    if isinstance(previous.get('incremental_generation'), dict):
+        # Flush the same source-bound paid batches before any local native
+        # work. A crash here must not erase their drafts, usage or spent calls.
+        status['incremental_generation'] = deepcopy(previous['incremental_generation'])
     diagnostic['english_trigger_learning'] = status
     destination = controller.TRAINING / 'seed-compile-status.json'
     controller.save(destination, diagnostic)
@@ -3955,7 +3959,25 @@ def generate_english_triggers(controller, policy, admitted_tasks, diagnostic, *,
     # conditions. Revalidate each card against current complete runtime
     # windows; a single invalid translation must not discard valid siblings.
     reused_repair_reason = None
-    saved_drafts = [row for row in previous.get('attempts', []) if isinstance(row.get('draft'), list)] if inheritance is None and not inheritance_rejected else []
+    saved_drafts = []
+    if inheritance is None:
+        incremental = previous.get('incremental_generation')
+        records = list(previous.get('attempts', []))
+        if isinstance(incremental, dict):
+            current_refs = {row['memory_id']: {key: row[key] for key in ('memory_id', 'content_revision')}
+                            for row in policy['snapshot']['experiences']}
+            approved_refs = policy['options']['approved_experiences']
+            bindings = incremental.get('source_experiences', [])
+            if not isinstance(bindings, list) or not isinstance(incremental.get('batches', []), list):
+                raise ValueError('appworld_english_trigger_incremental_receipt_invalid')
+            for ref in bindings:
+                if (not isinstance(ref, dict) or set(ref) != {'memory_id', 'content_revision'}
+                        or not isinstance(ref.get('memory_id'), str)
+                        or not isinstance(ref.get('content_revision'), str)
+                        or ref != current_refs.get(ref['memory_id']) or ref not in approved_refs):
+                    raise ValueError('appworld_english_trigger_incremental_source_changed')
+            records.extend(incremental.get('batches', []))
+        saved_drafts = [row for row in records if isinstance(row, dict) and isinstance(row.get('draft'), list)]
     if saved_drafts:
         status.update(model_calls=previous.get('model_calls', 0),
             attempts=deepcopy(previous.get('attempts', [])),

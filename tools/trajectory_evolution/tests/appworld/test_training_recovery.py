@@ -7071,3 +7071,84 @@ def test_saved_result_normal_final_artifact_no_unapproved_or_disabled_refs(tmp_p
     with pytest.raises(ValueError,match='source_invalid'):appworld_saved_result_experiences(changed)
     changed=copy.deepcopy(artifact);changed['agent']['appworld_options']['l1_saved_result_experiences'][0]['content_revision']='wrong'
     with pytest.raises(ValueError,match='source_invalid'):appworld_saved_result_experiences(changed)
+
+
+def _paid_incremental_recovery_fixture(tmp_path, monkeypatch):
+    learning,c,policy,card,sources,_,_,_ = _native_precorrective_fixture(tmp_path)
+    c.TRAINING=tmp_path;c.save=save;c.environment=lambda:{}
+    packet={'memories':[card],'training_statistics':{}}
+    feedback={'scanned_tasks':['training-fixture']}
+    monkeypatch.setattr(learning,'seed_control_input',lambda *args:(packet,feedback,{}))
+    monkeypatch.setattr(learning,'_english_trigger_sources',lambda *args,**kwargs:sources)
+    monkeypatch.setattr(learning,'_historical_english_inheritance',lambda *args:None)
+    paid=Mock(side_effect=AssertionError('three paid calls cannot be replayed'))
+    monkeypatch.setattr(learning,'_english_trigger_model_reply',paid)
+    ref={key:card[key] for key in ('memory_id','content_revision')}
+    batches=[{'attempt':i,'status':'compiled','usage':{'total_tokens':i*10},
+        'draft':[{'memory_id':card['memory_id'],'approved_source':True,'trigger_pattern':'amazon show_cart'}]}
+        for i in (1,2,3)]
+    previous={'model_calls':3,'attempts':[],
+        'draft_source':{'seed_label':'prior-source','version':'bound-source-version'},
+        'incremental_generation':{'status':'complete','model_calls':3,'model_attempts':3,
+            'source_experiences':[ref],'batches':batches}}
+    return learning,c,policy,card,sources,paid,previous
+
+
+@pytest.mark.parametrize('inheritance_rejected',[False,True])
+def test_paid_incremental_batches_revalidate_with_native_without_new_calls(tmp_path,monkeypatch,inheritance_rejected):
+    learning,c,policy,card,sources,paid,previous=_paid_incremental_recovery_fixture(tmp_path,monkeypatch)
+    original=copy.deepcopy(previous);specific=learning._specific_english_pairs;calls=[]
+    if inheritance_rejected:
+        monkeypatch.setattr(learning,'_historical_english_inheritance',lambda *args:{
+            'diagnostic':{},'fixed_conditions':{},'incremental_ids':set(sources)})
+    def revalidate(*args,**kwargs):
+        calls.append(copy.deepcopy(args[3]))
+        if inheritance_rejected and len(calls)==1:
+            raise ValueError('appworld_english_trigger_no_valid_subset')
+        return specific(*args,**kwargs)
+    monkeypatch.setattr(learning,'_specific_english_pairs',revalidate)
+    diagnostic={'english_trigger_learning':previous}
+    compiled=learning.generate_english_triggers(c,policy,set(),diagnostic)
+    status=diagnostic['english_trigger_learning']
+    assert calls[-1]==[row['draft'] for row in original['incremental_generation']['batches']]
+    assert status['incremental_generation']==original['incremental_generation']
+    assert status['draft_source']==original['draft_source']
+    assert status['model_calls']==3 and status['attempts']==[]
+    assert status['draft_reuse']['status']=='compiled'
+    assert learning._native_l1_profile(c,compiled,sources)[('fixture-run','before-write')]=={card['memory_id']}
+    assert compiled['snapshot']==policy['snapshot']
+    paid.assert_not_called()
+
+
+def test_paid_incremental_pending_checkpoint_survives_interrupt_and_native_resume(tmp_path,monkeypatch):
+    learning,c,policy,card,sources,paid,previous=_paid_incremental_recovery_fixture(tmp_path,monkeypatch)
+    original=copy.deepcopy(previous);specific=learning._specific_english_pairs
+    monkeypatch.setattr(learning,'_specific_english_pairs',Mock(side_effect=KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        learning.generate_english_triggers(c,policy,set(),{'english_trigger_learning':previous})
+    diagnostic=json.loads((tmp_path/'seed-compile-status.json').read_text())
+    status=diagnostic['english_trigger_learning']
+    assert status['status']=='pending' and status['model_calls']==3
+    assert status['incremental_generation']==original['incremental_generation']
+    assert status['draft_source']==original['draft_source']
+    monkeypatch.setattr(learning,'_specific_english_pairs',specific)
+    compiled=learning.generate_english_triggers(c,policy,set(),diagnostic)
+    assert learning._native_l1_profile(c,compiled,sources)[('fixture-run','before-write')]=={card['memory_id']}
+    assert diagnostic['english_trigger_learning']['model_calls']==3
+    assert diagnostic['english_trigger_learning']['incremental_generation']==original['incremental_generation']
+    paid.assert_not_called()
+
+
+@pytest.mark.parametrize('fault',['withdrawn','revision','unknown_ref','invalid_receipt'])
+def test_paid_incremental_batches_reject_source_withdrawal_or_changed_receipt(tmp_path,monkeypatch,fault):
+    learning,c,policy,card,sources,paid,previous=_paid_incremental_recovery_fixture(tmp_path,monkeypatch)
+    if fault=='withdrawn':policy['options']['approved_experiences']=[]
+    elif fault=='revision':previous['incremental_generation']['source_experiences'][0]['content_revision']='changed'
+    elif fault=='unknown_ref':previous['incremental_generation']['source_experiences'][0]['unexpected']=True
+    else:previous['incremental_generation']['source_experiences']={}
+    specific=Mock(side_effect=AssertionError('invalid binding cannot reach native reuse'))
+    monkeypatch.setattr(learning,'_specific_english_pairs',specific)
+    with pytest.raises(ValueError,match='appworld_english_trigger_incremental_(source_changed|receipt_invalid)'):
+        learning.generate_english_triggers(c,policy,set(),{'english_trigger_learning':previous})
+    specific.assert_not_called();paid.assert_not_called()
+    assert previous['model_calls']==3

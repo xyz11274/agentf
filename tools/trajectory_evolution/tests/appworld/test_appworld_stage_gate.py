@@ -5595,3 +5595,102 @@ class FinalNativeReviewBudgetRecoveryTests(InitialNativeReviewRecoveryTests):
                 changed=offline_gepa.read(tree_path);changed['final_holdout']['candidates'][0]['baseline_source']={'kind':'different'}
                 offline_gepa.save(tree_path,changed);jobs['jobs']['original']['search']['final_holdout']=changed['final_holdout'];offline_gepa.save(native,jobs)
                 self.assertFalse(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+
+
+class CompletedFinalGoalContinuationTests(unittest.TestCase):
+    native_publish_fixture = StageGateRegressionTest.native_publish_fixture
+
+    @contextmanager
+    def completed_final_fixture(self, directory):
+        root=Path(directory)
+        with self.native_publish_fixture(root,count=1,correct=200) as native:
+            seed=root/'published/strategy/strategy.json'
+            artifact={'level':'L3','policy':{},'agent':{'revision':'immutable-seed'}}
+            reproduce._APPWORLD_LAYOUT.save(seed,artifact)
+            reproduce._APPWORLD_LAYOUT.save(seed.with_name('manifest.json'),{'version':'immutable-seed'})
+            gepa=native['gepa'];jobroot=native['tree_path'].parent.parent
+            offline_gepa.save(jobroot/'seed.json',artifact)
+            tree=native['tree'];tree.update(seed_version='immutable-seed',holdout_started=True,active=None,batch=None,rounds=30,model_calls=500,trials_used=1000)
+            native['tree_path'].write_text(json.dumps(tree))
+            jobs={'fixture-job':{'user':offline_gepa.USER,'level':'L3','gepa':True,'status':'rejected',
+                'evaluation_context':tree['evaluation_context'],'candidate_evaluation_context':tree['candidate_evaluation_context'],
+                'search':{'final_holdout':tree['final_holdout']}}}
+            offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/state.json',{'jobs':jobs})
+            offline_gepa.save(offline_gepa.PLAN,{'seed':str(seed.resolve())})
+            offline_gepa.save(gepa/'submission.json',{'job_id':'fixture-job'})
+            offline_gepa.save(offline_gepa.STATUS,{'job_id':'fixture-job','job_status':'rejected'})
+            offline_gepa.publish(proof_only=True)
+            reproduce._save_search({'round':1,'status':'found','current_seed':str(seed.resolve()),
+                'attempts':[{'attempt':1,'seed':str(seed.resolve()),'status':'passed'}]})
+            state={'status':'blocked','phase':'comparison500','last_error':'stage_gate_not_passed:comparison500',
+                'candidate':reproduce._candidate_identity(seed,'strategy'),'stage_results':{
+                'prepare':{'status':'complete'},'train':{'status':'complete'},
+                'gepa_run':{'status':'complete','data':{'job_id':'fixture-job'}},
+                'comparison500':{'status':'complete','gate_passed':False}}}
+            offline_gepa.save(gepa/'lifecycle.json',state)
+            with patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',gepa),patch.object(reproduce,'_native_gepa_service_active',return_value=False):
+                yield root,seed,state,native,jobs
+
+    def test_completed_final_rejection_readonly_worker_reserves_distinct_train_candidate_once(self):
+        with tempfile.TemporaryDirectory() as directory,self.completed_final_fixture(directory) as (root,seed,state,native,jobs):
+            protected={path:path.read_bytes() for path in [seed,native['tree_path'],*native['reports']]}
+            proof_before=(native['gepa']/'final-comparison/manifest.json').read_bytes()
+            before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            checkpoint=reproduce._completed_failed_final_checkpoint(state)
+            self.assertIsNotNone(checkpoint)
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            for p,bytes_before in before.items():self.assertEqual(p.read_bytes(),bytes_before)
+            seen=[]
+            def prefix(candidate,label,**budgets):
+                seen.append(candidate);self.assertNotEqual(candidate,seed)
+                self.assertFalse(offline_gepa.PLAN.exists());self.assertFalse((native['gepa']/'submission.json').exists())
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix):
+                self.assertEqual(reproduce._run_all_autonomously(seed,'strategy')['status'],'published')
+            self.assertEqual(len(seen),1)
+            search=reproduce.seed_search();self.assertEqual(len(search['native_job_history']),1)
+            self.assertEqual(search['native_job_history'][0]['final_proof'],checkpoint['proof'])
+            feedback=search['automatic_seed_generation']['native_search_feedback']
+            self.assertEqual(feedback['stop_reason'],'appworld_gepa_final_goal_not_met')
+            self.assertNotIn('final_proof',feedback);self.assertNotIn('candidate_goal_checks',feedback)
+            self.assertEqual((native['gepa']/'final-comparison/manifest.json').read_bytes(),proof_before)
+            for p,old in protected.items():self.assertEqual(p.read_bytes(),old)
+            self.assertIsNone(reproduce._completed_failed_final_checkpoint(offline_gepa.read(native['gepa']/'lifecycle.json')))
+
+    def test_completed_final_permanent_unknown_incomplete_or_changed_source_never_advances(self):
+        for fault in ('partial','source','cancel','unknown','state-unknown','judge401','changed-proof'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory,self.completed_final_fixture(directory) as (root,seed,state,native,jobs):
+                if fault=='partial':native['tree']['final_holdout']['candidates'][0]['status']='inconclusive'
+                elif fault=='source':native['tree']['seed_version']='different'
+                elif fault=='cancel':jobs['fixture-job']['cancel_requested']=True
+                elif fault=='unknown':jobs['fixture-job']['error']='source_authority_revoked'
+                elif fault=='state-unknown':state['last_error']='source_authority_revoked';offline_gepa.save(native['gepa']/'lifecycle.json',state)
+                elif fault=='judge401':
+                    report=offline_gepa.read(native['reports'][0]);report['trials'][-1].update(verdict='error',error_code='evaluation_judge_failed',checks=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_401'}]);native['reports'][0].write_text(json.dumps(report))
+                else:
+                    proof=offline_gepa.read(native['gepa']/'final-comparison/manifest.json');proof['goal_passed']=True;offline_gepa.save(native['gepa']/'final-comparison/manifest.json',proof)
+                native['tree_path'].write_text(json.dumps(native['tree']));offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/state.json',{'jobs':jobs})
+                protected={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                self.assertIsNone(reproduce._completed_failed_final_checkpoint(state))
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),0)
+                for p,before in protected.items():self.assertEqual(p.read_bytes(),before)
+
+
+    def test_completed_final_inprocess_gate_failure_continues_without_repeating_holdout(self):
+        with tempfile.TemporaryDirectory() as directory,self.completed_final_fixture(directory) as (root,seed,state,native,jobs):
+            initial=dict(state,status='running',last_error=None)
+            initial['stage_results']=dict(state['stage_results'],comparison500={'status':'pending'})
+            offline_gepa.save(native['gepa']/'lifecycle.json',initial)
+            calls=[]
+            def prefix(actual_seed,label,**budgets):
+                calls.append(actual_seed)
+                if len(calls)==1:
+                    offline_gepa.save(native['gepa']/'lifecycle.json',state)
+                    raise RuntimeError('stage_gate_not_passed:comparison500')
+                self.assertNotEqual(actual_seed,seed)
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix):
+                self.assertEqual(reproduce._run_all_autonomously(seed,'strategy')['status'],'published')
+            self.assertEqual(len(calls),2)
+            self.assertEqual(len(reproduce.seed_search()['native_job_history']),1)

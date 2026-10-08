@@ -2812,20 +2812,98 @@ def _retire_native_search_pointer(search: dict, receipt: dict) -> None:
     _APPWORLD_LAYOUT.save(state_path, state)
 
 
-def _reserve_after_unqualified_native_search(seed: Path) -> tuple[Path, str]:
+def _completed_failed_final_checkpoint(state: dict) -> dict | None:
+    """Read-only full final proof: a business rejection is not an execution fault."""
+    if (state.get('phase') != 'comparison500' or state.get('cancel_requested')
+            or state.get('status') not in ('running', 'pending', 'failed', 'blocked')):
+        return None
+    stage = (state.get('stage_results') or {}).get('comparison500') or {}
+    if stage.get('status') != 'complete' or stage.get('gate_passed') is not False:
+        return None
+    failure = 'stage_gate_not_passed:comparison500'
+    if any(value not in (None, '', failure, 'RuntimeError:' + failure)
+           for value in (state.get('last_error'), stage.get('reason'))):
+        return None
+    import offline_gepa
+    try:
+        candidate = state.get('candidate') or {}
+        seed = Path(candidate['seed_artifact']).resolve()
+        if (candidate != _candidate_identity(seed, seed.parent.name)
+                or offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
+                or _read(offline_gepa.PLAN).get('seed') != str(seed)):
+            return None
+        job_id = offline_gepa._recorded_job(_read(seed))
+        status = _read(offline_gepa.STATUS)
+        root = offline_gepa.WORKSPACE / 'agent-evaluation' / str(job_id)
+        tree = _read(root / 'search/tree.json')
+        job = (_read(offline_gepa.WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {}).get(job_id) or {}
+        if (not job_id or status.get('job_id') != job_id or status.get('retry_error')
+                or job.get('status') not in ('passed', 'rejected') or job.get('error')
+                or job.get('cancel_requested') or job.get('final_holdout_replay')
+                or tree.get('status') != 'completed' or tree.get('error')
+                or tree.get('holdout_started') is not True or tree.get('active') is not None
+                or tree.get('batch') is not None
+                or tree.get('seed_version') != offline_gepa.controller.version(_read(seed))
+                or any(not tree.get(k) or tree[k] != job.get(k)
+                       for k in ('evaluation_context', 'candidate_evaluation_context'))
+                or (job.get('search') or {}).get('final_holdout') != tree.get('final_holdout')):
+            return None
+        prepared = offline_gepa.publish(proof_only=True, source_tree=root / 'search/tree.json', prepare_only=True)
+        proof = prepared['manifest']
+        checks = proof.get('candidate_goal_checks') or []
+        if (proof != _read(offline_gepa.GEPA / 'final-comparison/manifest.json')
+                or proof.get('source_job') != job_id or proof.get('goal_passed') is not False
+                or not checks or any(item.get('goal_passed') is not False
+                    or (item.get('gate') or {}).get('coverage_pass') is not True for item in checks)):
+            return None
+        if prepared['comparison'] != _read(Path(proof['source_comparison'])):
+            return None
+        import hashlib
+        for item in checks:
+            comparison = _read(Path(item['comparison']))
+            report = Path(comparison['source_report']).resolve()
+            if not report.is_relative_to((root / 'search').resolve()):
+                return None
+            entries = [entry for entry in (tree.get('evaluations') or {}).values()
+                       if (root / 'search' / str(entry.get('report') or '')).resolve() == report
+                       and entry.get('version') == item.get('version')
+                       and entry.get('status') == 'complete' and entry.get('split') == 'holdout']
+            if len(entries) != 1:
+                return None
+            entry = entries[0]
+            digest = entry.get('report_hash')
+            if (not digest or hashlib.sha256(report.read_bytes()).hexdigest() != digest
+                    or (_read(report.with_name('manifest.json')).get('files') or {}).get('report.json') != digest
+                    or any(entry.get(k) != tree[k] for k in
+                           ('evaluation_context', 'candidate_evaluation_context'))):
+                return None
+        # Retain only the existing immutable proof. No holdout task diagnostics
+        # enter automatic_seed_generation: the next model sees TRAIN/32/100 only.
+        return {'job_id': job_id, 'seed': str(seed), 'proof': proof}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        return None
+
+
+def _reserve_after_unqualified_native_search(seed: Path, *, final_rejection: dict | None = None) -> tuple[Path, str]:
     """Retain a terminal native tree before selecting a distinct TRAIN seed."""
     import offline_gepa
-    if not _native_gepa_no_new_candidate(seed):
+    if final_rejection is None and not _native_gepa_no_new_candidate(seed):
+        raise RuntimeError('appworld_gepa_terminal_receipt_invalid')
+    if final_rejection is not None and final_rejection != _completed_failed_final_checkpoint(
+            _read(_controller_gepa_root() / 'lifecycle.json')):
         raise RuntimeError('appworld_gepa_terminal_receipt_invalid')
     job_id = offline_gepa._recorded_job(_read(seed))
     tree_path = offline_gepa.WORKSPACE / 'agent-evaluation' / str(job_id) / 'search/tree.json'
     tree = _read(tree_path)
     job = ((_read(offline_gepa.WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {})
            .get(job_id) or {})
-    if (not job_id or job.get('status') != 'rejected' or job.get('published') is True
-            or job.get('cancel_requested') is True or tree.get('active') is not None
-            or tree.get('batch') is not None or tree.get('holdout_started') is True
-            or tree.get('final_holdout')):
+    if (not job_id or job.get('cancel_requested') is True or tree.get('active') is not None
+            or tree.get('batch') is not None
+            or (final_rejection is None and (job.get('status') != 'rejected'
+                or job.get('published') is True or tree.get('holdout_started') is True
+                or tree.get('final_holdout')))
+            or (final_rejection is not None and (final_rejection['job_id'] != job_id
+                or final_rejection['seed'] != str(seed.resolve())))):
         raise RuntimeError('appworld_gepa_terminal_receipt_invalid')
     search = seed_search()
     receipt = {'job_id': job_id, 'seed': str(seed.resolve()), 'tree': str(tree_path),
@@ -2834,6 +2912,9 @@ def _reserve_after_unqualified_native_search(seed: Path) -> tuple[Path, str]:
                'submission': _read(offline_gepa.GEPA / 'submission.json'),
                'plan': _read(offline_gepa.PLAN),
                'lifecycle': _read(_controller_gepa_root() / 'lifecycle.json')}
+    if final_rejection is not None:
+        receipt.update(stop_reason='appworld_gepa_final_goal_not_met',
+                       final_proof=final_rejection['proof'])
     history = search.setdefault('native_job_history', [])
     if not any(item.get('job_id') == job_id for item in history):
         history.append(receipt)
@@ -3176,6 +3257,10 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
         try:
             if not native_resume_checked:
                 native_resume_checked = True
+                final_rejection = _completed_failed_final_checkpoint(_read(state_path))
+                if final_rejection is not None:
+                    seed, label = _reserve_after_unqualified_native_search(
+                        Path(final_rejection['seed']), final_rejection=final_rejection)
                 native_status = _read(_controller_gepa_root() / 'status.json')
                 native_plan = _read(_controller_gepa_root() / 'plan.json')
                 if (native_status.get('job_status') == 'rejected'
@@ -3210,6 +3295,12 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
             return result
         except Exception as error:
             state = _read(state_path)
+            final_rejection = _completed_failed_final_checkpoint(state)
+            if (str(error) == 'stage_gate_not_passed:comparison500'
+                    and final_rejection is not None):
+                seed, label = _reserve_after_unqualified_native_search(
+                    Path(final_rejection['seed']), final_rejection=final_rejection)
+                continue
             continuation = _continue_unavailable_seed_generation(seed, error, state)
             if continuation is not None:
                 seed, label = continuation
@@ -3638,6 +3729,8 @@ def _worker_resume_check() -> int:
         saved_fault = stage.get('reason') or state.get('last_error')
         if saved_fault and _unavailable_seed_generation_checkpoint(RuntimeError(str(saved_fault)), state):
             reason = 'appworld_seed_generation_unavailable'
+    if not reason and _completed_failed_final_checkpoint(state) is not None:
+        reason = 'appworld_completed_final_goal_requires_next_candidate'
     if not reason and _legacy_terminal_worker_checkpoint(state, fault):
         reason = 'appworld_legacy_terminal_checkpoint_requires_resume'
     if not reason:
