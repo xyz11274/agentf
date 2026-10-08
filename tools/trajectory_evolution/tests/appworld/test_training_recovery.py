@@ -1397,7 +1397,13 @@ def test_control_model_transport_sends_only_explicitly_authorized_fields(tmp_pat
     request = json.loads(seen[0].data)
     assert 'control_loop_relaxes_condition' in request['messages'][0]['content']
     assert 'Loop rules do not accept primitive_id or target_scope' in request['messages'][0]['content']
-    assert 'at most one loop rule for each inherited scope/actor pair' in request['messages'][0]['content']
+    assert 'Multiple learned rules in one scope/actor require explicit predicate mode' in request['messages'][0]['content']
+    assert 'disjoint error_codes, replan_on_failure=true and max_replans=1' in request['messages'][0]['content']
+    assert 'identical iteration/no-progress budgets' in request['messages'][0]['content']
+    assert 'runtime still shares one replan across all those mechanisms' in request['messages'][0]['content']
+    # This fixture has not proved native disjoint capability; keep its legacy fallback.
+    assert 'No same-scope disjoint-rule compilation proof is available' in request['messages'][0]['content']
+    assert 'at most one learned loop per scope/actor' in request['messages'][0]['content']
     assert 'count must not exceed limits.max_rules' in request['messages'][0]['content']
     external = json.loads(request['messages'][1]['content'])
     for name in ('memories', 'control_sources'):
@@ -6387,3 +6393,440 @@ def test_same_seed_initial_header_or_refresh_failure_keeps_complete_spent_drafts
     assert current['seed_label']==label
     assert len(calls)==(1 if boundary=='refresh-failed' else 2)
     assert not (c.PUBLISHED/label/'strategy.json').exists()
+def _development_feedback_fixture(tmp_path, monkeypatch):
+    """Synthetic formal32 captures, real source-native versions and compiler."""
+    import learning, stage_gate
+    c, anchor, query, _ = _duplicate_l1_native_fixture(tmp_path)
+    c._development_query=query
+    c._trial_error_code=lambda row:row.get('error_code')
+    c.framework_capture_complete=lambda row:row.get('execution_status')=='completed'
+    c._has_complete_loop_review=lambda row:(row.get('evidence') or {}).get('loop_review',{}).get('status')=='complete'
+    authority=anchor['policy']['snapshot']
+    latest=copy.deepcopy(anchor)
+    options=copy.deepcopy(latest['policy']['options']); options['l1_prevention_sources']=[]
+    latest['policy']=json.loads(c.native(c.BINARY,c.ROOT,['runtime','recompile'],{'policy':latest['policy'],'options':options}))
+    refs=anchor['policy']['options']['approved_experiences']
+    mid=next(r['memory_id'] for r in refs if r['memory_id']=='fixture-accepted')
+    healthy=next(r['memory_id'] for r in refs if r['memory_id']=='fixture-excluded')
+    baseline=c.GEPA/'l0-current-stage32/result.json'
+    save(baseline,{'status':'complete','host_version':'local-host','judge_projection':{'model':'fixed'},
+        'items':[{'task_id':f'dev-{i}','strict_passed':int(i<24)} for i in range(32)]})
+    attempts=[]
+    def captured(artifact, index, failed):
+        seed=c.PUBLISHED/f'candidate-{index}/strategy.json'; save(seed,artifact)
+        version=c.version(artifact);save(seed.with_name('manifest.json'),{'version':version})
+        path=c.GEPA/f'seed-search-{index}-stage32/comparison.json'
+        rows=[];items=[]
+        for i in range(32):
+            task=f'dev-{i}';tid=f'trial-{index}-{i}';passed=i not in failed
+            source=mid if i in (0,1) else healthy if i in (3,4) else None
+            events=[]
+            identity={'user_id':'fixture-user','agent_id':'fixture-agent','run_id':tid}
+            if source:
+                ref=next(r for r in refs if r['memory_id']==source)
+                application={'status':'applied','reason':'host_boundary_verified','policy_id':artifact['policy']['policy_id']+':scoped',
+                             'query_id':tid+'-query','decision_id':tid+'-decision'}
+                events.append({'kind':'custom','attributes':{'type':'policy.query','decision':{
+                    'status':'ready','policy_id':application['policy_id'],'experiences':[ref],
+                    'query':{'boundary':'llm','execution_id':tid+'-execution','advice_query':{
+                        'identity':identity,'query_id':application['query_id'],'decision_id':application['decision_id']}}}}})
+                events.append({'kind':'advice.applied','application':application,'attributes':{'receipt':{
+                    'boundary':'llm','identity':identity,'execution_id':tid+'-execution','application':application,'experiences':[ref]}}})
+            events += [{'kind':'action.start','action_id':'login','loop_id':'main','operation':'appworld.execute','attributes':{'semantic':'action'},'input':{'code':"apis.amazon.login(username='PRIVATE_EMAIL', password='PRIVATE_PASSWORD')"}},
+                {'kind':'action.end','action_id':'login','loop_id':'main','status':'completed','attributes':{'semantic':'action','executed':True},'output':{'observation':'PRIVATE_OBSERVATION'}},
+                {'kind':'action.start','action_id':'read','loop_id':'main','operation':'appworld.execute','attributes':{'semantic':'action'},'input':{'code':"apis.amazon.show_wish_list()"}},
+                {'kind':'action.end','action_id':'read','loop_id':'main','attributes':{'semantic':'action','executed':True},'output':{'observation':'PRIVATE_OBSERVATION'},'status':'completed' if passed else 'failed',
+                 'error':{} if passed else {'code':'appworld_auth_401','message':'PRIVATE_SECRET_TOKEN'}},
+                {'kind':'run.end','output':{'task_completed':passed,'termination_reason':'completed' if passed else 'bounded_recovery_exhausted',
+                                          'response':'PRIVATE_BUSINESS_ANSWER'}}]
+            rows.append({'task_id':task,'trial_id':tid,'execution_status':'completed','verdict':'passed' if passed else 'failed',
+                'evidence':{'loaded_version':version,'loop_review':{'status':'complete','count':0},'trace':{'identity':identity,'events':events}}})
+            items.append({'task_id':task,'trial_id':tid,'loaded_version':version,'execution_status':'completed',
+                'quality':int(passed),'strict_passed':int(passed),'avg_invalid_loop':0})
+        native=path.parent/'shards/shard-00/capture/report.json';save(native,{'complete':True,'trials':rows});save(native.with_name('manifest.json'),{'complete':True,'summary':{'planned_trials':32}})
+        save(path,{'status':'complete','host_version':'local-host','judge_projection':{'model':'fixed'},
+                   'source_l0':str(baseline),'seed':str(seed),'items':items})
+        save(path.with_name('progress.json'),{'artifact':artifact,'shards':{'shard-00':{'source_report':str(native)}}})
+        attempts.append({'attempt':index,'round':1,'seed':str(seed),'status':'failed','last_stage':32,'pilot_comparison':str(path)})
+        return seed, path, native
+    anchor_path,_,_=captured(anchor,5,{0,1,27,28,29,30,31})
+    latest_path,latest_comparison,native=captured(latest,8,{0,1,2,3,26,27,28,29,30,31})
+    target=c.PUBLISHED/'candidate-next/strategy.json'
+    search={'round':1,'attempts':attempts,'automatic_seed_generation':{'round':1,'status':'pending',
+        'seed':str(target),'seed_label':'candidate-next','source_seed':str(latest_path),'source_attempt':8,
+        'method':'approved_training_native_seed'}}
+    save(c.GEPA/'status.json',{'seed_search':search})
+    monkeypatch.setattr(stage_gate,'verify_stage',lambda *args:(False,{'coverage_pass':True,'seed_match':True,'status':'fail'}))
+    return c,anchor,latest,authority,target,search,latest_comparison,native,mid,healthy
+
+
+@pytest.mark.parametrize('anchor_round',[1,0])
+def test_ordinary_failed32_uses_exact_actual_receipts_and_preserves_best_anchor(tmp_path,monkeypatch,anchor_round):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,healthy=_development_feedback_fixture(tmp_path,monkeypatch)
+    query=c._development_query
+    search['attempts'][0]['round']=anchor_round
+    save(c.GEPA/'status.json',{'seed_search':search})
+    before={p:p.read_bytes() for p in (path,native,c.GEPA/'status.json')}
+    feedback=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    assert feedback['latest']['artifact']==latest and feedback['anchor']['artifact']==anchor
+    assert feedback['anchor_counts'][(mid,next(r['content_revision'] for r in anchor['policy']['options']['approved_experiences'] if r['memory_id']==mid))]['regressed_tasks']==2
+    candidate,pair=learning._compile_development_l1_candidate(c,feedback,authority)
+    assert pair[0]==mid
+    changes={key for key in anchor['policy']['options'] if anchor['policy']['options'][key]!=candidate['policy']['options'][key]}
+    assert changes=={'disabled_injections','l1_prevention_sources'}
+    assert candidate['policy']['snapshot']==anchor['policy']['snapshot']
+    for field in ('action_rules','loop_rules','schedule_rules','experience_overrides'):
+        assert candidate['policy']['options'].get(field)==anchor['policy']['options'].get(field)
+    assert c.version(candidate) not in {c.version(anchor),c.version(latest)}
+    # Real native L1 excludes the ablated source while its same-source L3 stays authorized.
+    response=json.loads(c.native(c.BINARY,c.ROOT,['runtime','query'],{'policy':candidate['policy'],'query':query}))
+    assert mid not in {r['memory_id'] for r in response.get('experiences',[])}
+    loop=copy.deepcopy(query);loop.update(boundary='loop',iteration=31)
+    old=json.loads(c.native(c.BINARY,c.ROOT,['runtime','query'],{'policy':anchor['policy'],'query':loop}))
+    new=json.loads(c.native(c.BINARY,c.ROOT,['runtime','query'],{'policy':candidate['policy'],'query':loop}))
+    assert old['progress']['decision']==new['progress']['decision']=='stop'
+    assert old['progress']['rule_id']==new['progress']['rule_id']
+    assert all(p.read_bytes()==b for p,b in before.items())
+
+
+@pytest.mark.parametrize('problem',['partial','wrong_source_attempt','legacy_source_attempt','wrong_revision','wrong_policy_receipt','holdout'])
+def test_development_feedback_refuses_incomplete_foreign_or_unapplied_sources(tmp_path,monkeypatch,problem):
+    import learning,stage_gate
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    if problem=='partial':
+        monkeypatch.setattr(stage_gate,'verify_stage',lambda *args:(False,{'coverage_pass':False,'seed_match':True}))
+        with pytest.raises(RuntimeError,match='incomplete'):learning._development_seed_feedback(c,target,'candidate-next',authority)
+    elif problem=='wrong_source_attempt':
+        search['automatic_seed_generation']['source_attempt']=999;save(c.GEPA/'status.json',{'seed_search':search})
+        with pytest.raises(RuntimeError,match='binding_invalid'):
+            learning._development_seed_feedback(c,target,'candidate-next',authority)
+    elif problem=='holdout':
+        outside=c.PUBLISHED/'comparison500.json';save(outside,c.read(path));search['attempts'][-1]['pilot_comparison']=str(outside)
+        save(c.GEPA/'status.json',{'seed_search':search})
+        with pytest.raises(RuntimeError,match='binding_invalid'):learning._development_seed_feedback(c,target,'candidate-next',authority)
+    elif problem=='legacy_source_attempt':
+        search['automatic_seed_generation']['source_attempt']=None;save(c.GEPA/'status.json',{'seed_search':search})
+        assert learning._development_seed_feedback(c,target,'candidate-next',authority) is None
+    elif problem=='wrong_revision':
+        wrong=copy.deepcopy(authority);wrong['experiences'][0]['content_revision']='foreign'
+        local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+        with pytest.raises(RuntimeError,match='no_longer_approved'):learning._compile_development_l1_candidate(c,local,wrong)
+    else:
+        value=c.read(native)
+        for row in value['trials']:
+            for event in row['evidence']['trace']['events']:
+                if event['kind']=='advice.applied':event['application']['policy_id']='foreign-policy'
+        save(native,value)
+        local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+        assert local['source_counts']=={}  # A foreign receipt cannot authorize suppression or attributed guidance.
+
+
+def test_development_model_feedback_is_bounded_machine_evidence_not_answers(tmp_path,monkeypatch):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    support=[{'memory_id':mid,'failure_support':{'appworld_auth_401':{'validated_supports':1}}}]
+    packet=learning._development_public_feedback(local,latest['policy'],support)
+    wire=json.dumps(packet)
+    assert len(wire.encode())<=4096 and packet['tasks']==32
+    assert all(secret not in wire for secret in ('PRIVATE_EMAIL','PRIVATE_PASSWORD','PRIVATE_SECRET_TOKEN','PRIVATE_BUSINESS_ANSWER','dev-0','trial-8-0'))
+    assert any(step['requested_api']=='apis.amazon.login' and step['status']=='code_block_completed' for row in packet['failure_examples'] for step in row['steps'])
+    assert any(step['requested_api']=='apis.amazon.show_wish_list' and step['parameter_names']==[] and step['error_code']=='appworld_auth_401'
+               and mid in step['applied_before'] for row in packet['failure_examples'] for step in row['steps'])
+    assert any(row['termination_reason']=='bounded_recovery_exhausted' and not row['goal_completed'] for row in packet['failure_examples'])
+    bad=copy.deepcopy(packet);bad['failure_examples'][0]['answer']='PRIVATE_BUSINESS_ANSWER'
+    with pytest.raises(ValueError,match='step_invalid'):learning._approved_development_feedback(bad,{r['memory_id'] for r in latest['policy']['options']['approved_experiences']})
+
+
+def test_ordinary_freeze_single_ablation_is_zero_paid_and_uses_nonduplicate_feedback(tmp_path,monkeypatch):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    memory=tmp_path/'native/memory.json';assert memory.is_file()
+    original=c.native
+    c.native=lambda binary,root,operation,packet:json.dumps({'status':'completed','model_calls':0}) if operation[0]=='learn' else original(binary,root,operation,packet)
+    monkeypatch.setattr(learning,'_completed_training_tasks',lambda controller:{'canonical-training-only'})
+    monkeypatch.setattr(learning,'_readiness',lambda controller:memory)
+    monkeypatch.setattr(learning,'_compile_seed_snapshot',lambda *args:copy.deepcopy(authority))
+    control=Mock(side_effect=AssertionError('ablation adds no paid control model call'))
+    english=Mock(side_effect=AssertionError('ablation adds no paid English model call'))
+    monkeypatch.setattr(learning,'generate_seed_controls',control);monkeypatch.setattr(learning,'generate_english_triggers',english)
+    result=learning.freeze_seed(c,label='candidate-next')
+    assert result==c.read(target) and c.version(result)!=c.version(anchor)
+    assert control.call_count==english.call_count==0
+    diagnostic=c.read(c.TRAINING/'seed-compile-status.json')
+    assert diagnostic['development_feedback']['anchor_seed'].endswith('candidate-5/strategy.json')
+    assert diagnostic['development_feedback']['association']=='paired_regression_not_proven_causality'
+    assert diagnostic['control_learning']['model_calls']==diagnostic['english_trigger_learning']['model_calls']==0
+    assert diagnostic['development_feedback']['requires_new_formal_gate'] is True
+    assert c.read(c.PUBLISHED/'candidate-5/strategy.json')==anchor
+
+
+def test_development_packet_guides_existing_control_and_english_generators(tmp_path,monkeypatch):
+    import learning
+    _,c,rows,policy,_,_=_fallback_fixture(tmp_path)
+    mid='experience-a'
+    c._seed_development_feedback={'source_counts':{(mid,policy['snapshot']['experiences'][0]['content_revision']):
+        {'regressed_tasks':0,'improved_tasks':0,'failed_tasks':2,'passed_tasks':0}},'failure_examples':[
+        {'was_l0_success':False,'goal_completed':False,'termination_reason':'bounded_recovery_exhausted','applied_source_ids':[mid],
+         'steps':[{'requested_api':'apis.amazon.login','parameter_names':['username','password'],'status':'code_block_completed','evidence_basis':'requested_code','error_code':None,'applied_before':[mid]},
+                  {'requested_api':'apis.amazon.show_wish_list','parameter_names':[],'status':'code_block_failed','evidence_basis':'requested_code','error_code':'appworld_auth_401','applied_before':[mid]}]}]}
+    c.BINARY=ROOT/'tools/trajectory_evolution/build-v4/trajectory_evolution'
+    packet,local,controls=learning.seed_control_input(c,policy,{r['task_id'] for r in rows})
+    assert packet['development_feedback']['source_summary'][0]['memory_id']==mid
+    assert local['development_preferred_failure_codes']==['appworld_auth_401']
+    approved=learning.approved_control_packet(packet)
+    assert approved['development_feedback']==packet['development_feedback']
+    outgoing=[]
+    def transport(controller,payload,instructions,budget):
+        outgoing.append((copy.deepcopy(payload),instructions))
+        if 'triggers' in instructions:return json.dumps({'triggers':[]}),{}
+        return json.dumps({'action_rules':[],'loop_rules':[],'schedule_rules':[]}),{}
+    monkeypatch.setattr(learning,'_generic_card_response',transport)
+    model=c.RUNTIME/'runtime.json';save(model,{'model':{'api_key_env':'FAKE'}})
+    c.environment=lambda:{'FAKE':'local-fixture-only'}
+    (c.RUNTIME/'existing-native-control-prompt.txt').write_text('Bounded source controls only.')
+    learning._control_model_reply(c,packet)
+    learning._english_trigger_model_reply(c,packet)
+    assert len(outgoing)==2 and all(payload['development_feedback']==approved['development_feedback'] for payload,_ in outgoing)
+    assert all('development32' in instructions for _,instructions in outgoing)
+    assert all('PRIVATE_' not in json.dumps(payload) for payload,_ in outgoing)
+    # The original canonical TRAIN rows are still the only cited native control authority.
+    draft,provenance=learning._evidence_bounded_control_draft(c,policy,local)
+    compiled=learning.compile_seed_controls(c,policy,controls,draft,{})
+    assert any(r.get('source_experience',{}).get('memory_id')==mid for r in compiled['options']['loop_rules'])
+
+
+
+
+def test_development_feedback_excludes_dispatch_completion_and_keeps_unfinished_tail(tmp_path,monkeypatch):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    data=c.read(native)
+    for row in data['trials']:
+        if row['task_id']=='dev-0':
+            events=row['evidence']['trace']['events']
+            events.insert(1,{'kind':'action.start','action_id':'dispatch','loop_id':'framework:dispatch',
+                'actor_id':'skill_executor','operation':'appworld_submit_code','attributes':{'semantic':'action'},
+                'input':{'code':"apis.amazon.place_order(address_id='PRIVATE_ANSWER')"}})
+            events.insert(2,{'kind':'action.end','action_id':'dispatch','loop_id':'framework:dispatch','actor_id':'skill_executor',
+                'status':'completed','attributes':{'semantic':'action','executed':True},'output':{'status':'success','tool_result':'submitted'}})
+            events[-1]['output']['termination_reason']='max_steps'
+    save(native,data)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    public=learning._development_public_feedback(local,latest['policy'],[])
+    assert any(row['termination_reason']=='max_steps' and not row['goal_completed'] for row in public['failure_examples'])
+    assert all(step['requested_api']!='apis.amazon.place_order' for row in public['failure_examples'] for step in row['steps'])
+    assert 'PRIVATE_ANSWER' not in json.dumps(public)
+
+
+def test_development_anchor_never_replaces_successful_l1_with_unmeasured_retranslation(tmp_path,monkeypatch):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    fresh=copy.deepcopy(latest)
+    options=copy.deepcopy(fresh['policy']['options']);options['experience_overrides'][0]['trigger_pattern']='wrong new lexical variant'
+    fresh['policy']=json.loads(c.native(c.BINARY,c.ROOT,['runtime','recompile'],{'policy':fresh['policy'],'options':options}))
+    result=learning._development_anchor_candidate(c,fresh,local)
+    assert result==anchor and c.version(result)==c.version(anchor)
+    assert fresh['policy']['options']['experience_overrides'][0]['trigger_pattern']=='wrong new lexical variant'
+
+
+def test_late_l1_receipt_is_not_a_regression_ablation_candidate(tmp_path,monkeypatch):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    original=c.read(native)
+    for row in original['trials']:
+        events=row['evidence']['trace']['events']
+        receipts=[event for event in events if event['kind']=='advice.applied']
+        events[:]=[event for event in events if event['kind']!='advice.applied']
+        events[-1:-1]=receipts
+    save(native,original)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    assert local['source_counts']=={}
+
+
+def test_development_no_new_control_keeps_one_native_validated_l1_change_and_anchor_siblings(tmp_path,monkeypatch):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    local['observed_context_sources']={mid}
+    fresh=copy.deepcopy(anchor);options=copy.deepcopy(anchor['policy']['options'])
+    override=next(row for row in options['experience_overrides'] if row['source_experience']['memory_id']==mid)
+    override['trigger_pattern']='gmail inbox'
+    fresh['policy']=json.loads(c.native(c.BINARY,c.ROOT,['runtime','recompile'],{'policy':fresh['policy'],'options':options}))
+    card=next(row for row in authority['experiences'] if row['memory_id']==mid)
+    sources=learning._EnglishTriggerSources()
+    positive=copy.deepcopy(c._development_query)
+    positive['advice_query'].update(query_id='positive',decision_id='positive',task='gmail inbox collection',state='')
+    negative=copy.deepcopy(positive)
+    negative['advice_query'].update(query_id='negative',decision_id='negative',task='Compute geometric area',state='')
+    sources.runtime_runs={'positive-run':[positive],'negative-run':[negative]}
+    sources[mid]={'experience':card,'requires_observed_failure':True,'window_mode':None,
+        'evidence':[{'run_id':'positive-run','query_id':'positive','pre_action_eligible':True}]}
+    c._seed_development_training_feedback={'local_source_evidence':{'positive-run':{'identity':positive['advice_query']['identity']}}}
+    source_calls=[]
+    def exact_sources(controller,policy,feedback,**kwargs):
+        assert kwargs['candidate_artifact']['policy']==policy and kwargs['prevention_compilation'] is True
+        source_calls.append(True);return sources
+    monkeypatch.setattr(learning,'_english_trigger_sources',exact_sources)
+    result=learning._development_anchor_candidate(c,fresh,local)
+    assert source_calls==[True] and c.version(result)!=c.version(anchor)
+    assert result['policy']['options']['experience_overrides']==fresh['policy']['options']['experience_overrides']
+    for name in ('action_rules','loop_rules','schedule_rules','approved_experiences','disabled_injections','l1_prevention_sources'):
+        assert result['policy']['options'].get(name)==anchor['policy']['options'].get(name)
+    assert sources.last_profile['after']['training_runs']==2
+    actual=json.loads(c.native(c.BINARY,c.ROOT,['runtime','query'],{'policy':result['policy'],'query':positive}))
+    assert mid in {ref['memory_id'] for ref in actual.get('experiences',[])}
+    actual=json.loads(c.native(c.BINARY,c.ROOT,['runtime','query'],{'policy':result['policy'],'query':negative}))
+    assert mid not in {ref['memory_id'] for ref in actual.get('experiences',[])}
+
+
+def test_development_snapshot_metadata_only_is_abstention_and_larger_source_never_read(tmp_path,monkeypatch):
+    import learning
+    c,anchor,latest,authority,target,search,path,native,mid,_=_development_feedback_fixture(tmp_path,monkeypatch)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    memory=tmp_path/'native/memory.json';value=c.read(memory);value['revision']='2';save(memory,value)
+    shadow={'target_scopes':[c.SCOPE],'max_policy_entries':64,'max_advice_items':4,'max_advice_bytes':4096,
+        'max_query_bytes':32768,'max_memory_bytes':16777216,'max_snapshot_bytes':262144,'max_match_terms':128,
+        'min_matched_terms':1,'require_validated_evidence':True}
+    fresh=copy.deepcopy(anchor)
+    fresh['policy']=json.loads(c.native(c.BINARY,c.ROOT,['runtime','compile'],{'memory_path':str(memory),
+        'identity':anchor['policy']['snapshot']['identity'],'shadow_options':shadow,'options':anchor['policy']['options']}))
+    assert fresh['policy']['options']==anchor['policy']['options']
+    assert fresh['policy']['snapshot']!=anchor['policy']['snapshot']
+    assert c.version(fresh)==c.version(anchor)  # Native canonical versions already ignore this metadata.
+    result=learning._development_anchor_candidate(c,fresh,local)
+    assert result==anchor and c.version(result) in local['seen_versions']
+    save(native.with_name('manifest.json'),{'complete':True,'summary':{'planned_trials':500}})
+    read=c.read
+    def no_holdout_body(path):
+        if Path(path)==native:raise AssertionError('500 native body must never be read')
+        return read(path)
+    c.read=no_holdout_body
+    with pytest.raises(RuntimeError,match='native_scope_invalid'):
+        learning._development_trial_rows(c,local['latest'],{})
+
+
+def test_development_bare_api_context_uses_exact_public_namespace():
+    import learning
+    card={'content':'下单前 clear_cart 清空购物车，place_order 下单；按 quantity 保留。','trigger_pattern':'Amazon目标下单'}
+    assert learning._development_source_api_context(card,'apis.amazon.place_order')
+    assert learning._development_source_api_context(card,'apis.amazon.clear_cart')
+    assert not learning._development_source_api_context(card,'apis.other.place_order')
+    assert not learning._development_source_api_context(card,'apis.amazon.replace_order')
+    assert not learning._development_source_api_context({'content':'replace_order place_order_extra','trigger_pattern':''},'apis.amazon.place_order')
+    assert not learning._development_source_api_context({'content':'apis.other.place_order','trigger_pattern':''},'apis.amazon.place_order')
+    assert not learning._development_source_api_context({'content':'login','trigger_pattern':''},'apis.amazon.login')
+
+
+def test_development_bare_cart_sources_enter_only_approved_proposal_guidance():
+    import learning
+    cards=[{'memory_id':mid,'content_revision':'r-'+mid,'content':body,'trigger_pattern':'仅目标下单'}
+        for mid,body in [('cart-isolation','clear_cart清空购物车后place_order，恢复原购物车。'),
+                         ('cart-quantity','记录quantity后place_order，保留非目标商品。'),
+                         ('unapproved','place_order')]]
+    policy={'snapshot':{'experiences':cards},'options':{'approved_experiences':[
+        {k:card[k] for k in ('memory_id','content_revision')} for card in cards[:2]]}}
+    local={'source_counts':{},'failure_examples':[{'was_l0_success':True,'goal_completed':True,
+        'termination_reason':'task_completed','applied_source_ids':[],'steps':[{
+            'requested_api':'apis.amazon.place_order','parameter_names':['access_token'],
+            'status':'code_block_completed','evidence_basis':'requested_code','error_code':None,'applied_before':[]}]}]}
+    original=copy.deepcopy(policy)
+    public=learning._development_public_feedback(local,policy,[])
+    assert local['observed_context_sources']=={'cart-isolation','cart-quantity'}
+    assert {row['memory_id'] for row in public['source_summary']}==local['observed_context_sources']
+    assert all(row['observed_failed_api_context'] for row in public['source_summary'])
+    assert public['failure_examples'][0]['steps'][0]['evidence_basis']=='requested_code'
+    assert policy==original and 'unapproved' not in json.dumps(public)
+
+
+def test_development_bare_cart_guidance_reaches_native_checked_anchor_change(tmp_path,monkeypatch):
+    learning,c,policy,card,sources,before,after,trace=_native_precorrective_fixture(tmp_path)
+    mid=card['memory_id'];c.version=lambda artifact: artifact['policy']['policy_id']
+    anchor={'level':'L3','policy':copy.deepcopy(policy)}
+    local={'anchor':{'artifact':anchor},'source_counts':{},'seen_versions':{c.version(anchor)},
+        'failure_examples':[{'was_l0_success':True,'goal_completed':True,'termination_reason':'task_completed',
+            'applied_source_ids':[],'steps':[{'requested_api':'apis.amazon.place_order',
+            'parameter_names':['access_token'],'status':'code_block_completed','evidence_basis':'requested_code',
+            'error_code':None,'applied_before':[]}]}]}
+    learning._development_public_feedback(local,policy,[])
+    assert mid in local['observed_context_sources']
+    compiled=learning._specific_english_pairs(c,policy,sources,[],{})
+    fresh={'level':'L3','policy':compiled};c._seed_development_training_feedback={'local_source_evidence':{}}
+    def exact_sources(controller,current,feedback,**kwargs):
+        assert kwargs['candidate_artifact']['policy']==current and kwargs['prevention_compilation'] is True
+        return sources
+    monkeypatch.setattr(learning,'_english_trigger_sources',exact_sources)
+    result=learning._development_anchor_candidate(c,fresh,local)
+    assert c.version(result)!=c.version(anchor)
+    assert result['policy']['snapshot']==policy['snapshot']
+    assert result['policy']['options']['approved_experiences']==policy['options']['approved_experiences']
+    assert result['policy']['options']['experience_overrides'][0]['content']==card['content']
+    assert learning._native_l1_profile(c,result['policy'],sources)[('fixture-run','before-write')]=={mid}
+
+
+def test_development_anchor_regression_precedes_four_l0_regressions(tmp_path, monkeypatch):
+    import learning
+    c, anchor, latest, authority, target, search, path, native, mid, healthy = _development_feedback_fixture(tmp_path, monkeypatch)
+    # Four L0 regressions also passed the anchor; the fifth case is an anchor-only gain.
+    anchor_path = Path(search['attempts'][0]['pilot_comparison'])
+    anchor_compact = c.read(anchor_path)
+    for item in anchor_compact['items']:
+        if item['task_id'] in ('dev-0', 'dev-1'):
+            item.update(strict_passed=1, quality=1)
+    save(anchor_path, anchor_compact)
+    anchor_capture = Path(next(iter(c.read(anchor_path.with_name('progress.json'))['shards'].values()))['source_report'])
+    anchor_native = c.read(anchor_capture)
+    for row in anchor_native['trials']:
+        if row['task_id'] in ('dev-0', 'dev-1'):
+            row['verdict'] = 'passed'
+            events = row['evidence']['trace']['events']
+            events[-2].update(status='completed', error={})
+            events[-1]['output'].update(task_completed=True, termination_reason='completed')
+    save(anchor_capture, anchor_native)
+    captured = c.read(native)
+    cart = next(row for row in captured['trials'] if row['task_id'] == 'dev-26')
+    start = next(event for event in cart['evidence']['trace']['events'] if event.get('action_id') == 'read' and event['kind'] == 'action.start')
+    start['input']['code'] = 'apis.amazon.place_order(access_token=token)'
+    save(native, captured)
+    protected = {p: p.read_bytes() for p in (path, native, c.GEPA / 'status.json')}
+    local = learning._development_seed_feedback(c, target, 'candidate-next', authority)
+    assert local['anchor']['artifact'] == anchor
+    assert local['latest']['baseline']['dev-26']['strict_passed'] == 0
+    assert local['anchor']['current']['dev-26']['strict_passed'] == 1
+    assert local['latest']['current']['dev-26']['strict_passed'] == 0
+    assert sum(row['was_l0_success'] for row in local['failure_examples']) == 4
+    assert all(row['_anchor_success'] for row in local['failure_examples'] if row['was_l0_success'])
+    cart_local = next(row for row in local['failure_examples'] if any(step['requested_api'] == 'apis.amazon.place_order' for step in row['steps']))
+    assert cart_local['_anchor_success'] is True
+    packet = learning._development_public_feedback(local, latest['policy'], [])
+    assert len(packet['failure_examples']) == 4
+    selected = [row for row in packet['failure_examples'] if any(step['requested_api'] == 'apis.amazon.place_order' for step in row['steps'])]
+    assert len(selected) == 1 and selected[0]['was_l0_success'] is False
+    assert packet['failure_examples'][0] == selected[0]
+    supplied = {row['memory_id'] for row in packet['source_summary']}
+    approved = {ref['memory_id'] for ref in latest['policy']['options']['approved_experiences']}
+    assert supplied <= approved
+    assert all(set(row['applied_source_ids']) <= supplied for row in packet['failure_examples'])
+    assert all(set(step['applied_before']) <= supplied for row in packet['failure_examples'] for step in row['steps'])
+    assert learning._approved_development_feedback(packet, approved) == packet
+    encoded = json.dumps(packet)
+    assert len(encoded.encode()) <= 4096 and '_anchor_success' not in encoded and 'dev-' not in encoded
+    assert cart_local['_anchor_success'] is True
+    assert all(p.read_bytes() == value for p, value in protected.items())
+
+
+def test_development_foreign_anchor_cannot_prioritize_current_failures(tmp_path, monkeypatch):
+    import learning
+    c, anchor, latest, authority, target, search, path, native, mid, healthy = _development_feedback_fixture(tmp_path, monkeypatch)
+    anchor_path = Path(search['attempts'][0]['pilot_comparison'])
+    foreign = c.read(anchor_path)
+    foreign['items'][0]['task_id'] = 'foreign-holdout-task'
+    save(anchor_path, foreign)
+    local = learning._development_seed_feedback(c, target, 'candidate-next', authority)
+    assert local['anchor']['artifact'] == latest
+    assert all(row['_anchor_success'] is False for row in local['failure_examples'])
+    packet = learning._development_public_feedback(local, latest['policy'], [])
+    assert all(row['was_l0_success'] for row in packet['failure_examples'])
+    assert 'foreign-holdout-task' not in json.dumps(packet)

@@ -2022,3 +2022,86 @@ def test_projection_rejects_unproven_failed_or_fake_successful_dispatch(tmp_path
     result=project_official_code_request(request,evidence_root=root)
     assert result['status']=='unknown' and result['patches']==[]
     assert atomic.read_bytes()==before
+
+
+def _pending_close_fixture(tmp_path, monkeypatch, *, close_at=None, progress_every=4,
+                           error=None, task_deadline=None):
+    host = _capture_boundary_host()
+    class Clock:
+        now = 0.0
+        def sleep(self, delay): self.now += delay
+    clock = Clock()
+    monkeypatch.setattr(host, 'real_clock', lambda: clock.now)
+    monkeypatch.setattr(host.time, 'sleep', clock.sleep)
+    class Client:
+        def __init__(self): self.calls = []
+        def _point_fields(self, fields): return fields
+        def _point_observed(self, fields, result): return result
+        def _invoke(self, operation, fields, request, timeout, retries):
+            self.calls.append((operation, fields, timeout, retries))
+            if operation == 'point':
+                return {'pending': True, 'closed': False, 'capture_complete': True}
+            if error is not None:
+                failure = error(clock.now) if callable(error) else error
+                if failure is not None: raise failure
+            return {'run_id': 'fixture-observed-run',
+                    'event_count': int(clock.now / progress_every) if progress_every else 251,
+                    'closed': close_at is not None and clock.now >= close_at,
+                    'capture_complete': True}
+    client = Client();trial = _capture_trial(host, client, tmp_path)
+    trial.run_context = {'run_id': 'fixture-observed-run'}
+    if task_deadline is not None: trial._task_deadline = task_deadline
+    return host, trial, client, clock
+
+
+def test_native_run_close_retains_reporting_children_past_ten_seconds(tmp_path, monkeypatch):
+    host, trial, client, clock = _pending_close_fixture(tmp_path, monkeypatch, close_at=13)
+    result = trial.point({'phase': 'after', 'kind': 'run', 'context': trial.run_context,
+                          'output': {'official_reward': 1}})
+    assert 13 <= clock.now < 14 and result['closed'] is True and result['pending'] is False
+    assert sum(row[0] == 'point' for row in client.calls) == 1
+    assert all(row[2] <= 1 and row[3] == 0 for row in client.calls[1:])
+    assert trial.degraded_points == 0 and trial.framework_capture['failures'] == 0
+    assert trial.boundary_diagnostics[-1]['status'] == 'pending_children_closed'
+
+
+@pytest.mark.parametrize('progress_every, task_deadline, expected', [(4, None, 60), (None, None, 10), (1, 6, 6)])
+def test_native_run_close_progress_is_capped_without_fake_completion(
+        tmp_path, monkeypatch, progress_every, task_deadline, expected):
+    host, trial, client, clock = _pending_close_fixture(
+        tmp_path, monkeypatch, progress_every=progress_every, task_deadline=task_deadline)
+    with pytest.raises(host.AppWorldCaptureBoundaryError, match='appworld_native_run_boundary_failed'):
+        trial.point({'phase': 'after', 'kind': 'run', 'context': trial.run_context, 'output': {}})
+    assert expected - .001 <= clock.now <= expected + .001
+    assert sum(row[0] == 'point' for row in client.calls) == 1
+    assert trial.boundary_diagnostics[-1]['error_code'] == 'appworld_native_run_close_pending_timeout'
+    assert trial.framework_capture['failures'] == 1
+    assert all(row['status'] != 'pending_children_closed' for row in trial.boundary_diagnostics)
+    diagnostic = json.loads((tmp_path/'host-error-diagnostic.json').read_text())
+    assert diagnostic['native_run_boundaries'] == trial.boundary_diagnostics
+
+
+@pytest.mark.parametrize('code,status', [('source_not_authorized', 403), ('evaluation_cancelled', 409),
+                                         ('evaluation_cancelled', 0)])
+def test_native_run_close_does_not_swallow_authority_or_cancel(tmp_path, monkeypatch, code, status):
+    from evolution import EvolutionError
+    host, trial, client, clock = _pending_close_fixture(
+        tmp_path, monkeypatch, error=EvolutionError(code, status))
+    with pytest.raises(host.AppWorldCaptureBoundaryError, match='appworld_native_run_boundary_failed'):
+        trial.point({'phase': 'after', 'kind': 'run', 'context': trial.run_context, 'output': {}})
+    assert clock.now == 0 and [row[0] for row in client.calls] == ['point', 'run.status']
+    assert trial.boundary_diagnostics[-1]['error_code'] == code
+    assert trial.framework_capture['failures'] == 1
+
+
+@pytest.mark.parametrize('status', [408, 429])
+def test_native_run_close_transient_status_waits_without_replaying_agent(tmp_path, monkeypatch, status):
+    from evolution import EvolutionError
+    host, trial, client, clock = _pending_close_fixture(
+        tmp_path, monkeypatch, close_at=13,
+        error=lambda elapsed: EvolutionError('fixture_transient_close_status', status) if elapsed < .25 else None)
+    result = trial.point({'phase': 'after', 'kind': 'run', 'context': trial.run_context, 'output': {}})
+    assert result['closed'] is True and 13 <= clock.now < 14
+    assert sum(row[0] == 'point' for row in client.calls) == 1
+    assert trial.degraded_points == 0 and trial.framework_capture['failures'] == 0
+    assert trial.boundary_diagnostics[-1]['status'] == 'pending_children_closed'

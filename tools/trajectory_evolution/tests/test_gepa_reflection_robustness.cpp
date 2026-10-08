@@ -485,7 +485,8 @@ void reduction_budget_regressions() {
                " distinct_segment_facts=64 compact_pair_bytes=" << reflection_input_bytes(chunk) << '\n';
 }
 
-Json applicability_seed(unsigned source_count = 1) {
+Json applicability_seed(unsigned source_count = 1, const std::string &content = "",
+                        const std::string &problem = "") {
   namespace te = trajectory::evolution;
   namespace ep = agentflow::trajectory::evaluation;
   ep::EvolutionMemoryStore memory;
@@ -499,8 +500,8 @@ Json applicability_seed(unsigned source_count = 1) {
   source->set_target_type(ep::CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION);
   source->set_target_scope("coordinator"); source->set_status(ep::EVOLUTION_CANDIDATE_STATUS_PROPOSED);
   source->set_trigger_pattern("调用不熟悉的API时先查询apis.api_docs.show_api_doc确认参数。");
-  source->set_observed_problem("API arguments were unknown");
-  source->set_proposed_change("Inspect API documentation before calling an unfamiliar API.");
+  source->set_observed_problem(problem.empty() ? "API arguments were unknown" : problem);
+  source->set_proposed_change(content.empty() ? "Inspect API documentation before calling an unfamiliar API." : content);
   source->set_support_user_count(1);
   auto *support = source->add_support_evidence(); support->set_evidence_id("evidence-a");
   support->mutable_source()->set_user_id("user-a"); support->mutable_source()->set_dialogue_id("source-a");
@@ -695,6 +696,135 @@ void applicability_regressions() {
               << " reviews=" << model->reviews << " formal_report_unchanged=1\n";
     fs::remove_all(directory);
   }
+}
+
+
+Report prevention_timing_report(Search &search, std::uint64_t query_time,
+                               const std::string &operation = "apis.amazon.clear_cart",
+                               bool paired = true, bool reactive = false,
+                               const std::string &code = "") {
+  auto report = applicability_report(search);
+  for (auto &trial : *report.mutable_trials()) {
+    auto evidence = json(trial.evidence());
+    if (!evidence["trace"].object()) continue;
+    auto &trace = evidence["trace"];
+    auto query = trace["events"].items().front();
+    query["event_id"] = "source-query"; query["timestamp_us"] = std::to_string(query_time);
+    auto wire = proto<trajectory::evolution::v1::RuntimeQuery>(query["attributes"]["decision"]["query"]);
+    wire.mutable_advice_query()->set_task("Inspect the requested cart isolation state.");
+    wire.mutable_advice_query()->set_state("apis.amazon.show_cart(); isolation");
+    if (reactive) wire.add_error_codes("appworld_auth_401");
+    query["attributes"]["decision"]["query"] = json(wire);
+    Json start{{"event_id", "source-write"}, {"timestamp_us", "100"}, {"kind", "action.start"},
+        {"action_id", "world-write"}, {"actor_id", "world"}, {"execution_id", "main"},
+        {"step_id", "world-step"}, {"operation", operation}, {"input", Json{{"code", code}}},
+        {"attributes", Json{{"semantic", "action"}}}};
+    Json end{{"event_id", "source-write-end"}, {"timestamp_us", "120"}, {"kind", "action.end"},
+        {"action_id", "world-write"}, {"actor_id", "world"}, {"execution_id", "main"},
+        {"step_id", "world-step"}, {"status", "completed"},
+        {"attributes", Json{{"semantic", "action"}, {"executed", true}}}};
+    trace["events"] = Json::Array{};
+    if (query_time < 100) trace["events"].push(query);
+    trace["events"].push(start); if (paired) trace["events"].push(end);
+    if (query_time >= 100) trace["events"].push(query);
+    *trial.mutable_evidence() = proto<google::protobuf::Struct>(evidence);
+  }
+  return report;
+}
+
+void prevention_timing_regressions() {
+  Search search;
+  search.seed = applicability_seed(1, "Use apis.amazon.clear_cart before adding only intended cart items.");
+  search.config = Json{{"max_experience_bytes", 2048}};
+  const Json selected = Json::Array{"experience:experience-a"};
+  const auto candidate = search.mutate(search.seed, experience_draft("show_cart isolation"), selected);
+  const auto &marked = candidate["policy"]["options"]["l1_prevention_sources"];
+  expect_robust(marked.array() && marked.items().size() == 1 && marked.items().front().text() == "experience-a",
+      "compose dropped the authorized prevention marker");
+  for (const auto &entry : std::vector<std::tuple<unsigned, std::string, bool, const char *>>{
+      {50, "apis.amazon.clear_cart", true, "pre_action"},
+      {200, "apis.amazon.clear_cart", true, "late"},
+      {200, "apis.gmail.clear_cart", true, "unknown"},
+      {200, "apis.gmail.delete_email", true, "unknown"},
+      {200, "apis.amazon.clear_cart", false, "unknown"},
+      {0, "apis.amazon.clear_cart", true, "unknown"}}) {
+    auto report = prevention_timing_report(search, std::get<0>(entry), std::get<1>(entry), std::get<2>(entry));
+    const auto original = report.SerializeAsString();
+    const auto checked = search.experience_applicability_preflight(search.seed, candidate, report, selected);
+    const auto state = checked["sources"]["experience-a"].str("prevention_status");
+    expect_robust(state == std::get<3>(entry) && checked.flag("passed", false) == (state != "late"),
+        "source-specific prevention timing or unknown evidence changed");
+    expect_robust(report.SerializeAsString() == original, "prevention proof rewrote a formal parent trial");
+  }
+  for (const auto &code : {"apis.amazon.clear_cart()", "print('apis.amazon.clear_cart()')",
+                          "def later():\n    apis.amazon.clear_cart()", "if False:\n    apis.amazon.clear_cart()",
+                          "apis.amazon.login(); apis.amazon.clear_cart()"}) {
+    auto report = prevention_timing_report(search, 200, "appworld.execute", true, false, code);
+    if (std::string(code).find("login") != std::string::npos)
+      for (auto &trial : *report.mutable_trials()) {
+        auto evidence = json(trial.evidence()); if (!evidence["trace"].object()) continue;
+        auto &end = evidence["trace"]["events"].items()[1]; end["status"] = "failed";
+        end["error"] = Json{{"code", "appworld_auth_401"}};
+        *trial.mutable_evidence() = proto<google::protobuf::Struct>(evidence);
+      }
+    const auto original = report.SerializeAsString();
+    const auto checked = search.experience_applicability_preflight(search.seed, candidate, report, selected);
+    expect_robust(checked.flag("passed", false) &&
+        checked["sources"]["experience-a"].str("prevention_status") == "unknown" &&
+        report.SerializeAsString() == original,
+        "submitted code or an early failure manufactured an actual source write");
+  }
+  auto before = prevention_timing_report(search, 50);
+  for (auto &trial : *before.mutable_trials()) {
+    auto evidence = json(trial.evidence()); if (!evidence["trace"].object()) continue;
+    auto unrelated = evidence["trace"]["events"].items()[1];
+    unrelated["timestamp_us"] = "20"; unrelated["action_id"] = "unrelated-write";
+    unrelated["operation"] = "apis.gmail.delete_email";
+    auto end = evidence["trace"]["events"].items()[2]; end["timestamp_us"] = "30";
+    end["action_id"] = "unrelated-write";
+    auto events = evidence["trace"]["events"]; evidence["trace"]["events"] = Json::Array{unrelated, end};
+    for (const auto &event : events.items()) evidence["trace"]["events"].push(event);
+    *trial.mutable_evidence() = proto<google::protobuf::Struct>(evidence);
+  }
+  expect_robust(search.experience_applicability_preflight(search.seed, candidate, before, selected).flag("passed", false),
+      "an unrelated earlier World write eliminated legitimate prevention");
+  auto opportunities = prevention_timing_report(search, 50);
+  for (auto &trial : *opportunities.mutable_trials()) {
+    auto evidence = json(trial.evidence()); if (!evidence["trace"].object()) continue;
+    auto late_query = evidence["trace"]["events"].items().front();
+    late_query["event_id"] = "after-source-write-query"; late_query["timestamp_us"] = "200";
+    auto wire = proto<trajectory::evolution::v1::RuntimeQuery>(late_query["attributes"]["decision"]["query"]);
+    wire.mutable_advice_query()->set_state("apis.amazon.clear_cart(); isolation");
+    late_query["attributes"]["decision"]["query"] = json(wire);
+    evidence["trace"]["events"].push(late_query);
+    *trial.mutable_evidence() = proto<google::protobuf::Struct>(evidence);
+  }
+  const auto circular = search.mutate(search.seed, experience_draft("clear_cart isolation"), selected);
+  const auto rejected = search.experience_applicability_preflight(search.seed, circular, opportunities, selected);
+  expect_robust(!rejected.flag("passed", true) && rejected["sources"]["experience-a"].str("prevention_status") == "late" &&
+      search.experience_applicability_preflight(search.seed, candidate, opportunities, selected).flag("passed", false),
+      "a source-bound corrected native trigger failed to replace its circular late trigger");
+  const auto retained = search.compose(candidate, search.components(candidate));
+  expect_robust(retained["policy"]["options"]["l1_prevention_sources"].dump() == marked.dump(),
+      "normal composition lost the seed prevention marker");
+  auto policy = proto<trajectory::evolution::v1::RuntimePolicy>(candidate["policy"]);
+  auto options = policy.options(); options.clear_l1_prevention_sources();
+  auto legacy = candidate; legacy["policy"] = json(trajectory::evolution::compile_runtime_policy(policy.snapshot(), options));
+  const auto late = prevention_timing_report(search, 200);
+  expect_robust(search.experience_applicability_preflight(search.seed, legacy, late, selected).flag("passed", false),
+      "unmarked legacy recovery was globally forced into prevention");
+  Search recovery;
+  recovery.seed = applicability_seed(1, "Use apis.amazon.clear_cart for the approved recovery.",
+      "The observed request failed with appworld_auth_401.");
+  recovery.config = search.config;
+  const auto reactive = recovery.mutate(recovery.seed, experience_draft("show_cart isolation"), selected);
+  const auto result = recovery.experience_applicability_preflight(recovery.seed, reactive,
+      prevention_timing_report(recovery, 200, "apis.amazon.clear_cart", true, true), selected);
+  expect_robust(result.flag("passed", false) && result["sources"]["experience-a"].str("prevention_status") == "reactive",
+      "source-bound explicit error recovery became a late-prevention rejection");
+  std::cout << "native_prevention_timing early=1 late_rejected=1 source_namespace=1 unrelated_write=1"
+               " unknown_preserved=1 code_is_not_execution=1 unreachable_unknown=1 early_failure_unknown=1"
+               " reactive_preserved=1 corrected_native_trigger=1 compose_marker_retained=1 formal_report_unchanged=1\n";
 }
 
 void bundle_regressions() {
@@ -1410,6 +1540,11 @@ int main(int argc, char **argv) {
       std::cout << "external_model_calls=0 agent_executions=0\n";
       return 0;
     }
+    if (argc == 2 && std::string(argv[1]) == "--prevention-timing") {
+      prevention_timing_regressions();
+      std::cout << "external_model_calls=0 agent_executions=0\n";
+      return 0;
+    }
     global_selection_regressions();
     if (argc == 2 && std::string(argv[1]) == "--global-selection") {
       std::cout << "external_model_calls=0 agent_executions=0\n";
@@ -1424,6 +1559,7 @@ int main(int argc, char **argv) {
     selector_directory_regressions();
     reduction_budget_regressions();
     applicability_regressions();
+    prevention_timing_regressions();
     multi_loop_budget_regressions();
     bundle_regressions();
     transport_checkpoint_regressions();

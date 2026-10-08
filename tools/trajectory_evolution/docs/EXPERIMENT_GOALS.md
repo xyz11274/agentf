@@ -1,32 +1,22 @@
-## 当前修复阶段（北京时间 2026-10-09 03:52:53）
+## 当前修复阶段（北京时间 2026-10-09 05:21）
 
-- 当前目标：用一条命令稳定运行GEPA变体，内部恢复临时失败、反思修正、生成真正不同候选、评测选优，直到产生真实达标可用节点。用户撤销连续5次失败停止；不依赖人工重启/重置。测试通过、启动成功和未达标收尾均不是完成。
-- 验收冻结：同题严格通过数和质量各相对提升≥5%，真实平均无效loop下降≥15%；资源如实报告。32→100达标后进入GEPA和完整对比发布。不能改旧分/裁判/阈值、补缺失loop0或伪造来源；健康TRAIN/L0/Agent执行和全部已知费用复用。
-- 134 TRAIN已完成采集评分入库。固定32 L0严格24/Q.75/loop.28125。最佳旧A5为25/.78125/.0625，+4.1667%未达5%，须26题；loop已下降77.7778%。无新100/500/GEPA成绩。
-- 正式最新A6完整32：严格22/Q.6875/loop.28125，时延156.575秒/token140737/调用23.625；L1实际53/L2动作0/L2编排0/L3=4，执行和裁判错误均0。L0时延140.747秒/token129041.906/调用22，各层级0。A6未达门禁，未晋级。
-- 北京时间02:49:49正常单命令在tmux appworld-experiment恢复A6，16路/no proxy。程序正常复用32健康Agent执行，只补缺失1题；02:52:48完整正式评分写出，并由同PID3028716自动进入seed-auto-r2-a7，无人工ledger改动/再次启动。03:11:29 A7已冻结并由同一正常控制进程进入pilot32；真实capture完成30/32执行，完整formal结果待生成，不能提前算达标。controls generated2/English compiled3。
-- 实际A6停顿根因已正式修复：一次skill_executor error-only失败调用被投影器误当成功保存代码，导致整题projection unavailable。严格失败start/end、无保存/观察/同decision World绑定才排除成功投影，保留失败证据；所有真正World仍原字节核官方IO。正式14投影正反例+.834秒4入口PASS，原轨迹/官方IO不改；真实补評已完成，裁判/公式保持冻结。
-- 正式自主修复链：仅旧5失败回执迁移、失败后新不可变label；临时429/网络/pending同检查点15/30/60退避；重复策略用完整同题actual L1记录生成未见组合，不换名重测；原GEPA job正常累计扩预算，硬限保留完整旧树/成绩/paid后仅退休活动指针再新候选。wrapper与worker只读检查恢复资格，等待已有健康writer，尊重用户取消/来源撤销/未知真错误。正式旧11+wrapper16+duplicate12+预算6+worker5必要测试通过。
-- 原生临界429已正式CLI/SO构建成功：仅saved knownrate error、未holdout时正常无新model闭合已spent预算；保留paid/trials/starttime/seed/L0/healthyreport/map原字节。真实Search.run四case必要fixture通过。Python实际子进程exit1接续同job→validation_rejected→512到1024累计预算的2tests/9边界正式PASS.731秒。合法finalist已到deadline复杂分支仍受原context/holdout保护，不能声称所有不可恢复错误都能无条件自愈。
-- L1根因及正式修复：前置API证据支持d941 show_cart98<write134、ed3 show_wish_list+quantity86<move160；原生成器偏写API导致条件晚。前置时序/公开GET机制修复已装8必要PASS。又查到旧fixed验证淘汰后不回生成目录：动态每slot重验、明确失败条件优先回流、健康稿不重传、仍3call，支付中断不doublecount；正式17PASS3.68秒。A7仍可从完整同题A5策略读取两合法旧条件，不依赖丢失A6模型草案；只作proposal并当前native重验。
-- 诊断隔离事故：子代理本地probe误写seed-compile-status，发生在A6已冻结、Agent未受影响；策略/原始轨迹/评分未改。无完整原诊断备份，root从manifest/strategy和原现场观察仅恢复可证control2/English3，明确diagnostic_partially_recovered、详细usage/draft unavailable，不造旧稿或记费用0。probe失败不作证据。紧凑生成回执现已正式安装：只在现有manifest保留真实paid/usage及安全原稿，attempt只放费用摘要和manifest引用；必要7项正式测试PASS1.48秒。strategy已落盘但manifest缺失时仅matching完整原诊断+本地native逐字段不变才补既有manifest，必要1项PASS1.75秒；不恢复缺失A6usage/draft，不热加载活A7。
-- 业务四题因果文档已push d8f20f2。README已更新真实API全链路、自主恢复和30轮初始批次，不再要求5失败手动审查重启。
-- 持续开发/监控≤60秒真实北京时间表格，节点横排/指标分行，同题同口径；无代理/bwrap/GitNexus/新增指纹哈希，不重复全TRAIN/健康L0。输出只training/gepa/published，保留原数据、权威memory、真实成绩和已知费用，实验源目录简洁。
+- 最新：普通反馈、裸API公共唯一namespace关联、父策略独有收益回退优先均已安装；集成生产26项tests PASS7.05秒。公开字段/4KB上限/批准TRAIN原正文/原生权限/冻结评分不变。新的source绑定及恢复6项/13子场景、Host17项、原生防时序误判均通过。
+- A12-2正式32最终严格23/Q.71875/loop.28125/时延138.760秒/token134817.438/调用23.25，L1=56/L2两项0/L3=2，Agent额外执行0；1题goal verdict非法由原生resume-report自动补评完成，健康31题保留，无人工补评分。程序自动进入A13，未100或新GEPA。
+- 05:18自动审批拒绝SIGINT旧main3214068，理由query-only守卫不足排除付费调用在飞；遵守拒绝，未停止/未绕过。等待controls终态、Englishcompiled和incrementalcomplete、全部draft/usage落盘及后续代码无模型调用的完整closedgeneration再部署。当前main尚未加载最后context/priority/outer同步修复；健康API/Agent不打断。
 
-- 编译性能修复已正式安装，仅索引原顺序首个model end、复用既有不可变公开API schema解析；4必要测试PASS1.05秒，保留原事件/来源/决策/查询输出，不新增hash或大轨迹cache，不能冒称活A7已享有新耗时收益。
-- 新质量根因明确：模型仅见批准body里的写API，前置GET方法虽本地推导却未入候选目录；当前rank又优先model写词，因此晚匹配稿会压过合法早读。正在修复通用source-backed pre-action候选及本地选择，保留全TRAIN负样本、full native竞争与3 paid预算。
-- 新稳定性缺口明确：saved安全草案全部被拒且paid>=3直接raise，绕过已有0paid fallback；正在修复，并在所有合法本地fallback失败后准确归档generation失败再正常产生不同候选，不混为32正式失败、不重置费用。
+- 用户最新硬要求：一条命令自动执行到真实达标可用节点；普通失败由程序诊断、恢复和继续，不依赖人工重置、补评或连续五次失败停机。不承诺模型永不失败，不能把自动运行或测试通过冒充优化达标。
+- 核心已确认反馈缺口：普通失败32→下一轮reservation虽有source_seed/source_attempt，原freeze未消费该同题失败和实际L1应用记录。已安装source-bound开发32反馈，只选择TRAIN原批准来源与控制，不改memory正文、不读500、不改裁判/门槛。21项生产定向测试通过（7.85秒），实际来源只读重放验证完成；04:55在仅本地query-batch的检查点退出旧main3095972，所有子进程正常收尾；04:56正常--resume新解释器已加载。04:57实际生成诊断已记录A11完整32作为失败来源、A5同32最优作为锚点，确认反馈实际加载；候选尚未冻结或正式评测，不能提前宣称收益。
+- 反思先保留同题验证最优锚点，再执行单一可验证变更；无合法实际变化则保留原策略并沿已有重复策略处理继续，不伪造新版本。运行时L1政策身份和冻结版本分开绑定，来源/任务/裁判仍核验；合法初次及旧恢复无开发来源时按TRAIN正常生成。
+- 原生GEPA预防时序修复已安装，静态库及新测试二进制编译成功，生产--prevention-timing验证通过（0模型调用/0Agent执行）。只有实际直接类型动作与执行回执可证明时序；AppWorld代码块不能冒充内部API执行，未知保持未知。04:55实际CLI/SO编译安装成功；不称已有评分改善。
+- Host收尾有界progress等待补丁已安装；生产17项必要测试通过，不改Agent/World/裁判或正常业务。A9收尾异常仅该题正常重试，健康31题复用；退出137不能说成OOM。
+- A11完整正式32：严格22/Q.6875/最终有效执行loop.3125，时延136.940秒/token129131.875/调用22.46875，L1=58/L2动作0/L2编排0/L3=1，执行/裁判错误0。同main自动进入A12，部署时controls3次/English3次均已落盘，同一A12标签正常恢复第三批本地复核，不再支付已有草案。
+- 05:09长期恢复已修：内层候选搜索切换seed后，外层GEPA终态及429恢复跟随实际绑定候选，复用原job完整冻结artifact来源，不新增指纹或额外版本调用。生产6项tests/13子场景PASS2.13秒，独立peer通过；当前healthy评测不停止，运行main尚未加载reproduce这项更新，待安全检查点最终部署。
+- A12真实反馈锚点为A5，但最终无合法新变更而返回同有效策略；正常自动识别重复、保留paid3/3、不重测旧32，进入A12-2。A12-2为已有重复策略单源L1消融：停用TypeError经验0e9d0bd…；来源相关性非因果，须正式32验证。05:03:47已自动开始固定32/16路，无人工ledger操作。局部同10题L0严格7/Q.7/loop.3，A5为8/.8/.2，A12-2为8/.8/.3；这不是全32成绩或晋级证明，1已完成Agent题裁判失败、loop未知，程序正常恢复。
+- 发现source-context反馈遗漏：批准购物经验使用裸place_order/clear_cart，旧关联仅识别qualified apis.amazon.method，使相关源不能进入候选触发条件修正。已核这些是公开Amazon真实API；只修proposal guidance，不放松原生权限/样本校验，不把提交代码当执行证据，补丁仍在TMP必要验证。
 
-- 最新完整正式32题：A7严格20/Q.625/loop0，时延134.989秒/token117943.594/调用21.0625/L1=62/L2各0/L3=0；A8严格23/Q.71875/loop.46875，时延139.437秒/token125541.125/调用21.625/L1=58/L2各0/L3=1。两者均未达门禁，不进入100/GEPA；A6→A7→A8→A9由同一旧正常进程自动继续。
-- 新代码加载：03:34:55仅对旧主PID3028716发送SIGINT；原A8已全32正式完成、A9仅本地、无Agent/English付费请求，原control3完整保存，旧worker正常130退出。03:37:09正常tmux --resume/16路/no proxy加载新代码，新主PID3095972；03:38:38实际native_recompiled复用原control3，没有额外control模型调用。
-- 正式补丁与必要测试：紧凑manifest回执7PASS+缺manifest恢复1PASS；已paid3旧稿本地拒绝→0paid备用编译4PASS；真实内层多轮换label与只读worker恢复4PASS/8subtests；意外exit137/1、126snapshot相对26部署source、compiled+pending、健康writer76等7PASS/16subtests；真实A7/A8 snapshot及原生version隔离重放通过，0模型/Agent。
-- 前置条件正式修复：真实源码特异GET候选、同native段落、时序、全原负样本与full competing/native复验；仅一次同源本地替代，不新增paid，不改来源/body。6正式必要native tests PASS1.74秒；同段真实支持计数防1实窗+1跨段凑2，精准负例PASS.33秒。当前A9真实编译仍须全原生准入，不能把模拟测试或compiled当任务改善。
-- 最后稳定性修复已装：generated control3/English未开始或initialpending0仅本地native control复验后恢复；真实A9原稿0paid/Agent proof通过，正式1PASS.42秒。同label header和refresh-failed保留完整原paid/drafts，避免重启窗口丢账；额外2必要测试已运行并通过。未知来源/权限/取消仍尊重边界。
-- A9当前仍seed生成：control原3复用，English已2call，batch1从20到22 accepted含ed3，batch2 draft_ready；尚无32正式结果。d941/ed3早读机制不以synthetic或局部源proof冒称全134效果。目标保持active，不因修复、启动或未达标收尾标完成。
-
-- 03:52:53最新正常A9 pilot32 running，已10/32健康执行。manifest50157B有原control3+English3真实紧凑生成回执；最终accepted_conditions21，d941/ed3最终均未保留，不能声称两个源已提升效果。旧2runs/34queries局部证明与当前149runs/1227queries完整编译范围不同；没有新32/100/500正式改善结果。
-- 最后恢复范围已泛化实际generated1/2/3，保留source/owner/scope/native复编所有资格；正式1PASS/6subtests.43秒，bool/negative/4不授恢复。各类临时/已证本地故障正常程序内处理，不需要外部重置；未知source/auth/用户取消仍是明确停止边界。
-- 代码和必要验证/复现说明已直连push8bc0a9d至harness_agent_poc_evo。没有推送凭据、临时输出或未达标新成绩。最后1..3恢复小范围补充另提交；实验继续同A9，目标仍active。
+- 验收冻结：同题严格通过数和质量各相对提升≥5%，真实平均无效loop下降≥15%；资源如实报告。32→100达标后才进入GEPA与完整500对比发布。禁止改旧分、阈值、裁判、缺失loop补0或伪造来源；健康TRAIN/L0/Agent执行和全部已知费用复用。
+- 134 TRAIN已完成采集评分入库。固定32 L0严格24/Q.75/loop.28125，最佳旧A5为25/.78125/.0625，+4.1667%未达5%，须26题；loop下降77.7778%。A9为24/.75/.25；A10为22/.6875/.25。暂无新合格32/100/GEPA/500成绩。
+- 持续工作每≤60真实秒北京时间表格播报；指标横轴节点、纵轴单指标，同题同口径。无新结果报告真实步骤与阻塞。实验16路、禁用代理、tmux长期运行；不使用bwrap，不运行GitNexus，不添加指纹/hash，不清理权威原始TRAIN/memory/评分来源。
 
 ## 新一轮GEPA修复与重试（北京时间 2026-10-08 08:17）
 

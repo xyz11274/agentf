@@ -3023,6 +3023,37 @@ def _continue_unavailable_seed_generation(seed: Path, error: Exception, state: d
     return candidate, next_label
 
 
+def _autonomous_native_seed(seed: Path, state: dict) -> tuple[Path, str]:
+    """Synchronize a progressed inner prefix only to its immutable native job."""
+    candidate = state.get('candidate') or {}
+    reference = candidate.get('seed_artifact')
+    if not isinstance(reference, str) or Path(reference).resolve() == seed.resolve():
+        return seed, seed.parent.name  # The existing same-seed guards remain authoritative.
+    active = Path(reference).resolve()
+    label = active.parent.name
+    from learning import validate_seed_label
+    validate_seed_label(label)
+    if (active != (OUTPUT / 'published' / label / 'strategy.json').resolve()
+            or not active.is_file() or candidate != _candidate_identity(active, label)):
+        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
+    artifact = _read(active)
+    version = candidate.get('seed_version')
+    if not isinstance(version, str) or not version:
+        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
+    import offline_gepa
+    if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
+            or _read(offline_gepa.PLAN).get('seed') != str(active)):
+        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
+    job_id = offline_gepa._recorded_job(artifact)
+    status_job = _read(offline_gepa.STATUS).get('job_id')
+    stage_job = (((state.get('stage_results') or {}).get('gepa_run') or {}).get('data') or {}).get('job_id')
+    search = seed_search()
+    if (not job_id or status_job != job_id or stage_job not in (None, job_id)
+            or search.get('current_seed') != str(active)):
+        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
+    return active, label
+
+
 def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
     """Resume the same native-backed prefix until it finishes or needs a repair."""
     state_path = _controller_gepa_root() / 'lifecycle.json'
@@ -3057,6 +3088,10 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
                 continue
             if (result.get('status') == 'not_qualified'
                     and result.get('stop_reason') == 'appworld_gepa_no_new_qualified_candidate'):
+                state = _read(state_path)
+                if result.get('candidate') and result['candidate'] != state.get('candidate'):
+                    raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
+                seed, label = _autonomous_native_seed(seed, state)
                 requested = _request_native_gepa_budget_extension(seed)
                 if requested:
                     budget_arguments['gepa_max_model_calls'] = requested['max_model_calls']
@@ -3076,6 +3111,10 @@ def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
             rate_limited_resume = None
             if state.get('phase') == 'gepa_run' or reason.startswith('appworld_native_gepa_'):
                 import offline_gepa
+                try:
+                    seed, label = _autonomous_native_seed(seed, state)
+                except (RuntimeError, ValueError) as binding_error:
+                    return blocked(_stage_failure_reason(binding_error))
                 rate_limited_resume = _rate_limited_native_resume_progress(state, seed)
                 progress = rate_limited_resume or offline_gepa.progress()
                 if progress.get('cancel_requested') or progress.get('job_status') == 'cancelled':

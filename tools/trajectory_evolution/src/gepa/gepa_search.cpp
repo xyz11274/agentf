@@ -9035,10 +9035,77 @@ struct Search {
   }
 
   struct ExperienceQueryTrace {
+    struct Position { std::uint64_t timestamp = 0; std::size_t index = 0; };
+    struct Write { Position position; std::set<std::string> operations; };
     v1::Identity identity;
     std::string task_id;
     std::vector<v1::RuntimeQuery> queries;
+    std::vector<Position> query_positions;
+    std::vector<Write> writes;
   };
+
+  static ExperienceQueryTrace::Position experience_position(const Json &event, std::size_t index) {
+    ExperienceQueryTrace::Position result; result.index = index;
+    const auto &stamp = event["timestamp_us"];
+    try {
+      const auto text = stamp.string() ? stamp.text() : std::string();
+      if (!text.empty() &&
+          std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c); }))
+        result.timestamp = std::stoull(text);
+      else if (std::holds_alternative<double>(stamp.value) && number(stamp) > 0 &&
+               number(stamp) < 9007199254740992.0 && number(stamp) == std::floor(number(stamp)))
+        result.timestamp = static_cast<std::uint64_t>(number(stamp));
+    } catch (const std::exception &) { /* Missing/ambiguous timing stays unknown. */ }
+    return result;
+  }
+
+  static bool prevention_write_method(const std::string &method) {
+    for (const auto *verb : {"add_", "clear_", "create_", "delete_", "remove_", "update_", "set_",
+                             "place_", "move_", "send_", "mark_", "transfer_", "download_", "like_",
+                             "unlike_", "play_", "pause_", "reserve_", "release_", "submit_"})
+      if (method.rfind(verb, 0) == 0) return true;
+    return false;
+  }
+
+  // Only machine API names in the immutable approved source define the write.
+  // Neither a rewritten trigger nor unrelated writes may manufacture a cutoff.
+  static std::set<std::string> prevention_source_methods(const v1::ShadowExperience &source) {
+    std::set<std::string> result;
+    const auto text = source.trigger_pattern() + "\n" + source.content();
+    for (std::size_t i = 0; i < text.size();) {
+      if (!(std::isalpha(static_cast<unsigned char>(text[i])) && static_cast<unsigned char>(text[i]) < 128)) { ++i; continue; }
+      const auto start = i++;
+      while (i < text.size() && static_cast<unsigned char>(text[i]) < 128 &&
+             (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) ++i;
+      const auto name = text.substr(start, i - start);
+      if (!prevention_write_method(name)) continue;
+      auto qualified = start;
+      while (qualified && (std::isalnum(static_cast<unsigned char>(text[qualified - 1])) ||
+                           text[qualified - 1] == '_' || text[qualified - 1] == '.')) --qualified;
+      const auto full = text.substr(qualified, i - qualified);
+      result.insert(full.rfind("apis.", 0) == 0 ? full.substr(5) : name);
+    }
+    for (const auto &name : std::vector<std::string>(result.begin(), result.end())) {
+      const auto dot = name.rfind('.');
+      if (dot != std::string::npos) result.erase(name.substr(dot + 1));
+    }
+    return result;
+  }
+
+  static std::set<std::string> prevention_actual_operations(const Json &start) {
+    // A paired executed API action proves its operation was invoked. Executing
+    // an appworld.execute code block does not prove any API inside that block:
+    // branches, exceptions and function definitions may leave it unexecuted.
+    // Never infer actual operations from request code or observation prose.
+    const auto operation = start.str("operation");
+    const auto dot = operation.rfind('.');
+    if (start["attributes"].str("semantic") != "action" || dot == std::string::npos ||
+        !prevention_write_method(operation.substr(dot + 1)) ||
+        !std::all_of(operation.begin(), operation.end(), [](unsigned char c) {
+          return c < 128 && (std::isalnum(c) || c == '_' || c == '.');
+        })) return {};
+    return {operation};
+  }
 
   // Extract once per reflection. Repeated map/reduce/review checks only replay
   // these typed queries and never reread the full parent trajectory.
@@ -9059,7 +9126,27 @@ struct Search {
         try { record.identity = proto<v1::Identity>(trace["identity"]); }
         catch (const Error &) { continue; }
         record.task_id = trial.task_id();
+        std::map<std::string, std::pair<Json, ExperienceQueryTrace::Position>> starts;
+        std::size_t event_index = 0;
         for (const auto &event : trace["events"].items()) {
+          const auto position = experience_position(event, event_index++);
+          const auto action = event.str("action_id");
+          if (event.str("kind") == "action.start" && !action.empty())
+            starts[action] = {Json{{"actor_id", event.str("actor_id")},
+                {"execution_id", event.str("execution_id")}, {"step_id", event.str("step_id")},
+                {"operation", event.str("operation")},
+                {"attributes", Json{{"semantic", event["attributes"].str("semantic")}}}}, position};
+          if (event.str("kind") == "action.end" && !action.empty() && event["attributes"].flag("executed", false)) {
+            const auto begin = starts.find(action);
+            if (begin != starts.end() && event["attributes"].str("semantic") == "action" &&
+                begin->second.first.str("actor_id") == event.str("actor_id") &&
+                begin->second.first.str("execution_id") == event.str("execution_id") &&
+                begin->second.first.str("step_id") == event.str("step_id") &&
+                (event.str("status") == "completed" || event.str("status") == "failed")) {
+              const auto operations = prevention_actual_operations(begin->second.first);
+              if (!operations.empty()) record.writes.push_back({begin->second.second, operations});
+            }
+          }
           if (event["attributes"].str("type") != "policy.query") continue;
           const auto &wire = event["attributes"]["decision"]["query"];
           if (wire.str("boundary") != "llm" || !wire["advice_query"].object()) continue;
@@ -9067,6 +9154,7 @@ struct Search {
             auto query = proto<v1::RuntimeQuery>(wire);
             if (query.actor_id().empty()) query.set_actor_id(event.str("actor_id"));
             record.queries.push_back(std::move(query));
+            record.query_positions.push_back(position);
           } catch (const Error &) { /* Incomplete historic queries are unavailable. */ }
         }
         if (!record.queries.empty()) result.push_back(std::move(record));
@@ -9088,6 +9176,7 @@ struct Search {
     const auto policy = proto<v1::RuntimePolicy>(candidate["policy"]);
     std::map<std::string, v1::ExperienceApproval> refs;
     std::map<std::string, std::string> scopes;
+    std::map<std::string, std::set<std::string>> prevention_methods;
     for (const auto &component : selected.items()) {
       const auto key = component.text();
       if (key.rfind("experience:", 0) != 0 || after[key].null() ||
@@ -9101,6 +9190,11 @@ struct Search {
               scopes[id] = source.target_scope();
               result["sources"][id] = Json{{"queries", 0}, {"query_errors", 0},
                   {"matched_task_ids", Json::Array{}}, {"machine_anchors", Json::Array{}}};
+              if (std::find(policy.options().l1_prevention_sources().begin(), policy.options().l1_prevention_sources().end(), id) !=
+                  policy.options().l1_prevention_sources().end()) {
+                prevention_methods[id] = prevention_source_methods(source);
+                result["sources"][id]["prevention_status"] = "unknown";
+              }
             }
     }
     if (refs.empty()) return result;
@@ -9108,6 +9202,7 @@ struct Search {
                                     : experience_query_evidence(report, selected);
     const auto &traces = recorded ? *recorded : extracted;
     std::map<std::string, std::set<std::string>> anchors;
+    std::set<std::string> unknown_prevention;
     const auto remember_anchor = [&](const std::string &id, const std::string &token) {
       static const std::set<std::string> metadata{"content_revision", "memory_id", "policy_id",
           "query_id", "decision_id", "execution_id", "retrieval_state", "credential_field",
@@ -9115,13 +9210,22 @@ struct Search {
       if (token.size() <= 96 && token.find('_') != std::string::npos &&
           !metadata.count(token) && identifier(token)) anchors[id].insert(token);
     };
+    const auto supported = [&](const std::string &id) {
+      const auto &source = result["sources"][id];
+      return prevention_methods.count(id) && !prevention_methods.at(id).empty()
+          ? source.str("prevention_status") == "pre_action" || source.str("prevention_status") == "reactive"
+          : !source["matched_task_ids"].items().empty();
+    };
     for (const auto &trace : traces) {
       bool needed = false;
-      for (const auto &entry : refs)
-        needed |= result["sources"][entry.first]["matched_task_ids"].items().empty();
+      for (const auto &entry : refs) needed |= !supported(entry.first);
       if (!needed) break;
       std::unique_ptr<PolicyRuntime> runtime;
+      std::size_t query_index = 0;
       for (const auto &query : trace.queries) {
+        const auto position = query_index < trace.query_positions.size()
+            ? trace.query_positions[query_index] : ExperienceQueryTrace::Position{};
+        ++query_index;
         Json envelope;
         try { envelope = Json::parse(query.advice_query().state()); }
         catch (const Error &) { /* Plain retrieval states are valid too. */ }
@@ -9129,8 +9233,7 @@ struct Search {
         std::vector<std::string> eligible;
         for (const auto &entry : refs) {
           const auto &id = entry.first;
-          if (!result["sources"][id]["matched_task_ids"].items().empty() ||
-              query.advice_query().target_scope() != scopes[id]) continue;
+          if (supported(id) || query.advice_query().target_scope() != scopes[id]) continue;
           bool allowed = !envelope.has("runtime_experience_allowlist");
           if (allowlist.array())
             for (const auto &ref : allowlist.items())
@@ -9159,8 +9262,42 @@ struct Search {
           auto &source = result["sources"][id];
           source["queries"] = source.num("queries", 0) + 1;
           for (const auto &ref : decision.experiences())
-            if (ref.memory_id() == id && ref.content_revision() == refs[id].content_revision())
-              source["matched_task_ids"].push(trace.task_id);
+            if (ref.memory_id() == id && ref.content_revision() == refs[id].content_revision()) {
+              if (source["matched_task_ids"].items().empty()) source["matched_task_ids"].push(trace.task_id);
+              if (prevention_methods.count(id)) {
+                const v1::ShadowExperience *approved = nullptr;
+                for (const auto &item : policy.snapshot().experiences())
+                  if (item.memory_id() == id && item.content_revision() == refs[id].content_revision()) approved = &item;
+                bool reactive = false;
+                if (approved) {
+                  const auto condition = approved->trigger_pattern() + "\n" + approved->observed_problem();
+                  for (const auto &code : query.error_codes())
+                    reactive |= condition.find(code) != std::string::npos ||
+                        (code == "appworld_auth_401" && condition.find("401") != std::string::npos) ||
+                        (code == "appworld_validation_422" && condition.find("422") != std::string::npos) ||
+                        (code == "appworld_type_error_positional" && condition.find("TypeError") != std::string::npos);
+                }
+                if (reactive) source["prevention_status"] = "reactive";
+                else {
+                  ExperienceQueryTrace::Position first; bool has_write = false;
+                  for (const auto &write : trace.writes)
+                    for (const auto &operation : write.operations) {
+                      const auto qualified = operation.rfind("apis.", 0) == 0 ? operation.substr(5) : operation;
+                      // An unqualified source method cannot grant an arbitrary
+                      // application's qualified API the same write identity.
+                      if (!prevention_methods[id].count(qualified) || !write.position.timestamp) continue;
+                      if (!has_write || std::tie(write.position.timestamp, write.position.index) < std::tie(first.timestamp, first.index)) {
+                        first = write.position; has_write = true;
+                      }
+                    }
+                  if (has_write && position.timestamp) {
+                    if (std::tie(position.timestamp, position.index) < std::tie(first.timestamp, first.index))
+                      source["prevention_status"] = "pre_action";
+                    else if (source.str("prevention_status") != "pre_action") source["prevention_status"] = "late";
+                  } else unknown_prevention.insert(id);
+                }
+              }
+            }
           // Emit API attribute/keyword names, never arbitrary text tokens or raw
           // state. In particular, a credential value containing '_' is not an anchor.
           for (std::size_t i = 0; i < text.size();) {
@@ -9182,8 +9319,10 @@ struct Search {
       auto &source = result["sources"][entry.first];
       for (const auto &anchor : anchors[entry.first])
         if (source["machine_anchors"].items().size() < 16) source["machine_anchors"].push(anchor);
-      if (source.num("queries", 0) && source["matched_task_ids"].items().empty())
-        result["missing"].push(entry.first);
+      if (source.str("prevention_status") == "late" && unknown_prevention.count(entry.first))
+        source["prevention_status"] = "unknown";
+      if (source.num("queries", 0) && (source["matched_task_ids"].items().empty() ||
+          source.str("prevention_status") == "late")) result["missing"].push(entry.first);
     }
     result["passed"] = result["missing"].items().empty();
     return result;
@@ -9592,7 +9731,10 @@ struct Search {
         "Use actual task/API machine anchors from feedback in its English trigger_pattern; "
         "general prose is not automatically translated into a machine predicate. Claim "
         "prevention gain only when feedback contains an actual pre-action application; "
-        "otherwise treat prevention as a hypothesis and use observed recovery evidence.\n";
+        "otherwise treat prevention as a hypothesis and use observed recovery evidence. "
+        "A late prevention_status is a source-write timing counterexample: use an observed "
+        "task/object or read window before that source's write, never a correction that "
+        "must already have executed. Unknown timing is not proof of prevention.\n";
     if (std::count_if(prepared["selected_components"].items().begin(),
                       prepared["selected_components"].items().end(), [](const Json &item) {
                         return item.text().rfind("experience:", 0) == 0;

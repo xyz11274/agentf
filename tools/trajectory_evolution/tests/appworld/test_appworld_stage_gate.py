@@ -4898,3 +4898,110 @@ class GeneratedControlWorkerCheckpointTests(InterruptedWorkerCheckpointTests):
                 with patch.object(reproduce._APPWORLD_LAYOUT,'native',side_effect=RuntimeError('control_source_not_approved')):
                     self.assertIsNone(reproduce._interrupted_worker_checkpoint(state))
             for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+
+
+class AutonomousActiveSeedBindingTests(unittest.TestCase):
+    """Real nested prefix/terminal handlers, isolated native bookkeeping only."""
+    @contextmanager
+    def advanced_fixture(self,directory,*,rate_limited=False):
+        real_terminal=reproduce._native_gepa_no_new_candidate
+        with AutomaticSeedSearchTests.fixture(self,directory,passed_after=2) as values:
+            initial,root,events,generated,retained=values
+            actual=[];source_files={};native_runs=[]
+            def native(script,*arguments,**kwargs):
+                self.assertEqual(script,'offline_gepa.py');events.append(arguments[0])
+                active=Path(arguments[arguments.index('--seed-artifact')+1]).resolve()
+                artifact=reproduce._read(active);actual[:]=[active]
+                job='same-native-job'
+                tree=offline_gepa.WORKSPACE/'agent-evaluation'/job/'search/tree.json'
+                seed_copy=tree.parent.parent/'seed.json'
+                if arguments[0]=='--prepare':
+                    old={'max_rounds':30,'max_model_calls':512,'max_trials':8000,'timeout_ms':50*3600000}
+                    offline_gepa.save(offline_gepa.CONFIG/'gepa.json',old)
+                    offline_gepa.save(offline_gepa.PLAN,{'seed':str(active),'search':{'max_rounds':30,'max_model_calls':512}})
+                    offline_gepa.save(offline_gepa.GEPA/'submission.json',{'job_id':job})
+                    offline_gepa.save(seed_copy,artifact)
+                    report=tree.parent/'evaluations/retained/report.pb';offline_gepa.save(report.with_suffix('.json'),{'healthy_task':'original'})
+                    report.write_bytes(b'original healthy capture')
+                    draft=tree.parent/'reflections/map.draft.json';offline_gepa.save(draft,{'paid_map':'original'})
+                    source_files.update({p:p.read_bytes() for p in (active,seed_copy,report,draft)})
+                    return 0
+                self.assertEqual(arguments[0],'--run');native_runs.append(active)
+                error=rate_limited and len(native_runs)==1
+                offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/state.json',{'jobs':{job:{
+                    'status':'error' if error else 'rejected','error':'gepa_model_rate_limited' if error else None,
+                    'user':offline_gepa.USER,'level':'L3','gepa':True}}})
+                offline_gepa.save(tree,{'status':'error' if error else 'validation_rejected',
+                    'error':'gepa_model_rate_limited' if error else None,'stop_reason':'model_budget',
+                    'active':1 if error else None,'batch':{'paid_maps':True} if error else None,
+                    'model_calls':512,'trials_used':1024,'rounds':30,'started_ms':1,
+                    'budget_extensions':[{'reason':'initial_budget','max_model_calls':512}],
+                    'holdout_started':False,'nodes':[{'id':0,'formal':'original'}]})
+                status=reproduce._read(offline_gepa.STATUS);status.update(job_id=job,job_status='error' if error else 'rejected')
+                offline_gepa.save(offline_gepa.STATUS,status)
+                if error:raise RuntimeError('offline_gepa.py_failed:1')
+                return 0
+            with patch.object(reproduce,'_native_gepa_no_new_candidate',side_effect=real_terminal), \
+                 patch.object(reproduce,'run',side_effect=native), \
+                 patch.object(reproduce._APPWORLD_LAYOUT,'version',side_effect=lambda artifact:f"fixture-native-{artifact['policy']['candidate']}"), \
+                 patch.object(reproduce.time,'sleep') as sleep:
+                yield initial,root,events,generated,retained,actual,source_files,native_runs,sleep
+
+    def test_real_inner_two_failures_rebind_before_same_job_budget_extension(self):
+        with tempfile.TemporaryDirectory() as td,self.advanced_fixture(td) as values:
+            initial,root,events,generated,retained,active,protected,native_runs,sleep=values
+            real_prefix=reproduce._run_all_with_seed_search;calls=[]
+            def prefix(seed,label,**budgets):
+                calls.append(seed)
+                if len(calls)==1:return real_prefix(seed,label,**budgets)
+                self.assertEqual(seed,active[0]);self.assertNotEqual(seed,initial)
+                self.assertEqual(budgets['gepa_max_model_calls'],1024)
+                receipt=offline_gepa.read(offline_gepa.PLAN)['budget_extension']
+                self.assertEqual(receipt['seed'],str(seed));self.assertEqual(receipt['job_id'],'same-native-job')
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix), \
+                 patch.object(reproduce,'_reserve_after_unqualified_native_search') as reserve:
+                result=reproduce._run_all_autonomously(initial,'strategy')
+            self.assertEqual(result['status'],'published');self.assertEqual(len(generated),2)
+            self.assertEqual(calls,[initial,active[0]]);reserve.assert_not_called();sleep.assert_not_called()
+            self.assertEqual(events,[(0,32),(1,32),(2,32),(2,100),'--prepare','--run'])
+            self.assertEqual([r['status'] for r in reproduce.seed_search()['attempts']],['failed','failed','passed'])
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+            self.assertEqual(offline_gepa.read(offline_gepa.WORKSPACE/'agent-evaluation/same-native-job/search/tree.json')['model_calls'],512)
+
+    def test_real_inner_rate_limit_at_cap_rebinds_before_normal_retry_and_extension(self):
+        with tempfile.TemporaryDirectory() as td,self.advanced_fixture(td,rate_limited=True) as values:
+            initial,root,events,generated,retained,active,protected,native_runs,sleep=values
+            real_prefix=reproduce._run_all_with_seed_search;calls=[]
+            def prefix(seed,label,**budgets):
+                calls.append(seed)
+                if len(calls)<=2:return real_prefix(seed,label,**budgets)
+                self.assertEqual(seed,active[0]);self.assertEqual(budgets['gepa_max_model_calls'],1024)
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix), \
+                 patch.object(reproduce,'_reserve_after_unqualified_native_search') as reserve:
+                result=reproduce._run_all_autonomously(initial,'strategy')
+            self.assertEqual(result['status'],'published');self.assertEqual(calls,[initial,active[0],active[0]])
+            self.assertEqual(native_runs,[active[0],active[0]]);self.assertEqual(len(generated),2)
+            sleep.assert_called_once_with(15);reserve.assert_not_called()
+            self.assertEqual(offline_gepa.read(offline_gepa.PLAN)['budget_extension']['model_calls_used'],512)
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_changed_seed_requires_plan_native_body_version_and_search_binding(self):
+        for defect in ('plan','native-body','native-version','current-seed'):
+            with self.subTest(defect=defect),tempfile.TemporaryDirectory() as td,self.advanced_fixture(td) as values:
+                initial,root,events,generated,retained,active,protected,native_runs,sleep=values
+                result=reproduce._run_all_with_seed_search(initial,'strategy');self.assertEqual(result['status'],'not_qualified')
+                current=active[0];state=offline_gepa.read(offline_gepa.GEPA/'lifecycle.json')
+                if defect=='plan':
+                    plan=offline_gepa.read(offline_gepa.PLAN);plan['seed']=str(initial);offline_gepa.save(offline_gepa.PLAN,plan)
+                elif defect=='native-body':
+                    offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/same-native-job/seed.json',{'wrong_source':True})
+                elif defect=='native-version':
+                    value=offline_gepa.read(current);value['policy']['candidate']=99;offline_gepa.save(current,value)
+                else:
+                    search=reproduce.seed_search();search['current_seed']=str(initial);reproduce._save_search(search)
+                before=offline_gepa.read(offline_gepa.PLAN)
+                with self.assertRaisesRegex(RuntimeError,'native_seed_binding_invalid'):
+                    reproduce._autonomous_native_seed(initial,state)
+                self.assertEqual(offline_gepa.read(offline_gepa.PLAN),before);sleep.assert_not_called()

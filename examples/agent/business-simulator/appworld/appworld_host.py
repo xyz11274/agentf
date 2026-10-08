@@ -1989,7 +1989,13 @@ class Trial:
                     # Native point keeps the end request pending until its
                     # registered children really report. Poll actual status,
                     # with a deadline; never synthesize child completions.
-                    deadline = real_clock() + 10.0
+                    now = real_clock()
+                    limit = now + 60.0
+                    task_deadline = getattr(self, "_task_deadline", None)
+                    if isinstance(task_deadline, (int, float)) and not isinstance(task_deadline, bool):
+                        limit = min(limit, task_deadline)
+                    deadline = min(now + 10.0, limit)
+                    event_count = None
                     closed = False
                     while real_clock() < deadline:
                         remaining = deadline - real_clock()
@@ -2003,8 +2009,19 @@ class Trial:
                                           "capture_complete": status["capture_complete"]}
                                 closed = True
                                 break
-                        except EvolutionError:
-                            pass
+                            observed = status.get("event_count")
+                            if (isinstance(observed, (int, float)) and not isinstance(observed, bool)
+                                    and 0 <= observed < float("inf") and observed == int(observed)):
+                                if event_count is not None and observed > event_count:
+                                    # A registered child is still reporting. Keep
+                                    # its original execution, within the task's
+                                    # remaining budget and a 60-second close cap.
+                                    deadline = min(limit, real_clock() + 10.0)
+                                event_count = max(event_count or 0, observed)
+                        except EvolutionError as error:
+                            if (error.status not in (0, 408, 429) and error.status < 500
+                                    or str(error).endswith("_cancelled")):
+                                raise AppWorldCaptureBoundaryError(str(error)) from None
                         remaining = deadline - real_clock()
                         if remaining > 0:
                             time.sleep(min(0.1, remaining))
@@ -2116,6 +2133,10 @@ class Trial:
 
     def receive(self):
         started = real_clock()
+        timeout = (self.task.get("budget") or {}).get("timeout_ms")
+        if (isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+                and 0 < timeout < float("inf")):
+            self._task_deadline = started + timeout / 1000.0
         synthetic_goal = synthetic_training_spec(self.task)
         raw_id = str((self.task.get("initial_state") or {})["source_task_id"])
         if not re.fullmatch(r"[a-z0-9]+_[0-9]+", raw_id):

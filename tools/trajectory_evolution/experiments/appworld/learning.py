@@ -948,6 +948,14 @@ def seed_control_input(controller, policy, admitted_tasks):
                                                  for row in feedback['trials']),
         memory_support=support)
     packet['training_statistics'] = statistics
+    development = getattr(controller, '_seed_development_feedback', None)
+    if development is not None:
+        packet['development_feedback'] = _development_public_feedback(development, policy, support)
+        feedback['development_preferred_failure_codes'] = sorted({code
+            for row in packet['development_feedback']['source_summary']
+            for code in row['train_supported_failure_codes']
+            if any(step['error_code'] == code for example in packet['development_feedback']['failure_examples']
+                   for step in example['steps'])})
     supported_ids = {item['memory_id'] for item in support if item['direct_failure_support_count']}
     packet['memories'].sort(key=lambda card: card['memory_id'] not in supported_ids)
     # Public model payload contains no per-task record, code, observation,
@@ -962,13 +970,79 @@ CONTROL_MODEL_FIELDS = frozenset(('action_primitives', 'aggressive_controls', 'b
     'matching', 'memories', 'training_statistics'))
 
 
+def _approved_development_feedback(value, source_ids):
+    """Reject free text, credentials, answers, raw events and unbound source IDs."""
+    fields = {'scope', 'tasks', 'source_summary', 'failure_examples'}
+    if (not isinstance(value, dict) or set(value) != fields
+            or value.get('scope') != 'development32_proposal_guidance_only'
+            or type(value.get('tasks')) is not int or value['tasks'] != 32
+            or not isinstance(value.get('source_summary'), list) or len(value['source_summary']) > 8
+            or not isinstance(value.get('failure_examples'), list) or len(value['failure_examples']) > 4
+            or len(json.dumps(value).encode()) > 4096):
+        raise ValueError('appworld_development_payload_invalid')
+    summary_fields = {'memory_id', 'regressed_tasks', 'improved_tasks', 'failed_tasks', 'passed_tasks',
+                      'train_supported_failure_codes', 'observed_failed_api_context'}
+    for row in value['source_summary']:
+        if (not isinstance(row, dict) or set(row) != summary_fields or row.get('memory_id') not in source_ids
+                or type(row['observed_failed_api_context']) is not bool
+                or any(type(row[name]) is not int or not 0 <= row[name] <= 32
+                       for name in ('regressed_tasks', 'improved_tasks', 'failed_tasks', 'passed_tasks'))
+                or not isinstance(row['train_supported_failure_codes'], list)
+                or len(row['train_supported_failure_codes']) > 4
+                or any(not isinstance(code, str) or re.fullmatch(r'appworld_[a-z0-9_]{1,80}', code) is None
+                       for code in row['train_supported_failure_codes'])):
+            raise ValueError('appworld_development_payload_source_invalid')
+    supplied = {row['memory_id'] for row in value['source_summary']}
+    for row in value['failure_examples']:
+        if (not isinstance(row, dict) or set(row) != {'was_l0_success', 'goal_completed',
+                'termination_reason', 'applied_source_ids', 'steps'}
+                or type(row['was_l0_success']) is not bool or type(row['goal_completed']) is not bool
+                or row['termination_reason'] not in ('max_steps', 'max_iterations', 'bounded_recovery_exhausted',
+                    'task_timeout', 'completed', 'task_completed', 'normal', 'budget_exhausted', 'other')
+                or not isinstance(row['applied_source_ids'], list) or len(row['applied_source_ids']) > 3
+                or any(mid not in supplied for mid in row['applied_source_ids'])
+                or not isinstance(row['steps'], list) or len(row['steps']) > 6):
+            raise ValueError('appworld_development_payload_step_invalid')
+        for step in row['steps']:
+            if (not isinstance(step, dict) or set(step) != {'requested_api', 'parameter_names', 'status', 'evidence_basis', 'error_code', 'applied_before'}
+                    or not isinstance(step['requested_api'], str) or len(step['requested_api']) > 180
+                    or re.fullmatch(r'apis\.[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_][A-Za-z_0-9]*', step['requested_api']) is None
+                    or not isinstance(step['parameter_names'], list) or len(step['parameter_names']) > 16
+                    or any(not isinstance(name, str) or re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,63}', name) is None
+                           for name in step['parameter_names'])
+                    or step['status'] not in ('code_block_completed', 'code_block_failed')
+                    or step['evidence_basis'] != 'requested_code'
+                    or step['error_code'] is not None and (not isinstance(step['error_code'], str)
+                       or re.fullmatch(r'appworld_[a-z0-9_]{1,80}', step['error_code']) is None)
+                    or not isinstance(step['applied_before'], list) or len(step['applied_before']) > 3
+                    or any(mid not in supplied for mid in step['applied_before'])):
+                raise ValueError('appworld_development_payload_step_invalid')
+    return deepcopy(value)
+
+
+def _development_packet_subset(packet):
+    """A model's subset sees only feedback for cards that it actually receives."""
+    result = deepcopy(packet)
+    if 'development_feedback' not in result:
+        return result
+    ids = {row['memory_id'] for row in result.get('memories', [])}
+    value = result['development_feedback']
+    value['source_summary'] = [row for row in value['source_summary'] if row['memory_id'] in ids]
+    supplied = {row['memory_id'] for row in value['source_summary']}
+    for example in value['failure_examples']:
+        example['applied_source_ids'] = [mid for mid in example['applied_source_ids'] if mid in supplied]
+        for step in example['steps']:
+            step['applied_before'] = [mid for mid in step['applied_before'] if mid in supplied]
+    return result
+
+
 def approved_control_packet(packet):
     """Pure local verification of the proposed approved-memory/counts interface.
 
     This function performs no model or network call. Raw local evidence is not
     part of this contract; any extra top-level or memory field is rejected.
     """
-    if set(packet) != CONTROL_MODEL_FIELDS:
+    if set(packet) - {'development_feedback'} != CONTROL_MODEL_FIELDS:
         raise ValueError('appworld_control_payload_fields_invalid')
     result = deepcopy(packet)
     for name in ('memories', 'control_sources'):
@@ -1034,6 +1108,9 @@ def approved_control_packet(packet):
                 continue
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                 raise ValueError('appworld_control_payload_loop_counter_invalid')
+    if 'development_feedback' in result:
+        ids = {row['memory_id'] for name in ('memories', 'control_sources') for row in result[name]}
+        result['development_feedback'] = _approved_development_feedback(result['development_feedback'], ids)
     return result
 
 
@@ -1185,6 +1262,18 @@ def _control_model_reply(controller, packet, repair_reason=None, transport=None)
         'Return only the native JSON action_rules/loop_rules/schedule_rules draft; concise reasons. '
         + CONTROL_DRAFT_FIELDS
     )
+    if packet.get('development_feedback'):
+        instructions += (' The bounded development32 feedback is proposal guidance, not TRAIN authority. '
+            'Repair the observed failure using only exact TRAIN-supported sources and budgets; '
+            'distinguish successful login from passing access_token to later protected calls. '
+            'A source applied before a failed action is associated, not proven harmful. '
+            'requested_api and parameter_names describe requested code only, with evidence_basis=requested_code. '
+            'code_block_completed/code_block_failed is the World block status, never each API success. '
+            'Argument names omit values and positional bindings: do not guess credential values or infer missing '
+            'arguments solely from absent keyword names. '
+            'Unfinished goals after completed tools or budget exhaustion are not structured API failures: '
+            'do not invent stopping, scheduling or replan controls without cited TRAIN support. '
+            'Prefer one targeted supported control change while preserving the evaluated anchor.')
     instructions += (' The current native compiler accepted exact cited disjoint-rule support for '
         'this candidate; generate at most one strongest source-bound rule per supported mechanism. '
         if getattr(controller, '_seed_disjoint_loop_capable', False) else
@@ -1423,10 +1512,21 @@ def _compile_evidence_recovery(controller, policy, controls, feedback, status):
                        if rule.get('source_experience') for code in rule.get('error_codes', [])}
             observed = set(feedback.get('covered_failure_mechanisms') or ())
             preferred = (observed - covered) & {'appworld_auth_401', 'appworld_missing_access_token'}
+        development_preferred = set(feedback.get('development_preferred_failure_codes') or ())
+        if development_preferred:
+            preferred = development_preferred
         multi = bool(getattr(controller, '_seed_disjoint_loop_capable', False))
-        draft, provenance = _evidence_bounded_control_draft(controller, policy, feedback,
-            preferred_failure_codes=preferred, dominant_cited_mechanism=dominant,
-            multi_mechanism=multi, max_rules=int(controls.get('max_rules', 16)))
+        try:
+            draft, provenance = _evidence_bounded_control_draft(controller, policy, feedback,
+                preferred_failure_codes=preferred, dominant_cited_mechanism=dominant,
+                multi_mechanism=multi, max_rules=int(controls.get('max_rules', 16)))
+        except RuntimeError as exc:
+            if not development_preferred or str(exc) != 'appworld_evidence_recovery_preferred_failure_unsupported':
+                raise
+            preferred = None
+            draft, provenance = _evidence_bounded_control_draft(controller, policy, feedback,
+                dominant_cited_mechanism=dominant, multi_mechanism=multi,
+                max_rules=int(controls.get('max_rules', 16)))
     except RuntimeError as exc:
         status['evidence_fallback'] = {'status': 'insufficient_evidence', 'reason': str(exc), 'model_calls': 0}
         raise
@@ -2064,11 +2164,13 @@ def _l1_runtime_queries(controller, policy, trace, config, public_state=False, o
 
 
 def _english_trigger_model_reply(controller, packet, repair_reason=None, transport=None):
-    approved = approved_control_packet(packet)
+    approved = approved_control_packet(_development_packet_subset(packet))
     # New L1 purpose is disabled unless the caller explicitly enables it after
     # confirming authorization. The outgoing data stays inside the same five
     # generalized card fields and anonymous full-training statistics.
     outgoing = {'memories': approved['memories'], 'training_statistics': approved['training_statistics']}
+    if 'development_feedback' in approved:
+        outgoing['development_feedback'] = approved['development_feedback']
     instructions = (
         'Compile English lexical retrieval conditions for the supplied approved historical experiences. '
         'Return exactly {"triggers":[{"memory_id":"supplied ID","trigger_pattern":"English condition"}]}. '
@@ -2088,6 +2190,12 @@ def _english_trigger_model_reply(controller, packet, repair_reason=None, transpo
         'Never require the recommended corrective action to have already executed. Use the approved current intent or object '
         'with a current operation or its targeted public API documentation; do not invent abstract readiness flags. '
         'Output complete JSON only; no prose or truncation. Omit unsupported items rather than widening them.')
+    if outgoing.get('development_feedback'):
+        instructions += (' Use the supplied development32 feedback to prioritize existing source mechanisms '
+            'that were missing before unfinished goals. Do not learn a task answer or alter card meaning. '
+            'Successful authentication alone does not pass access_token to a subsequent API. '
+            'requested_api/parameter_names are requested code, not observed calls; code_block status does not prove each API ran. '
+            'Do not suppress a card just because it was applied to a failed task.')
     if repair_reason:
         feedback = {'reason': repair_reason} if isinstance(repair_reason, str) else dict(repair_reason)
         if (not set(feedback) <= {'reason', 'memory_id'} or
@@ -3583,6 +3691,7 @@ def _expand_english_trigger_subset(controller, policy, compiled, sources, packet
 
 def generate_english_triggers(controller, policy, admitted_tasks, diagnostic, *, prevention_compilation=False):
     packet, feedback, _ = seed_control_input(controller, policy, admitted_tasks)
+    controller._seed_development_training_feedback = feedback
     try:
         sources = (_english_trigger_sources(controller, policy, feedback, prevention_compilation=True)
                    if prevention_compilation else _english_trigger_sources(controller, policy, feedback))
@@ -4935,6 +5044,480 @@ def _freeze_duplicate_l1_candidate(controller, target, label, current_snapshot, 
     return artifact
 
 
+def _verified_development_seed(controller, attempt, expected_ids=None):
+    """Development grades choose proposals; only TRAIN remains source authority."""
+    import stage_gate
+    root = controller.GEPA.resolve()
+    published = controller.PUBLISHED.resolve()
+    seed = Path(attempt.get('seed') or '').resolve()
+    path = Path(attempt.get('pilot_comparison') or '').resolve()
+    if not seed.is_relative_to(published) or not seed.is_file() or not path.is_relative_to(root) or not path.is_file():
+        raise RuntimeError('appworld_development_feedback_binding_invalid')
+    artifact = controller.read(seed)
+    version = controller.version(artifact)
+    report = controller.read(path)
+    baseline_path = Path(report.get('source_l0') or '').resolve()
+    if not baseline_path.is_relative_to(root) or not baseline_path.is_file():
+        raise RuntimeError('appworld_development_feedback_binding_invalid')
+    _, verified = stage_gate.verify_stage('32', path, baseline_path, seed)
+    if verified.get('coverage_pass') is not True or verified.get('seed_match') is not True:
+        raise RuntimeError('appworld_development_feedback_incomplete')
+    progress = controller.read(path.with_name('progress.json'))
+    baseline = controller.read(baseline_path)
+    items, originals = report.get('items') or [], baseline.get('items') or []
+    current = {row.get('task_id'): row for row in items}
+    original = {row.get('task_id'): row for row in originals}
+    if (report.get('status') != 'complete' or baseline.get('status') != 'complete'
+            or len(items) != 32 or len(current) != 32 or current.keys() != original.keys()
+            or len(originals) != 32 or progress.get('artifact') != artifact
+            or report.get('host_version') != baseline.get('host_version')
+            or report.get('judge_projection') != baseline.get('judge_projection')
+            or expected_ids is not None and set(current) != set(expected_ids)):
+        raise RuntimeError('appworld_development_feedback_binding_invalid')
+    for task, row in current.items():
+        old = original[task]
+        if (row.get('loaded_version') != version or row.get('execution_status') != 'completed'
+                or type(row.get('strict_passed')) is not int or row['strict_passed'] not in (0, 1)
+                or type(old.get('strict_passed')) is not int or old['strict_passed'] not in (0, 1)
+                or type(row.get('quality')) not in (int, float) or not 0 <= row['quality'] <= 1
+                or type(row.get('avg_invalid_loop')) not in (int, float) or row['avg_invalid_loop'] < 0):
+            raise RuntimeError('appworld_development_feedback_incomplete')
+    return {'seed': seed, 'comparison': path, 'artifact': artifact, 'version': version,
+            'current': current, 'baseline': original, 'progress': progress,
+            'rank': (sum(row['strict_passed'] for row in items), sum(row['quality'] for row in items),
+                     -sum(row['avg_invalid_loop'] for row in items))}
+
+
+def _development_trial_rows(controller, evidence, reports):
+    """Read only the bound 32 native grade sources, once per local invocation."""
+    root = controller.GEPA.resolve()
+    rows = {}
+    for shard in (evidence['progress'].get('shards') or {}).values():
+        path = Path(shard.get('source_report') or '').resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise RuntimeError('appworld_development_feedback_native_source_missing')
+        manifest = controller.read(path.with_name('manifest.json'))
+        planned = (manifest.get('summary') or {}).get('planned_trials')
+        if manifest.get('complete') is not True or type(planned) not in (int, float) or not 0 < planned <= 32:
+            raise RuntimeError('appworld_development_feedback_native_scope_invalid')
+        if path not in reports:
+            reports[path] = controller.read(path)
+        native = reports[path]
+        if native.get('complete') is not True:
+            raise RuntimeError('appworld_development_feedback_native_source_incomplete')
+        source_tasks = [row.get('task_id') for row in native.get('trials') or []]
+        if len(set(source_tasks)) != len(source_tasks) or not set(source_tasks) <= set(evidence['current']):
+            raise RuntimeError('appworld_development_feedback_native_scope_invalid')
+        for row in native.get('trials') or []:
+            task = row.get('task_id')
+            compact = evidence['current'][task]
+            if (row.get('trial_id') != compact.get('trial_id')
+                    or (row.get('evidence') or {}).get('loaded_version') != evidence['version']
+                    or controller._trial_error_code(row) is not None
+                    or not controller.framework_capture_complete(row)
+                    or not controller._has_complete_loop_review(row)):
+                raise RuntimeError('appworld_development_feedback_native_binding_invalid')
+            if task in rows and rows[task] != row:
+                raise RuntimeError('appworld_development_feedback_native_binding_invalid')
+            rows[task] = row
+    if rows.keys() != evidence['current'].keys():
+        raise RuntimeError('appworld_development_feedback_native_source_incomplete')
+    return rows
+
+
+def _development_action_apis(event):
+    """Export only API identifiers and argument names; never code or values."""
+    import ast
+    code = (event.get('input') or {}).get('code')
+    if not isinstance(code, str):
+        return []
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return []
+    result = []
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+            continue
+        owner = call.func.value
+        if (isinstance(owner, ast.Attribute) and isinstance(owner.value, ast.Name)
+                and owner.value.id == 'apis'
+                and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,79}', owner.attr)
+                and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,79}', call.func.attr)):
+            result.append({'requested_api': 'apis.' + owner.attr + '.' + call.func.attr,
+                           'parameter_names': sorted({arg.arg for arg in call.keywords if arg.arg and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,63}', arg.arg)})[:16]})
+    return result[:8]
+
+
+def _development_observations(controller, evidence, rows, authority, anchor_current=None):
+    options = evidence['artifact']['policy']['options']
+    approved = {(ref['memory_id'], ref['content_revision']) for ref in options.get('approved_experiences', [])}
+    old_cards = {(card['memory_id'], card['content_revision']): card
+                 for card in evidence['artifact']['policy']['snapshot'].get('experiences', [])}
+    valid = {pair for pair in approved if pair in authority and old_cards.get(pair) == authority[pair]}
+    counts, examples = {}, []
+    for task, row in rows.items():
+        compact, original = evidence['current'][task], evidence['baseline'][task]
+        passed, prior = compact['strict_passed'], original['strict_passed']
+        traces = (row.get('evidence') or {}).get('traces') or [(row.get('evidence') or {}).get('trace') or {}]
+        events = [(trace_index, trace.get('identity') or {}, event)
+                  for trace_index, trace in enumerate(traces) for event in trace.get('events') or []]
+        used, applied_at, actions, terminal, queries = set(), {}, {}, {}, {}
+        sequence, executed_positions = [], []
+        for position, (trace_index, identity, event) in enumerate(events):
+            kind, attributes = event.get('kind'), event.get('attributes') or {}
+            decision = attributes.get('decision')
+            if (kind == 'custom' and attributes.get('type') == 'policy.query' and isinstance(decision, dict)
+                    and decision.get('status') == 'ready'):
+                query = decision.get('query') or {}; advice = query.get('advice_query') or {}
+                key = (trace_index, decision.get('policy_id'), advice.get('query_id'),
+                       advice.get('decision_id'), query.get('execution_id'))
+                refs = decision.get('experiences') or []
+                if (query.get('boundary') in ('llm', 'model') and identity and advice.get('identity') == identity
+                        and all(isinstance(value, str) and value for value in key[1:])
+                        and isinstance(refs, list) and refs):
+                    queries[key] = (identity, {(ref.get('memory_id'), ref.get('content_revision'))
+                                              for ref in refs if isinstance(ref, dict)})
+            receipt = attributes.get('receipt') or {}
+            application = event.get('application') or receipt.get('application') or {}
+            key = (trace_index, application.get('policy_id'), application.get('query_id'),
+                   application.get('decision_id'), receipt.get('execution_id'))
+            bound = queries.get(key)
+            if (kind == 'advice.applied' and application.get('status') == 'applied'
+                    and application.get('reason') == 'host_boundary_verified'
+                    and receipt.get('boundary') in ('llm', 'model') and bound
+                    and receipt.get('application') == application
+                    and receipt.get('identity') == identity == bound[0]):
+                for ref in receipt.get('experiences') or []:
+                    pair = (ref.get('memory_id'), ref.get('content_revision'))
+                    if pair in valid and pair in bound[1]:
+                        used.add(pair); applied_at.setdefault(pair, []).append((trace_index, position))
+            elif (kind == 'action.start' and event.get('loop_id') == 'main'
+                    and event.get('operation') == 'appworld.execute' and attributes.get('semantic') == 'action'):
+                actions[(trace_index, event.get('action_id'))] = _development_action_apis(event)
+            elif (kind == 'action.end' and event.get('loop_id') == 'main'
+                    and attributes.get('executed') is True and attributes.get('semantic') == 'action'
+                    and isinstance((event.get('output') or {}).get('observation'), str)):
+                executed_positions.append((trace_index, position))
+                code = (event.get('error') or {}).get('code') or attributes.get('observed_error_code')
+                code = code if isinstance(code, str) and re.fullmatch(r'appworld_[a-z0-9_]{1,80}', code) else None
+                status = event.get('status')
+                for api in actions.get((trace_index, event.get('action_id')), []):
+                    if status in ('completed', 'failed'):
+                        sequence.append(dict(api, status='code_block_' + status, evidence_basis='requested_code',
+                            error_code=code, applied_before=[pair[0] for pair in sorted(used)
+                            if any(t == trace_index and p < position for t, p in applied_at[pair])][:3]))
+            elif kind == 'run.end' and isinstance(event.get('output'), dict):
+                terminal = event['output']
+        timely = {pair for pair in used if any(t == trace_index and p < position
+                  for t, p in applied_at[pair] for trace_index, position in executed_positions)}
+        for pair in timely:
+            record = counts.setdefault(pair, {'regressed_tasks': 0, 'improved_tasks': 0,
+                'failed_tasks': 0, 'passed_tasks': 0})
+            record['regressed_tasks'] += int(prior == 1 and passed == 0)
+            record['improved_tasks'] += int(prior == 0 and passed == 1)
+            record['failed_tasks'] += int(passed == 0)
+            record['passed_tasks'] += int(passed == 1)
+        if not passed:
+            reason = terminal.get('termination_reason')
+            reason = reason if reason in ('max_steps', 'max_iterations', 'bounded_recovery_exhausted',
+                'task_timeout', 'completed', 'task_completed', 'normal', 'budget_exhausted') else 'other'
+            examples.append({'_anchor_success': bool(anchor_current is not None and
+                anchor_current[task]['strict_passed'] == 1),
+                'was_l0_success': prior == 1, 'goal_completed': terminal.get('task_completed') is True,
+                'termination_reason': reason, 'applied_source_ids': [pair[0] for pair in sorted(used)][:3],
+                'steps': sequence[-6:]})
+    return counts, examples
+
+
+def _development_seed_feedback(controller, target, label, snapshot):
+    """A normal failed reservation consumes development feedback, never holdout."""
+    root = getattr(controller, 'GEPA', None)
+    if root is None:
+        return None  # Standalone initial TRAIN freeze has no seed-search reservation.
+    path = Path(root) / 'status.json'
+    search = (controller.read(path).get('seed_search') or {}) if path.is_file() else {}
+    generation = search.get('automatic_seed_generation') or {}
+    if (generation.get('method') != 'approved_training_native_seed'
+            or generation.get('status') != 'pending' or generation.get('round') != search.get('round', 1)
+            or generation.get('seed_label') != label or generation.get('seed') != str(target.resolve())):
+        return None
+    source = generation.get('source_seed')
+    source_attempt = generation.get('source_attempt')
+    if source_attempt is None:
+        return None  # A legacy/native-next reservation may have no registered pilot attempt.
+    if type(source_attempt) is not int or source_attempt < 1:
+        raise RuntimeError('appworld_development_feedback_binding_invalid')
+    attempt = next((row for row in search.get('attempts') or []
+        if row.get('attempt') == generation.get('source_attempt') and row.get('seed') == source
+        and row.get('round', 1) == search.get('round', 1)), None)
+    if attempt is None:
+        raise RuntimeError('appworld_development_feedback_binding_invalid')
+    if attempt.get('status') not in ('failed', 'pilot_passed'):
+        return None  # Other normal reservation reasons have no failed pilot feedback.
+    latest = _verified_development_seed(controller, attempt)
+    choices = [latest]
+    for previous in search.get('attempts') or []:
+        if previous == attempt:
+            continue
+        try:
+            value = _verified_development_seed(controller, previous, latest['current'])
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            continue
+        # A historical source remains usable only under today's exact TRAIN authority.
+        current_cards = {(card['memory_id'], card['content_revision']): card
+                         for card in snapshot.get('experiences', [])}
+        refs = value['artifact']['policy']['options'].get('approved_experiences') or []
+        old_cards = {(card['memory_id'], card['content_revision']): card
+                     for card in value['artifact']['policy']['snapshot'].get('experiences', [])}
+        if refs and all(old_cards.get((ref['memory_id'], ref['content_revision'])) ==
+                        current_cards.get((ref['memory_id'], ref['content_revision'])) and
+                        (ref['memory_id'], ref['content_revision']) in current_cards for ref in refs):
+            choices.append(value)
+    anchor = choices[0]
+    for value in choices[1:]:
+        if (value['rank'][0] >= anchor['rank'][0] and value['rank'][1] >= anchor['rank'][1]
+                and value['rank'] > anchor['rank']):
+            anchor = value
+    authority = {(card['memory_id'], card['content_revision']): card for card in snapshot.get('experiences', [])}
+    reports = {}
+    latest_counts, examples = _development_observations(controller, latest,
+        _development_trial_rows(controller, latest, reports), authority, anchor['current'])
+    anchor_counts, _ = _development_observations(controller, anchor,
+        _development_trial_rows(controller, anchor, reports), authority)
+    local = {'latest': latest, 'anchor': anchor, 'anchor_counts': anchor_counts,
+        'source_counts': latest_counts, 'failure_examples': examples,
+        'seen_versions': set()}
+    for row in search.get('attempts') or []:
+        recorded_path = row.get('pilot_comparison')
+        recorded = (controller.read(Path(recorded_path).with_name('progress.json')).get('artifact')
+                    if isinstance(recorded_path, str) and Path(recorded_path).with_name('progress.json').is_file() else None)
+        if isinstance(recorded, dict) and recorded:
+            local['seen_versions'].add(controller.version(recorded))
+        seed_path = row.get('seed')
+        if isinstance(seed_path, str) and Path(seed_path).is_file():
+            local['seen_versions'].add(controller.version(controller.read(Path(seed_path))))
+    return local
+
+
+def _development_source_api_context(card, requested):
+    """Proposal guidance only; requested code is never API execution authority."""
+    text = card.get('content', '') + '\n' + card.get('trigger_pattern', '')
+    qualified = set(re.findall(r'\bapis\.[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_][A-Za-z_0-9]*', text))
+    if requested in qualified:
+        return True
+    if re.fullmatch(r'apis\.[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_][A-Za-z_0-9]*', requested) is None:
+        return False
+    _, namespace, method = requested.split('.')
+    # An explicitly qualified source cannot be transferred to another app
+    # merely because its method has the same leaf name.
+    if any(value.rsplit('.', 1)[-1] == method for value in qualified):
+        return False
+    if re.search(r'(?<![A-Za-z_0-9.])' + re.escape(method) + r'(?![A-Za-z_0-9])', text) is None:
+        return False
+    catalog = getattr(_development_source_api_context, 'catalog', None)
+    if catalog is None:
+        directory = (Path(__file__).resolve().parents[4] /
+            'examples/agent/business-simulator/appworld/runtime/world/data/api_docs/standard')
+        catalog = {}
+        for path in directory.glob('*.json'):
+            for name in json.loads(path.read_text()):
+                catalog.setdefault(name, set()).add(path.stem)
+        _development_source_api_context.catalog = catalog
+    # A bare API has no source namespace. Associate it only when the public
+    # contract has one exact namespace; ambiguous names remain unavailable.
+    return catalog.get(method) == {namespace}
+
+
+def _development_public_feedback(local, policy, training_support):
+    """Small anonymous model guidance cannot create a source or a TRAIN citation."""
+    cards = {card['memory_id']: card for card in policy['snapshot'].get('experiences', [])}
+    approved = {ref['memory_id'] for ref in policy['options'].get('approved_experiences', [])}
+    support = {row['memory_id']: row for row in training_support}
+    examples = sorted(deepcopy(local['failure_examples']), key=lambda row: (row.get('_anchor_success', False) and not row['was_l0_success'],
+                      row.get('_anchor_success', False), row['was_l0_success'],
+                      row['termination_reason'] in ('max_steps', 'bounded_recovery_exhausted')), reverse=True)[:4]
+    for example in examples:
+        example.pop('_anchor_success', None)  # Local ranking only; the public contract is unchanged.
+    counts = {pair[0]: value for pair, value in local['source_counts'].items() if pair[0] in approved}
+    related, observed_context = set(counts), set()
+    for example in examples:
+        actual = {step['requested_api'] for step in example['steps']}
+        for mid in approved:
+            if any(_development_source_api_context(cards[mid], api) for api in actual):
+                related.add(mid); observed_context.add(mid)
+    local['observed_context_sources'] = observed_context
+    ranked = sorted(related, key=lambda mid: (-counts.get(mid, {}).get('regressed_tasks', 0),
+                    -counts.get(mid, {}).get('failed_tasks', 0), mid not in observed_context, mid))[:8]
+    summaries = [{'memory_id': mid, **counts.get(mid, {'regressed_tasks': 0, 'improved_tasks': 0,
+        'failed_tasks': 0, 'passed_tasks': 0}), 'observed_failed_api_context': mid in observed_context, 'train_supported_failure_codes': sorted(
+        code for code in support.get(mid, {}).get('failure_support', {})
+        if re.fullmatch(r'appworld_[a-z0-9_]{1,80}', code))[:4]} for mid in ranked]
+    # Only supplied source IDs and machine API/argument names survive external projection.
+    allowed = set(ranked)
+    for example in examples:
+        example['applied_source_ids'] = [mid for mid in example['applied_source_ids'] if mid in allowed]
+        for step in example['steps']:
+            step['applied_before'] = [mid for mid in step['applied_before'] if mid in allowed]
+    result = {'scope': 'development32_proposal_guidance_only', 'tasks': 32,
+        'source_summary': summaries, 'failure_examples': examples}
+    if len(json.dumps(result).encode()) > 4096:
+        for example in examples:
+            example['steps'] = example['steps'][-3:]
+    while len(json.dumps(result).encode()) > 4096 and any(example['steps'] for example in examples):
+        max(examples, key=lambda example: len(json.dumps(example)))['steps'].pop(0)
+    if len(json.dumps(result).encode()) > 4096:
+        result['failure_examples'] = examples[:2]
+    return _approved_development_feedback(result, approved)
+
+
+def _compile_development_l1_candidate(controller, local, current_snapshot):
+    """One regression-associated ablation; its benefit remains unmeasured."""
+    anchor = local['anchor']['artifact']
+    policy, counts = anchor['policy'], local['anchor_counts']
+    options = policy['options']
+    authority = {(card['memory_id'], card['content_revision']): card
+                 for card in current_snapshot.get('experiences', [])}
+    cards = {(card['memory_id'], card['content_revision']): card
+             for card in policy['snapshot'].get('experiences', [])}
+    refs = {(ref['memory_id'], ref['content_revision']) for ref in options.get('approved_experiences', [])}
+    if any(pair not in authority or cards.get(pair) != authority[pair] for pair in refs):
+        raise RuntimeError('appworld_development_feedback_source_no_longer_approved')
+    disabled = {(ref['memory_id'], ref['content_revision']) for ref in options.get('disabled_injections', [])}
+    active = set(counts) & refs - disabled
+    if len(active) < 2:
+        return None
+    ranked = sorted((pair for pair in active if counts[pair]['regressed_tasks'] >= 2 and
+                     counts[pair]['regressed_tasks'] > counts[pair]['improved_tasks']),
+                    key=lambda pair: (-counts[pair]['regressed_tasks'], counts[pair]['improved_tasks'], pair))
+    for pair in ranked:
+        next_options = deepcopy(options)
+        next_options['disabled_injections'] = deepcopy(options.get('disabled_injections') or []) + [
+            dict(zip(('memory_id', 'content_revision'), pair))]
+        if 'l1_prevention_sources' in next_options:
+            next_options['l1_prevention_sources'] = [mid for mid in next_options['l1_prevention_sources'] if mid != pair[0]]
+        compiled = json.loads(controller.native(controller.BINARY, controller.ROOT,
+            ['runtime', 'recompile'], {'policy': policy, 'options': next_options}))
+        if compiled.get('snapshot') != policy['snapshot'] or compiled.get('options') != next_options:
+            raise RuntimeError('appworld_development_feedback_native_ablation_invalid')
+        candidate = deepcopy(anchor); candidate['policy'] = compiled
+        if controller.version(candidate) not in local['seen_versions']:
+            return candidate, pair
+    return None
+
+
+def _development_anchor_candidate(controller, artifact, local):
+    """Protect the best same-task strategy; test at most one new TRAIN control."""
+    anchor = local['anchor']['artifact']
+    authority = {(card['memory_id'], card['content_revision']): card for card in
+                 artifact['policy']['snapshot'].get('experiences', [])}
+    old_cards = {(card['memory_id'], card['content_revision']): card for card in
+                 anchor['policy']['snapshot'].get('experiences', [])}
+    refs = anchor['policy']['options'].get('approved_experiences') or []
+    if any((ref['memory_id'], ref['content_revision']) not in authority or
+           old_cards.get((ref['memory_id'], ref['content_revision'])) !=
+           authority[(ref['memory_id'], ref['content_revision'])] for ref in refs):
+        raise RuntimeError('appworld_development_feedback_source_no_longer_approved')
+    base_options = anchor['policy']['options']
+    proposed_options = artifact['policy']['options']
+    approved = {(ref['memory_id'], ref['content_revision']) for ref in proposed_options.get('approved_experiences', [])}
+    for name in ('action_rules', 'loop_rules', 'schedule_rules'):
+        for rule in proposed_options.get(name, []):
+            ref = rule.get('source_experience') or {}
+            pair = (ref.get('memory_id'), ref.get('content_revision'))
+            if pair not in approved or rule in base_options.get(name, []):
+                continue
+            options = deepcopy(base_options)
+            options.setdefault(name, []).append(deepcopy(rule))
+            if ref not in options.get('approved_experiences', []):
+                options.setdefault('approved_experiences', []).append(deepcopy(ref))
+                # Authorizing a control does not authorize a new L1 deployment.
+                options.setdefault('disabled_injections', []).append(deepcopy(ref))
+            try:
+                compiled = json.loads(controller.native(controller.BINARY, controller.ROOT,
+                    ['runtime', 'recompile'], {'policy': artifact['policy'], 'options': options}))
+            except RuntimeError as exc:
+                if str(exc) != 'native_runtime_recompile_failed':
+                    raise
+                continue  # An incompatible candidate control does not replace the elite.
+            candidate = deepcopy(anchor); candidate['policy'] = compiled
+            if (compiled.get('snapshot') != artifact['policy']['snapshot'] or compiled.get('options') != options):
+                raise RuntimeError('appworld_development_feedback_anchor_invalid')
+            if controller.version(candidate) not in local['seen_versions']:
+                return candidate
+    for override in proposed_options.get('experience_overrides', []):
+        ref = override.get('source_experience') or {}
+        mid, pair = ref.get('memory_id'), (ref.get('memory_id'), ref.get('content_revision'))
+        if (pair not in approved or mid not in local.get('observed_context_sources', set())
+                or any(row.get('source_experience') == ref and row == override
+                       for row in base_options.get('experience_overrides', []))):
+            continue
+        options = deepcopy(base_options)
+        rewrites = options.setdefault('experience_overrides', [])
+        position = next((index for index, row in enumerate(rewrites) if row.get('source_experience') == ref), None)
+        if position is None:
+            rewrites.append(deepcopy(override))
+        else:
+            rewrites[position] = deepcopy(override)
+        if ref not in options.get('approved_experiences', []):
+            options.setdefault('approved_experiences', []).append(deepcopy(ref))
+        options['disabled_injections'] = [row for row in options.get('disabled_injections', []) if row != ref]
+        if mid in proposed_options.get('l1_prevention_sources', []):
+            markers = list(options.get('l1_prevention_sources', []))
+            if mid not in markers:
+                if len(markers) >= 16:
+                    continue
+                markers.append(mid)
+            options['l1_prevention_sources'] = markers
+        compiled = json.loads(controller.native(controller.BINARY, controller.ROOT,
+            ['runtime', 'recompile'], {'policy': artifact['policy'], 'options': options}))
+        if compiled.get('options') != options or compiled.get('snapshot') != artifact['policy']['snapshot']:
+            raise RuntimeError('appworld_development_feedback_anchor_invalid')
+        candidate = deepcopy(anchor); candidate['policy'] = compiled
+        training = getattr(controller, '_seed_development_training_feedback', None)
+        if training is None:
+            continue
+        sources = _english_trigger_sources(controller, compiled, training,
+            candidate_artifact=candidate, prevention_compilation=True)
+        if mid not in sources:
+            continue
+        try:
+            verified = _compile_english_triggers(controller, compiled,
+                {'triggers': [{'memory_id': mid, 'trigger_pattern': override['trigger_pattern']}]}, sources)
+        except ValueError as exc:
+            if not str(exc).startswith('appworld_english_trigger_'):
+                raise
+            continue
+        if verified['options'] != compiled['options'] or verified['snapshot'] != compiled['snapshot']:
+            raise RuntimeError('appworld_development_feedback_anchor_invalid')
+        if controller.version(candidate) not in local['seen_versions']:
+            return candidate
+    return deepcopy(anchor)  # Effective abstention; existing duplicate handling preserves paid receipts.
+
+
+def _save_development_ablation(controller, target, label, local, artifact, pair, diagnostic):
+    anchor = local['anchor']
+    diagnostic.update(published=True, development_feedback={
+        'source_seed': str(local['latest']['seed']), 'source_comparison': str(local['latest']['comparison']),
+        'anchor_seed': str(anchor['seed']), 'anchor_comparison': str(anchor['comparison']),
+        'scope': 'development32_proposal_guidance_only', 'change': 'single_l1_ablation',
+        'source_experience': dict(zip(('memory_id', 'content_revision'), pair)),
+        'association': 'paired_regression_not_proven_causality',
+        'regressed_tasks': local['anchor_counts'][pair]['regressed_tasks'],
+        'improved_tasks': local['anchor_counts'][pair]['improved_tasks'], 'model_calls': 0,
+        'requires_new_formal_gate': True}, control_learning={'status': 'reused_frozen', 'model_calls': 0},
+        english_trigger_learning={'status': 'reused_frozen', 'model_calls': 0})
+    manifest = deepcopy(controller.read(anchor['seed'].with_name('manifest.json')))
+    for name in ('generation_receipt', 'stage32_evaluation', 'stage100_evaluation'):
+        manifest.pop(name, None)
+    manifest.update(version=controller.version(artifact), parent_artifact=str(anchor['seed']),
+        development_feedback=deepcopy(diagnostic['development_feedback']))
+    controller.save(target, artifact)
+    controller.save(target.with_name('manifest.json'), manifest)
+    controller.save(controller.TRAINING / 'seed-compile-status.json', diagnostic)
+    return artifact
+
+
 def freeze_seed(controller, *, label='seed0', memory_path=None):
     validate_seed_label(label)
     target = controller.PUBLISHED / label / 'strategy.json'
@@ -4952,6 +5535,7 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
         return _freeze_english_trigger_candidate(controller, target, label,
             env.get('APPWORLD_ENGLISH_TRIGGERS_FROM', 'seed0'))
     duplicate_reservation = _duplicate_l1_generation(controller, target, label)
+    controller._seed_development_feedback = None
     admitted_tasks = _completed_training_tasks(controller)
     diagnostic_path = controller.TRAINING / 'seed-compile-status.json'
     previous_diagnostic = controller.read(diagnostic_path) if diagnostic_path.is_file() else {}
@@ -5032,6 +5616,22 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
     controller.save(controller.TRAINING / 'seed-compile-status.json', diagnostic)
     if not prompt_experiences:
         raise RuntimeError('no_validated_learned_prompt_experience_for_seed0')
+    if duplicate_reservation is None:
+        development = _development_seed_feedback(controller, target, label, snapshot)
+        controller._seed_development_feedback = development
+        if development is not None:
+            diagnostic['development_feedback'] = {
+                'source_seed': str(development['latest']['seed']),
+                'source_comparison': str(development['latest']['comparison']),
+                'anchor_seed': str(development['anchor']['seed']),
+                'anchor_comparison': str(development['anchor']['comparison']),
+                'scope': 'development32_proposal_guidance_only',
+                'authority': 'canonical_training_only', 'model_calls': 0}
+            if not retained_paid:
+                ablation = _compile_development_l1_candidate(controller, development, snapshot)
+                if ablation is not None:
+                    artifact, pair = ablation
+                    return _save_development_ablation(controller, target, label, development, artifact, pair, diagnostic)
     if duplicate_reservation is not None:
         return _freeze_duplicate_l1_candidate(controller, target, label, snapshot, diagnostic, duplicate_reservation)
     approved_experiences = prompt_experiences + control_experiences
@@ -5107,6 +5707,14 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
     artifact.update(level='L3', policy=policy)
     artifact = _seed_l1_window_options(controller, artifact)
     artifact = _compile_seed_prevention_sources(controller, artifact, admitted_tasks, diagnostic)
+    development = getattr(controller, '_seed_development_feedback', None)
+    if development is not None:
+        artifact = _development_anchor_candidate(controller, artifact, development)
+        policy = artifact['policy']
+        diagnostic['development_feedback']['change'] = ('abstention_same_effective_strategy'
+            if artifact == development['anchor']['artifact'] else 'single_source_bound_control_or_l1_condition')
+        diagnostic['compiled_rules'] = {name: len(policy['options'].get(name, []))
+            for name in ('action_rules', 'loop_rules', 'schedule_rules')}
     if target.exists() and controller.read(target) != artifact:
         raise RuntimeError('frozen_seed_cannot_be_overwritten')
     controller.save(target, artifact)
@@ -5120,6 +5728,8 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
         'planned_training_count': len(controller.ids('train')),
         'dev_tasks': controller.ids('dev'), 'scope': 'fresh_appworld_training_to_fixed_dev',
         'independent_holdout': False, 'validated_evidence_required': True}
+    if diagnostic.get('development_feedback'):
+        manifest['development_feedback'] = deepcopy(diagnostic['development_feedback'])
     generation_receipt = _compact_seed_generation_receipt(controller, artifact['policy'], diagnostic)
     if generation_receipt is not None:
         manifest['generation_receipt'] = generation_receipt
