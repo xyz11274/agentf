@@ -879,7 +879,7 @@ def _stage_review_recovery_state(output: Path, count: int, *, baseline: bool) ->
                 reasons = ' '.join(str(check.get('reason') or '')
                                    for check in row.get('checks') or [])
                 import re
-                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|502|503|504)|transport_(?:6|7|28|52|55|56|exhausted))\b', reasons):
+                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|500|502|503|504)|transport_(?:6|7|18|28|52|55|56|exhausted))\b', reasons):
                     if baseline or not _stage_projection_repaired(source, row):
                         return None
                     repaired_projection = True
@@ -3294,7 +3294,7 @@ def _baseline100_worker_checkpoint(seed: Path, state: dict) -> str | None:
                 return None
             if _APPWORLD_LAYOUT._judge_error_code(row) is not None:
                 reasons = ' '.join(str(check.get('reason') or '') for check in row.get('checks') or [])
-                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|502|503|504)|transport_(?:6|7|28|52|55|56|exhausted))\b', reasons):
+                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|500|502|503|504)|transport_(?:6|7|18|28|52|55|56|exhausted))\b', reasons):
                     return None
                 temporary = True
             healthy = True

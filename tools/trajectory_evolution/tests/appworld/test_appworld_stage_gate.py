@@ -5462,3 +5462,51 @@ class InitialNativeReviewRetryRejectionTests(InitialNativeReviewRecoveryTests):
                 self.assertTrue(offline_gepa.initial_review_recovery(artifact,'original'))
                 offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','retry_error':[]})
                 self.assertFalse(offline_gepa.initial_review_recovery(artifact,'original'))
+
+
+class StageKnownTransientConsistencyTests(unittest.TestCase):
+    baseline_fixture = Baseline100InterruptedWorkerRecoveryTests.fixture
+
+    def test_closed_stage32_and100_http500_and_partial_transport_are_retryable(self):
+        import copy,compare
+        for count in (32,100):
+            for reason in ('evaluation_judge_http_500','evaluation_judge_transport_18'):
+                with self.subTest(count=count,reason=reason),tempfile.TemporaryDirectory() as directory:
+                    root=Path(directory);source=root/'shards/shard-00/capture/report.json'
+                    current=reproduce._APPWORLD_LAYOUT.judge_projection()
+                    rows=[{'task_id':f'task-{i:03d}','trial_id':f'trial-{i:03d}',
+                           'execution_status':'completed','verdict':'error','error_code':'evaluation_judge_failed',
+                           'checks':[{'check_id':'model','status':'error','reason':reason}],
+                           'evidence':{'output':{'framework_capture':{'status':'complete'}},
+                                       'trace':{'events':[{'kind':'run.start'},{'kind':'run.end'}]}}}
+                          for i in range(count)]
+                    reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                    reproduce._APPWORLD_LAYOUT.save(source.with_name('manifest.json'),{'complete':True})
+                    reproduce._APPWORLD_LAYOUT.save(source.parent.parent/'config.json',{'judge':current})
+                    reproduce._APPWORLD_LAYOUT.save(root/'progress.json',{'planned_tasks':count,
+                        'shards':{'0':{'execution_complete':True,'source_report':str(source)}}})
+                    before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                    self.assertEqual(reproduce._stage_review_recovery_state(root,count,baseline=False),'transport')
+                    for p,old in before.items():self.assertEqual(p.read_bytes(),old)
+                    for invalid in ('evaluation_judge_http_401','evaluation_judge_http_403',
+                                    'evaluation_judge_schema_invalid','evaluation_judge_uncertain'):
+                        rows[0]['checks'][0]['reason']=invalid
+                        reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                        self.assertIsNone(reproduce._stage_review_recovery_state(root,count,baseline=False))
+                    rows[0]['checks'][0]['reason']=reason;rows[0]['execution_status']='error'
+                    reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                    self.assertIsNone(reproduce._stage_review_recovery_state(root,count,baseline=False))
+
+    def test_baseline100_atomic_http500_and_transport18_resume_without_replaying_agents(self):
+        for reason in ('evaluation_judge_http_500','evaluation_judge_transport_18'):
+            with self.subTest(reason=reason),tempfile.TemporaryDirectory() as directory,self.baseline_fixture(directory) as (root,state,seed,baseline,trial,pilot):
+                row=reproduce._read(trial);row.update(verdict='error',error_code='evaluation_judge_failed')
+                row['checks']=[{'check_id':'model','status':'error','reason':reason}]
+                reproduce._APPWORLD_LAYOUT.save(trial,row)
+                before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                self.assertEqual(reproduce._baseline100_worker_checkpoint(seed,state),'transport')
+                self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError('compare.py_failed:1'),state),'appworld_stage_review_pending')
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+                state['cancel_requested']=True
+                self.assertIsNone(reproduce._baseline100_worker_checkpoint(seed,state))
+                for p,old in before.items():self.assertEqual(p.read_bytes(),old)
