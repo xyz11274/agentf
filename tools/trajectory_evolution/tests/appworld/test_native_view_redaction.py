@@ -2105,3 +2105,104 @@ def test_native_run_close_transient_status_waits_without_replaying_agent(tmp_pat
     assert sum(row[0] == 'point' for row in client.calls) == 1
     assert trial.degraded_points == 0 and trial.framework_capture['failures'] == 0
     assert trial.boundary_diagnostics[-1]['status'] == 'pending_children_closed'
+
+
+def test_point_gap_schema_diagnostic_is_bounded_and_contains_types_only(tmp_path):
+    host = _capture_boundary_host()
+    class Client:
+        def __init__(self): self.gaps = []
+        def _invoke(self, *args): self.gaps.append(args); return {}
+    client = Client();trial = _capture_trial(host, client, tmp_path)
+    trial.run_context = {'run_id': 'bound-run'}
+    secret = 'PRIVATE_PASSWORD_AND_TOKEN_0123456789'
+    path = tmp_path / 'host-error-diagnostic.json'
+    path.write_text(json.dumps({'other_safe_metadata': {'known': True}}))
+    for ordinal in range(10):
+        fields = {'phase': 'after', 'kind': 'action', 'context': {'activity_id': 'actual-id'},
+            'input': {'code': secret}, 'actual_input': {'password': secret}, 'state': {'access_token': secret},
+            'output': {'observation': secret}, 'metrics': {'sequence': ordinal},
+            'error': {'code': 'appworld_auth_401', 'retryability': 'retryable', 'message': secret,
+                      'invalid-key': secret}}
+        unchanged = json.loads(json.dumps(fields))
+        result = trial._point_gap(fields, error='contract_invalid')
+        assert result == {'context': fields['context'], 'input': fields['input'], 'decision': 'allow',
+                          'degraded': True, 'capture_complete': False}
+        assert fields == unchanged
+    saved = json.loads(path.read_text());points = saved['native_points']
+    assert len(points) == 8 and saved['other_safe_metadata'] == {'known': True}
+    assert trial.degraded_points == trial.framework_capture['failures'] == 10 and len(client.gaps) == 10
+    for row in points:
+        assert set(row) == {'phase', 'kind', 'error_code', 'field_types', 'error_field_types',
+                           'projected_error_field_types', 'projected_error_code_known', 'projected_retryability_known'}
+        assert row['phase'] == 'after' and row['kind'] == 'action' and row['error_code'] == 'contract_invalid'
+        assert set(row['field_types'].values()) == {'dict'}
+        assert row['error_field_types'] == {'code': 'str', 'retryability': 'str', 'message': 'str'}
+        assert set(row['projected_error_field_types'].values()) == {'str'}
+        assert row['projected_error_code_known'] is True and row['projected_retryability_known'] is True
+    encoded = path.read_text()
+    assert secret not in encoded and 'actual-id' not in encoded and 'bound-run' not in encoded
+    assert 'code_block' not in encoded and 'observation' not in encoded
+
+
+def test_point_gap_schema_diagnostic_never_persists_exception_or_unknown_error_values(tmp_path):
+    host = _capture_boundary_host();trial = _capture_trial(host, None, tmp_path)
+    secret = 'PRIVATE_NATIVE_EXCEPTION_PASSWORD_0123456789'
+    trial._point_gap({'phase': 'after', 'kind': 'loop', 'context': {},
+                     'error': {'code': secret, 'retryability': secret}}, error=RuntimeError(secret))
+    row = json.loads((tmp_path / 'host-error-diagnostic.json').read_text())['native_points'][0]
+    assert row['error_code'] == 'observer_unavailable'
+    assert row['projected_error_code_known'] is False and row['projected_retryability_known'] is False
+    assert secret not in json.dumps(row)
+    assert trial.degraded_points == trial.framework_capture['failures'] == 1
+
+
+def test_healthy_point_and_unobserved_after_do_not_create_error_diagnostic(tmp_path, monkeypatch):
+    host = _capture_boundary_host();trial = _capture_trial(host, object(), tmp_path)
+    healthy = {'context': {'activity_id': 'actual'}, 'degraded': False}
+    monkeypatch.setattr(host, 'native_capture_point', lambda client, packet: healthy)
+    assert trial.point({'phase': 'before', 'kind': 'action', 'input': {'public': True}}) is healthy
+    assert not (tmp_path / 'host-error-diagnostic.json').exists()
+    assert trial.degraded_points == trial.framework_capture['failures'] == 0
+    result = trial.point({'phase': 'after', 'kind': 'action', 'context': {}})
+    assert result['degraded'] is True and result['capture_complete'] is False
+    assert trial.degraded_points == trial.framework_capture['failures'] == 1
+    assert not (tmp_path / 'host-error-diagnostic.json').exists()
+
+
+def test_failed_point_preserves_gap_or_degraded_return_and_records_only_schema(tmp_path, monkeypatch):
+    host = _capture_boundary_host();trial = _capture_trial(host, object(), tmp_path)
+    fields = {'phase': 'after', 'kind': 'action', 'context': {'activity_id': 'actual'}}
+    def failure(*args): raise RuntimeError('contract_invalid')
+    monkeypatch.setattr(host, 'native_capture_point', failure)
+    result = trial.point(fields)
+    assert result == {'context': fields['context'], 'input': None, 'decision': 'allow',
+                      'degraded': True, 'capture_complete': False}
+    degraded = {'context': {'activity_id': 'same'}, 'degraded': True, 'reason': 'contract_invalid'}
+    monkeypatch.setattr(host, 'native_capture_point', lambda *args: degraded)
+    assert trial.point(fields) is degraded
+    saved = json.loads((tmp_path / 'host-error-diagnostic.json').read_text())
+    assert len(saved['native_points']) == trial.degraded_points == trial.framework_capture['failures'] == 2
+
+
+@pytest.mark.parametrize('failure', ['projection', 'malformed_points'])
+def test_point_gap_diagnostic_failure_never_changes_gap_or_capture_notification(tmp_path, monkeypatch, failure):
+    host = _capture_boundary_host()
+    class Client:
+        def __init__(self): self.gaps = []
+        def _invoke(self, *args): self.gaps.append(args); return {}
+    client = Client();trial = _capture_trial(host, client, tmp_path)
+    trial.run_context = {'run_id': 'verified-run'}
+    path = tmp_path / 'host-error-diagnostic.json'
+    if failure == 'projection':
+        def broken_projection(value): raise RuntimeError('projection_failed')
+        monkeypatch.setattr(host, 'native_view', broken_projection)
+    else:
+        path.write_text(json.dumps({'native_points': {'not_a_list': True}}))
+    before = path.read_bytes() if path.is_file() else None
+    fields = {'phase': 'after', 'kind': 'loop', 'context': {'control_id': 'real-control'}}
+    result = trial._point_gap(fields, error='contract_invalid')
+    assert result == {'context': fields['context'], 'input': None, 'decision': 'continue',
+                      'degraded': True, 'capture_complete': False}
+    assert trial.degraded_points == trial.framework_capture['failures'] == len(client.gaps) == 1
+    assert client.gaps[0][0] == 'capture.gap' and client.gaps[0][1]['run_id'] == 'verified-run'
+    assert (path.read_bytes() if path.is_file() else None) == before

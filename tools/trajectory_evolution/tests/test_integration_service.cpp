@@ -11,6 +11,7 @@
 #include "integration_json.h"
 #include "instrumentation.h"
 #include "trace_internal.h"
+#include "boundary_runtime.h"
 #include "../clients/c/evolution.h"
 
 #include <fstream>
@@ -3781,6 +3782,88 @@ void evidence_refresh_tests(const fs::path &folder) {
   check(read(cache_path).dump() == cache_before, "refresh never rewrites successful analysis output");
 }
 
+// L0 failed actions must close capture without constructing a runtime policy.
+void l0_failed_action_capture_tests(const fs::path &folder) {
+  auto c = config(folder);
+  c["max_level"] = "L0";
+  c["instrumentation"]["level"] = "L0";
+  c["http_persistence"] = Json{{"mode", "buffered"}, {"max_buffer_bytes", 1048576}};
+  c["auto_evaluate"] = false;
+  c["control_learning"]["enabled"] = false;
+  c["sharing"]["enabled"] = false;
+  write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json");
+  unsigned point_count = 0;
+  auto point = [&](Json packet) {
+    packet["operation"] = "point";
+    packet["request_id"] = "l0-failed-point-" + std::to_string(++point_count);
+    const auto response = service.call(token_a, packet.dump());
+    check(response.status == 200, "L0 point HTTP success");
+    const auto body = Json::parse(response.body);
+    check(body.flag("ok", false) && !body["result"].flag("degraded", false),
+          "L0 point never degrades on a genuine failed action");
+    return body["result"];
+  };
+  const auto started = point(Json{{"phase", "before"}, {"kind", "run"}, {"level", "L0"},
+      {"conversation_id", "l0-failed-action-capture"},
+      {"input", Json{{"instruction", "synthetic public request"}}},
+      {"capabilities", Json::Array{"model", "actions", "loop"}}});
+  const auto root = started["context"];
+  auto snapshot = [&]() {
+    check(service.flush_capture(), "L0 capture flush");
+    const auto saved = read(folder / "data/runs" / (root.str("run_id") + ".json"));
+    check(saved["policy"].null() && saved.num("level", 9) == 0,
+          "L0 policy stays absent or null rather than materializing options");
+    check(!saved.flag("incomplete", false), "L0 failed action does not poison capture");
+    return saved;
+  };
+  snapshot();
+  unsigned failures = 0;
+  for (const auto *code : {"appworld_code_error", "appworld_auth_401",
+                           "appworld_validation_422", "appworld_type_error_positional"}) {
+    const auto loop = point(Json{{"phase", "before"}, {"kind", "loop"}, {"context", root},
+        {"loop_id", "main"}, {"state", Json{{"progress_counter", 0}}}});
+    check(loop.str("decision") == "continue", "L0 does not apply configured loop policies");
+    point(Json{{"phase", "after"}, {"kind", "loop"}, {"context", loop["context"]},
+        {"decision", "continue"}});
+    const Json input{{"code", "pass"}, {"native_view_redacted", true}};
+    const auto action = point(Json{{"phase", "before"}, {"kind", "action"},
+        {"name", "appworld.execute"}, {"context", loop["context"]}, {"input", input},
+        {"extensions", Json{{"point_reference", Json{{"parent", root["run_id"]}}}}}});
+    snapshot();
+    point(Json{{"phase", "after"}, {"kind", "action"}, {"context", action["context"]},
+        {"executed", true}, {"status", "failed"}, {"actual_input", input},
+        {"output", Json{{"observation", "synthetic execution failure"}}},
+        {"error", Json{{"code", code}, {"retryability", "unknown"}}}});
+    ++failures;
+    const auto saved = snapshot();
+    const auto &state = saved["loops"]["main"];
+    check(state.num("failed_actions", 0) == failures &&
+          state["operation_failures"]["appworld.execute"].num("count", 0) == failures,
+          "L0 retains original operation-level failure counts across error families");
+  }
+  const auto ended = point(Json{{"phase", "after"}, {"kind", "run"}, {"context", root},
+      {"status", "completed"}, {"business_status", "failed"},
+      {"output", Json{{"synthetic", true}}}});
+  check(ended.flag("closed", false) && ended.flag("capture_complete", false),
+        "L0 failed business execution closes with complete capture");
+  const auto saved = snapshot();
+  check(saved.flag("closed", false), "L0 closed state is durable");
+  const auto trace = boundary_trace(saved);
+  check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(),
+        "L0 failed-action trace remains valid");
+  unsigned captured_failures = 0;
+  for (const auto &event : trace["events"].items())
+    if (event["error"].str("code").rfind("appworld_", 0) == 0) {
+      check(event["error"].str("retryability") == "unknown", "L0 ErrorInfo preserved");
+      ++captured_failures;
+    }
+  check(captured_failures == 4, "all four genuine failures remain in the closed trace");
+  std::cout << "L0 failed capture: points=" << point_count
+            << ";error_infos=4;failed_actions=4;operation_failures=4;policy_null=1;"
+               "closed=1;trace_valid=1;model_calls=0;agent_calls=0\n";
+}
+
 // 回归用例：main。
 // 构造本函数中的固定输入并核验状态与返回结果；不发起真实业务实验。
 int main(int argc, char **argv) {
@@ -3811,6 +3894,11 @@ int main(int argc, char **argv) {
       }
     } cleanup{path};
 
+    if (argc == 2 && std::string(argv[1]) == "--l0-failed-action-capture") {
+      l0_failed_action_capture_tests(fs::path(path) / "l0-failed-action-capture");
+      return 0;
+    }
+
     if (argc == 2 && std::string(argv[1]) == "--training-analysis-retry") {
       training_analysis_cache_retry_tests(fs::path(path) / "training-analysis-retry");
       std::cout << "Training retry: cache counters, missing-cache recovery, job identity, "
@@ -3835,6 +3923,7 @@ int main(int argc, char **argv) {
     training_analysis_cache_retry_tests(fs::path(path) / "training-analysis-retry");
     delegation_tests(fs::path(path) / "delegation");
     boundary_tests(fs::path(path) / "boundary");
+    l0_failed_action_capture_tests(fs::path(path) / "l0-failed-action-capture");
     http_once_policy_tests(fs::path(path) / "http-once");
     failure_replan_tests(fs::path(path) / "failure-replan");
     outcome_progress_tests(fs::path(path) / "outcome-progress");

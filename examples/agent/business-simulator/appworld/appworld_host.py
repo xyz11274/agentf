@@ -1937,7 +1937,41 @@ class Trial:
                         artifact.get('policy', {}).get('options', {}).get('approved_experiences', [])
                         if (ref.get('memory_id'), ref.get('content_revision')) not in excluded]
 
-    def _point_gap(self, fields):
+    def _point_gap(self, fields, error=None):
+        # Persist bounded schema diagnostics before the entry runner terminates.
+        # Never retain packet values, executable code or credential contents.
+        if error is not None and getattr(self, "evidence_dir", None) is not None:
+            try:
+                raw_code = str(error)
+                code = raw_code if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", raw_code) else "observer_unavailable"
+                types = {key: type(fields[key]).__name__ for key in
+                    ("input", "actual_input", "state", "output", "error", "metrics", "context")
+                    if key in fields}
+                error_fields = fields.get("error")
+                error_types = ({key: type(value).__name__ for key, value in error_fields.items()
+                    if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key)}
+                    if isinstance(error_fields, dict) else {})
+                path = Path(self.evidence_dir) / "host-error-diagnostic.json"
+                saved = json.loads(path.read_text()) if path.is_file() else {}
+                points = saved.get("native_points") or []
+                projected = native_view(fields)
+                projected_error = projected.get("error")
+                projected_types = ({key: type(value).__name__ for key, value in projected_error.items()
+                    if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key)}
+                    if isinstance(projected_error, dict) else {})
+                known_errors = {"appworld_code_error", "appworld_type_error_positional",
+                    "appworld_auth_401", "appworld_validation_422", "appworld_missing_access_token"}
+                points.append({"phase": fields.get("phase"), "kind": fields.get("kind"),
+                    "error_code": code, "field_types": types, "error_field_types": error_types,
+                    "projected_error_field_types": projected_types,
+                    "projected_error_code_known": isinstance(projected_error, dict)
+                        and projected_error.get("code") in known_errors,
+                    "projected_retryability_known": isinstance(projected_error, dict)
+                        and projected_error.get("retryability") in {"unknown", "retryable", "non_retryable"}})
+                saved["native_points"] = points[-8:]
+                path.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+            except (OSError, ValueError, TypeError, RuntimeError, AttributeError):
+                pass
         self.degraded_points += 1
         self.framework_capture["failures"] += 1
         context = getattr(self, "run_context", None)
@@ -2072,10 +2106,10 @@ class Trial:
             safe = native_view(fields)
             result = native_capture_point(self.evo, safe)
             if result.get("degraded"):
-                self._point_gap(fields)
+                self._point_gap(fields, error=result.get("reason", "point_capture_degraded"))
             return result
-        except Exception:
-            return self._point_gap(fields)
+        except Exception as error:
+            return self._point_gap(fields, error=error)
 
     def account(self, usage):
         calls = int(usage.get("llm_calls", 0) or 0)

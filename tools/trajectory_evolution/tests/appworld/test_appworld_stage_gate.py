@@ -5005,3 +5005,103 @@ class AutonomousActiveSeedBindingTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'native_seed_binding_invalid'):
                     reproduce._autonomous_native_seed(initial,state)
                 self.assertEqual(offline_gepa.read(offline_gepa.PLAN),before);sleep.assert_not_called()
+
+
+class LegacyTerminalWorkerRecoveryTests(unittest.TestCase):
+    """A new worker may recover a stale outer only from the real bound job."""
+    @contextmanager
+    def legacy_fixture(self, directory):
+        with AutonomousActiveSeedBindingTests.advanced_fixture(self, directory) as values:
+            initial, root, events, generated, retained, active, protected, native_runs, sleep = values
+            # Simulate only the old outer's omitted synchronization. The real
+            # nested prefix, terminal lookup and reserve guard remain intact.
+            with patch.object(reproduce, '_autonomous_native_seed', return_value=(initial, 'strategy')):
+                result = reproduce._run_all_autonomously(initial, 'strategy')
+            self.assertEqual(result['status'], 'blocked')
+            self.assertEqual(result['stop_reason'], 'appworld_gepa_terminal_receipt_invalid')
+            self.assertEqual(result['phase'], 'gepa_run')
+            self.assertNotEqual(active[0], initial)
+            self.assertEqual(events, [(0, 32), (1, 32), (2, 32), (2, 100), '--prepare', '--run'])
+            yield values
+            for path, original in protected.items():
+                self.assertEqual(path.read_bytes(), original)
+            sleep.assert_not_called()
+
+    def test_old_progressed_outer_terminal_worker_resumes_actual_seed_without_writes(self):
+        with tempfile.TemporaryDirectory(dir='/tmp') as td, self.legacy_fixture(td) as values:
+            initial, root, events, generated, retained, active, protected, native_runs, sleep = values
+            preserved = {p: p.read_bytes() for p in (root / 'gepa').rglob('*') if p.is_file()}
+            with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(), 75)
+            with patch.object(reproduce, '_active_output_processes', return_value=[123]):
+                self.assertEqual(reproduce._worker_resume_check(), 76)
+            for path, original in preserved.items():
+                self.assertEqual(path.read_bytes(), original, 'worker qualification wrote a receipt')
+            calls = []
+            def resumed(seed, label, **budget):
+                calls.append((seed, label, budget['gepa_max_model_calls']))
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_all_with_seed_search', side_effect=resumed):
+                result = reproduce._run_all_autonomously(active[0], active[0].parent.name)
+            self.assertEqual(result['status'], 'published')
+            self.assertEqual(calls, [(active[0], active[0].parent.name, 1024)])
+            extension = offline_gepa.read(offline_gepa.PLAN)['budget_extension']
+            self.assertEqual(extension['seed'], str(active[0]))
+            self.assertEqual(extension['job_id'], 'same-native-job')
+            self.assertEqual(extension['model_calls_used'], 512)
+
+    def test_legacy_terminal_worker_rejects_wrong_binding_cancel_and_real_errors(self):
+        defects = ('candidate', 'artifact', 'plan', 'current-seed', 'immutable-seed',
+                   'submission', 'job-owner', 'native-job', 'job-error', 'tree-error',
+                   'cancelled', 'job-cancel', 'tree-cancel', 'active', 'batch',
+                   'holdout', 'final-holdout', 'pilot-gate', 'stage-job', 'last-error')
+        for defect in defects:
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory(dir='/tmp') as td, self.legacy_fixture(td) as values:
+                initial, root, events, generated, retained, active, protected, native_runs, sleep = values
+                state_path = root / 'gepa/lifecycle.json';state = reproduce._read(state_path)
+                tree_path = root / 'gepa/workspace/agent-evaluation/same-native-job/search/tree.json'
+                job_path = root / 'gepa/workspace/agent-evaluation/state.json'
+                if defect == 'candidate':state['candidate']['seed_version'] = 'unbound-version'
+                elif defect == 'artifact':
+                    artifact = reproduce._read(active[0]);artifact['policy']['candidate'] = 99
+                    offline_gepa.save(active[0], artifact)
+                    protected.pop(active[0])  # The deliberate negative mutation is not a test write leak.
+                elif defect == 'plan':
+                    plan = offline_gepa.read(offline_gepa.PLAN);plan['seed'] = str(initial)
+                    offline_gepa.save(offline_gepa.PLAN, plan)
+                elif defect == 'current-seed':
+                    search = reproduce.seed_search();search['current_seed'] = str(initial);reproduce._save_search(search)
+                elif defect == 'immutable-seed':
+                    path = tree_path.parent.parent / 'seed.json'
+                    offline_gepa.save(path, {'level': 'L3', 'wrong': True});protected.pop(path)
+                elif defect == 'submission':offline_gepa.save(root / 'gepa/submission.json', {'job_id': 'unbound-job'})
+                elif defect in ('job-owner', 'native-job', 'job-error', 'job-cancel'):
+                    jobs = offline_gepa.read(job_path);job = jobs['jobs']['same-native-job']
+                    key, value = {'job-owner': ('user', 'different-owner'), 'native-job': ('status', 'error'),
+                                  'job-error': ('error', 'model_transport_failed'), 'job-cancel': ('cancel_requested', True)}[defect]
+                    job[key] = value;offline_gepa.save(job_path, jobs)
+                elif defect in ('tree-error', 'tree-cancel', 'active', 'batch', 'holdout', 'final-holdout'):
+                    tree = offline_gepa.read(tree_path)
+                    key, value = {'tree-error': ('error', 'candidate_failed'), 'tree-cancel': ('cancel_requested', True),
+                        'active': ('active', 1), 'batch': ('batch', {}), 'holdout': ('holdout_started', True),
+                        'final-holdout': ('final_holdout', {'candidates': [1]})}[defect]
+                    tree[key] = value;offline_gepa.save(tree_path, tree)
+                elif defect == 'cancelled':state['status'] = 'cancelled'
+                elif defect == 'pilot-gate':state['stage_results']['pilot32']['gate_passed'] = False
+                elif defect == 'stage-job':state['stage_results']['gepa_run']['data']['job_id'] = 'wrong-job'
+                else:state['last_error'] = 'unclassified_real_error'
+                offline_gepa.save(state_path, state)
+                with patch.object(reproduce, '_active_output_processes') as processes:
+                    self.assertEqual(reproduce._worker_resume_check(), 0)
+                    processes.assert_not_called()
+
+    def test_legacy_terminal_worker_does_not_classify_other_errors_as_retry(self):
+        for fault in ('appworld_autonomous_native_seed_binding_invalid', 'reflection_candidate_error',
+                      'appworld_gepa_model_budget_exhausted', 'appworld_gepa_terminal_receipt_invalid_extra'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(dir='/tmp') as td, self.legacy_fixture(td) as values:
+                root = values[1];state_path = root / 'gepa/lifecycle.json';state = reproduce._read(state_path)
+                state['stop_reason'] = fault;offline_gepa.save(state_path, state)
+                self.assertIsNone(reproduce._autonomous_retry_reason(RuntimeError(fault), state))
+                with patch.object(reproduce, '_active_output_processes') as processes:
+                    self.assertEqual(reproduce._worker_resume_check(), 0)
+                    processes.assert_not_called()

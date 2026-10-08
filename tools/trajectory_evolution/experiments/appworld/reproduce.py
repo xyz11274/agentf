@@ -3320,6 +3320,62 @@ def _interrupted_worker_checkpoint(state: dict) -> str | None:
     return 'ready' if pending else None
 
 
+def _legacy_terminal_worker_checkpoint(state: dict, fault: object) -> bool:
+    """Recover only an old outer seed error from a bound terminal native job."""
+    if (fault != 'appworld_gepa_terminal_receipt_invalid'
+            or state.get('status') != 'blocked' or state.get('phase') != 'gepa_run'
+            or state.get('stop_reason') != fault or state.get('last_error')
+            or state.get('cancel_requested')):
+        return False
+    seed = _worker_checkpoint_seed(state)
+    candidate = state.get('candidate') or {}
+    if seed is None or not seed.is_file() or candidate != _candidate_identity(seed, seed.parent.name):
+        return False
+    artifact = _read(seed)
+    version = candidate.get('seed_version')
+    if (artifact.get('level') != 'L3' or not isinstance(version, str) or not version
+            or _APPWORLD_LAYOUT.version(artifact) != version):
+        return False
+    search = seed_search()
+    if search.get('current_seed') != str(seed):
+        return False
+    stages = state.get('stage_results') or {}
+    if any((stages.get(name) or {}).get('status') != 'complete'
+           or (stages.get(name) or {}).get('gate_passed') is not True
+           for name in ('pilot32', 'validation100')):
+        return False
+    native_stage = stages.get('gepa_run') or {}
+    if native_stage.get('status') != 'complete' or native_stage.get('reason'):
+        return False
+    import offline_gepa
+    if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
+            or _read(offline_gepa.PLAN).get('seed') != str(seed)):
+        return False
+    # The same authority used by normal resumption binds owner, level,
+    # submission and the original immutable native seed, without new hashes.
+    try:
+        job_id = offline_gepa._recorded_job(artifact)
+    except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError):
+        return False
+    native = _read(offline_gepa.STATUS)
+    if (not isinstance(job_id, str) or not job_id
+            or native.get('job_id') != job_id or native.get('job_status') != 'rejected'
+            or (native_stage.get('data') or {}).get('job_id') != job_id):
+        return False
+    job_root = (offline_gepa.WORKSPACE / 'agent-evaluation').resolve()
+    job_path = (job_root / job_id).resolve()
+    if not job_path.is_relative_to(job_root) or job_path.parent != job_root:
+        return False
+    tree = _read(job_path / 'search/tree.json')
+    job = ((_read(job_root / 'state.json').get('jobs') or {}).get(job_id) or {})
+    return bool(job.get('status') == 'rejected' and not job.get('error')
+                and job.get('published') is not True and not job.get('cancel_requested')
+                and tree.get('status') == 'validation_rejected' and not tree.get('error')
+                and not tree.get('cancel_requested') and tree.get('active') is None
+                and tree.get('batch') is None and tree.get('holdout_started') is not True
+                and not tree.get('final_holdout'))
+
+
 def _worker_resume_check() -> int:
     """Read-only qualification: 75 resumes, 76 waits, 0 preserves a terminal."""
     import re
@@ -3347,6 +3403,8 @@ def _worker_resume_check() -> int:
         saved_fault = stage.get('reason') or state.get('last_error')
         if saved_fault and _unavailable_seed_generation_checkpoint(RuntimeError(str(saved_fault)), state):
             reason = 'appworld_seed_generation_unavailable'
+    if not reason and _legacy_terminal_worker_checkpoint(state, fault):
+        reason = 'appworld_legacy_terminal_checkpoint_requires_resume'
     if not reason:
         interrupted = _interrupted_worker_checkpoint(state)
         if interrupted:
