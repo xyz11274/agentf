@@ -1,11 +1,11 @@
-## 当前修复阶段（北京时间 2026-10-09 06:14）
+## 当前修复阶段（北京时间 2026-10-09 06:23）
 
 - 用户硬要求：一条命令自动推进，正常模型、网络、裁判故障自行诊断和恢复；保留已完成Agent、健康评分与已知费用，不依赖人工补评、重置或连续五次失败停机。测试通过不能代替真实优化达标，不宣称不存在任何外部故障。
 - A13-2正式32完整评分：L0严格24/Q.75000/平均无效loop.28125；父A5为25/.78125/.0625；候选26/.81250/.12500。通过与质量相对L0+8.3333%，无效loop-55.5556%，原生pilot_passed。时延140.747→148.583秒，token129041.906→137621.844，调用22→23.625，如实报告不作门槛。L1=67，L2动作/编排及L3均0。局部L1消融相关性不作因果结论。
 - 1题judge_reason_conflict由程序自动纯补评收尾，无健康Agent重跑、无人工改分；05:38正常进入100阶段，先补齐L0。100新增运行触发统一capture_contract_invalid，正常两轮失败采集恢复后仍错误。05:56控制器及所有Agent自然退出，lifecycle blocked/validation100/compare.py_failed:1；没有候选100或有效完整100结果，不把错误算模型质量失败。
-- 真实根因已以0模型/0Agent本地IntegrationService五点链复现：boundary_runtime record_action_outcome新增多机制检查在L0失败时解析policy.options=null，抛contract_invalid。标准ErrorInfo本身正确。现已修L0默认空选项，保留失败计数/epoch，L1-L3原校验不放松；四处只读options改const避免虚构L0政策。最终CLI/SO及永久C++回归已构建成功：真实IntegrationService完整18点、4种失败、policy保持null、run正常闭合与trace有效，0模型/0Agent测试调用。06:07原单命令正常恢复，新控制器已16路补跑L0受影响40题，正式健康60题保留；100候选尚未开始，不把临时文件数当评分进度。
+- 真实根因已以0模型/0Agent本地IntegrationService五点链复现：boundary_runtime record_action_outcome新增多机制检查在L0失败时解析policy.options=null，抛contract_invalid。标准ErrorInfo本身正确。现已修L0默认空选项，保留失败计数/epoch，L1-L3原校验不放松；四处只读options改const避免虚构L0政策。最终CLI/SO及永久C++回归已构建成功：真实IntegrationService完整18点、4种失败、policy保持null、run正常闭合与trace有效，0模型/0Agent测试调用。06:07原单命令正常恢复，新控制器已16路补跑L0受影响40题，正式健康60题保留；截至06:23末2个Agent执行已闭合待正常评分，完整100汇总及候选100尚未生成，不把临时文件数当评分进度。
 - 另修旧控制器实际候选切换后误用起始seed造成native终态无效：来源绑定当前immutable seed/原job/完整32和100门禁/rejected无活工作，无取消或holdout，worker自动接续。生产9tests/37子断言PASS，未泛吞未知错误。Host诊断仅失败时复用既有host-error-diagnostic.json保留8条固定类型/布尔，不存正文/凭证，不添hash；24项生产定向回归通过，诊断自身故障不影响原失败回执。
-- 4708848已直连push远程harness_agent_poc_evo；本轮根因修复必要回归已通过，基线100中断自动恢复边界正独立审查，随后提交。普通同题失败反馈/最佳历史父策略/批准TRAIN来源、裸API关联与父策略独有收益优先均已在磁盘；恢复新解释器会正常加载，不中断健康任务部署。
+- 4708848已直连push远程harness_agent_poc_evo；本轮L0/Host/旧终态修复547b01b已直连push。基线100优先运行时的检查点恢复已安装：正式32门禁、当前不可变候选、同100题/版本/L0/Host/裁判严格绑定，过期失败标记不阻断已验证的当前断点；最新永久错误不被旧健康记录掩盖。生产23tests/64子断言及固定裁判矛盾恢复8tests/29子断言PASS，真实只读恢复资格ready，原lifecycle未变，0模型/0Agent测试调用。普通同题失败反馈/最佳历史父策略/批准TRAIN来源、裸API关联与父策略独有收益优先均已在磁盘；恢复新解释器会正常加载，不中断健康任务部署。
 - 验收冻结：同题严格通过数和质量各相对提升≥5%，真实平均无效loop下降≥15%；资源如实报告。32→100达标后才进入GEPA与完整500对比发布。禁止改旧分、阈值、裁判、缺失loop补0、伪造来源；正常恢复保留健康执行及费用。
 - 134 TRAIN采集评分入库完整，批准原经验正文不修改；反思只读同32失败和实际应用及批准TRAIN源，不读500结果生成经验，不新增指纹/hash。
 - 每≤60真实秒北京时间表格播报，横轴节点、纵轴单指标、同题同口径。16路、直连无代理、tmux；不用bwrap/GitNexus。输出仅trace_output/appworld/{training,gepa,published}，原始数据、权威memory与成绩来源保留。

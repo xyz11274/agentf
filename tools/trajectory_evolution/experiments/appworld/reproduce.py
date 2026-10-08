@@ -879,7 +879,7 @@ def _stage_review_recovery_state(output: Path, count: int, *, baseline: bool) ->
                 reasons = ' '.join(str(check.get('reason') or '')
                                    for check in row.get('checks') or [])
                 import re
-                if not re.search(r'evaluation_judge_(?:http_(?:408|429|502|503|504)|transport_(?:6|7|28|52|55|56|exhausted))\b', reasons):
+                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|502|503|504)|transport_(?:6|7|28|52|55|56|exhausted))\b', reasons):
                     if baseline or not _stage_projection_repaired(source, row):
                         return None
                     repaired_projection = True
@@ -2886,6 +2886,9 @@ def _autonomous_retry_reason(error: Exception, state: dict) -> str | None:
             output = stage_path(seed, count).parent.resolve()
             progress = _read(output / 'progress.json')
             artifact = _read(seed)
+            if count == 100 and not progress and not state.get('cancel_requested'):
+                if _baseline100_worker_checkpoint(seed, state) == 'transport':
+                    return 'appworld_stage_review_pending'
             if (artifact and output.is_relative_to(_controller_gepa_root().resolve())
                     and progress.get('artifact') == artifact
                     and _stage_review_recovery_state(output, count, baseline=False)
@@ -3176,6 +3179,117 @@ def _worker_checkpoint_seed(state: dict) -> Path | None:
     return seed if seed == (OUTPUT / 'published' / seed.parent.name / 'strategy.json').resolve() else None
 
 
+def _baseline100_worker_checkpoint(seed: Path, state: dict) -> str | None:
+    """Bind the pre-candidate L0 stage to its exact pilot and saved capture."""
+    import compare
+    import stage_gate
+    import re
+    try:
+        candidate = state.get('candidate') or {}
+        stage = (state.get('stage_results') or {}).get('validation100') or {}
+        if (state.get('phase') != 'validation100' or state.get('cancel_requested')
+                or state.get('last_error') or stage.get('gate_passed') is False
+                or (stage.get('reason') and not re.fullmatch(
+                    r'(?:RuntimeError:)?compare\.py_failed:[0-9]+', str(stage['reason'])))
+                or not stage_path(seed, 100).parent.resolve().is_relative_to(_controller_gepa_root().resolve())
+                or candidate != _candidate_identity(seed, seed.parent.name)
+                or seed_search().get('current_seed') != str(seed)
+                or _APPWORLD_LAYOUT.version(_read(seed)) != candidate.get('seed_version')):
+            return None
+        pilot = stage_path(seed, 32).resolve()
+        pilot_value = _read(pilot)
+        l0_reference = pilot_value.get('source_l0')
+        if (not pilot.is_relative_to(_controller_gepa_root().resolve())
+                or pilot_value.get('host_version') != _host_version()
+                or not isinstance(l0_reference, str)
+                or not Path(l0_reference).resolve().is_relative_to(_controller_gepa_root().resolve())):
+            return None
+        passed, proof = stage_gate.verify_stage('32', pilot, Path(l0_reference), seed)
+        if not passed or any(proof.get(key) is not True
+                for key in ('coverage_pass', 'goal_passed', 'seed_match')):
+            return None
+        output = _APPWORLD_LAYOUT.baseline_result(100, output_root=OUTPUT).parent.resolve()
+        if not output.is_relative_to(_controller_gepa_root().resolve()):
+            return None
+        config = _read(output / 'capture.config.json')
+        # Use the same public dataset order as compare.baseline_main; no 500
+        # result, task answer or compact score enters this qualification.
+        dataset_rows = [json.loads(line) for line in
+            (compare.DATASET / 'holdout.jsonl').read_text().splitlines() if line.strip()]
+        tasks = sorted(row['task_id'] for row in dataset_rows)[:100]
+        revisions = {row['task_id']: row['task_version'] for row in dataset_rows
+                     if row['task_id'] in tasks}
+        baseline = _read(OUTPUT / 'published/L0.json')
+        variants = config.get('variants') or []
+        if (len(tasks) != 100 or len(set(tasks)) != 100 or config.get('task_ids') != tasks
+                or config.get('splits') != ['holdout'] or config.get('repetitions') != 1
+                or config.get('max_trials') != 100 or len(variants) != 1
+                or variants[0].get('id') != 'candidate' or baseline.get('level') != 'L0'
+                or baseline.get('policy') is not None
+                or variants[0].get('version') != (baseline.get('agent') or {}).get('revision')
+                or variants[0].get('instrumentation_config') != str(_APPWORLD_LAYOUT.RUNTIME / 'l0-evaluation-service.json')
+                or _APPWORLD_LAYOUT.judge_projection(config) != _APPWORLD_LAYOUT.judge_projection()
+                or (output / 'capture.host-version').read_text().strip() != _host_version()):
+            return None
+        folders = [output / 'capture', *sorted(
+            (p for p in output.glob('capture-retry-*') if p.is_dir() and p.name.rsplit('-', 1)[-1].isdigit()),
+            key=lambda p: int(p.name.rsplit('-', 1)[-1]))]
+        # Normal recovery resumes the most recent attempt, never an older
+        # healthy folder selected to hide a later permanent failure.
+        folder = folders[-1]
+        started = _read(folder / 'started.json')
+        if (started.get('planned_trials') != 100 or not started.get('run_id')
+                or not started.get('dataset_version')):
+            return None
+        expected = _APPWORLD_LAYOUT.version(baseline)
+        healthy, temporary, seen = False, False, set()
+        for path in sorted((folder / 'trials').glob('*.json')):
+            row = _read(path)
+            task = row.get('task_id')
+            evidence = row.get('evidence') or {}
+            if (not path.resolve().is_relative_to(folder) or task not in revisions or task in seen
+                    or row.get('task_version') != revisions[task] or row.get('variant_id') != 'candidate'
+                    or evidence.get('loaded_version') != expected
+                    or not _APPWORLD_LAYOUT.framework_capture_complete(row)
+                    or _APPWORLD_LAYOUT._execution_error_code(row)):
+                return None
+            seen.add(task)
+            traces = evidence.get('traces') if isinstance(evidence.get('traces'), list) else [evidence.get('trace')]
+            if not traces or any(not isinstance(trace, dict)
+                    or not any(event.get('kind') == 'run.start' for event in trace.get('events') or [])
+                    or not any(event.get('kind') == 'run.end' for event in trace.get('events') or [])
+                    for trace in traces):
+                return None
+            if _APPWORLD_LAYOUT._judge_error_code(row) is not None:
+                reasons = ' '.join(str(check.get('reason') or '') for check in row.get('checks') or [])
+                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|502|503|504)|transport_(?:6|7|28|52|55|56|exhausted))\b', reasons):
+                    return None
+                temporary = True
+            healthy = True
+        reviews = [output / 'regrade', *sorted(
+            (p for p in (output / 'regrade').glob('retry-*') if p.is_dir()
+             and p.name.rsplit('-', 1)[-1].isdigit()),
+            key=lambda p: int(p.name.rsplit('-', 1)[-1]))]
+        existing = [p / 'report.json' for p in reviews if (p / 'report.json').is_file()]
+        if existing:
+            latest = existing[-1]
+            report = _read(latest)
+            rows = report.get('trials') or []
+            if (compare._report_judge_projection(latest) != _APPWORLD_LAYOUT.judge_projection()
+                    or len(rows) != 100 or {row.get('task_id') for row in rows} != set(tasks)
+                    or any(row.get('task_version') != revisions.get(row.get('task_id'))
+                           or row.get('variant_id') != 'candidate'
+                           or (row.get('evidence') or {}).get('loaded_version') != expected for row in rows)):
+                return None
+            # A newer completed judge failure owns recovery. Never fall back
+            # to healthy execution-only rows to hide schema/auth/uncertainty.
+            review = _stage_review_recovery_state(output, 100, baseline=True)
+            return review if review in {'transport', 'cached', 'ready'} else None
+        return 'transport' if temporary else 'ready' if healthy else 'waiting'
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        return None
+
+
 def _interrupted_worker_checkpoint(state: dict) -> str | None:
     """Authorize an interrupted stage from its own receipt, never an old fault."""
     import re
@@ -3186,13 +3300,18 @@ def _interrupted_worker_checkpoint(state: dict) -> str | None:
     stage = (state.get('stage_results') or {}).get(phase) or {}
     frozen_seed = (phase == 'seed' and stage.get('status') == 'complete'
                    and stage.get('artifact') == (state.get('candidate') or {}).get('seed_artifact'))
-    if ((stage.get('status') not in (None, 'pending', 'running') and not frozen_seed)
-            or stage.get('gate_passed') is False or state.get('last_error') or stage.get('reason')):
+    stale_baseline_exit = (phase == 'validation100' and stage.get('status') == 'failed'
+        and stage.get('gate_passed') is None and state.get('stop_reason') == 'appworld_stage_failed'
+        and bool(re.fullmatch(r'(?:RuntimeError:)?compare\.py_failed:[0-9]+', str(stage.get('reason') or ''))))
+    if ((stage.get('status') not in (None, 'pending', 'running') and not frozen_seed and not stale_baseline_exit)
+            or stage.get('gate_passed') is False or state.get('last_error')
+            or (stage.get('reason') and not stale_baseline_exit)):
         return None
     # A previous gate's stop reason may survive entering a new stage. It is
     # advisory only; any other unexplained stop remains a real boundary.
     stop = state.get('stop_reason')
-    if stop and not re.fullmatch(r'stage_gate_not_passed:(?:pilot32|validation100)', str(stop)):
+    stale_duplicate = stop == 'appworld_seed_generation_duplicate'
+    if stop and not stale_duplicate and not stale_baseline_exit and not re.fullmatch(r'stage_gate_not_passed:(?:pilot32|validation100)', str(stop)):
         return None
     seed = _worker_checkpoint_seed(state)
     candidate = state.get('candidate') or {}
@@ -3205,7 +3324,10 @@ def _interrupted_worker_checkpoint(state: dict) -> str | None:
         count = 32 if phase == 'pilot32' else 100
         output = stage_path(seed, count).parent.resolve()
         progress = _read(output / 'progress.json')
-        if not output.is_relative_to(_controller_gepa_root().resolve()) or progress.get('artifact') != artifact:
+        if phase == 'validation100' and not progress:
+            baseline = _baseline100_worker_checkpoint(seed, state)
+            return 'ready' if baseline == 'transport' else baseline
+        if stale_duplicate or stale_baseline_exit or not output.is_relative_to(_controller_gepa_root().resolve()) or progress.get('artifact') != artifact:
             return None
         configs = list((output / 'shards').glob('shard-*/config.json'))
         if not configs or progress.get('planned_tasks') != count:
@@ -3223,6 +3345,8 @@ def _interrupted_worker_checkpoint(state: dict) -> str | None:
                 return None
         review = _stage_review_recovery_state(output, count, baseline=False)
         return 'ready' if review in {'transport', 'cached', 'projection', 'ready'} else 'waiting'
+    if stale_duplicate:
+        return None
     search = seed_search()
     generation = search.get('automatic_seed_generation') or {}
     if (generation.get('status') not in {'pending', 'frozen'}

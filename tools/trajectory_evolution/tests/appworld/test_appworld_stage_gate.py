@@ -5105,3 +5105,137 @@ class LegacyTerminalWorkerRecoveryTests(unittest.TestCase):
                 with patch.object(reproduce, '_active_output_processes') as processes:
                     self.assertEqual(reproduce._worker_resume_check(), 0)
                     processes.assert_not_called()
+
+
+class Baseline100InterruptedWorkerRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, directory):
+        import compare
+        root = Path(directory); gepa=root/'gepa'; seed=root/'published/current/strategy.json'
+        reproduce._APPWORLD_LAYOUT.save(seed, {'level':'L3','policy':{'frozen':True}})
+        reproduce._APPWORLD_LAYOUT.save(seed.with_name('manifest.json'), {'version':'candidate-native'})
+        l0=root/'published/L0.json'; reproduce._APPWORLD_LAYOUT.save(l0, {
+            'level':'L0','policy':None,'agent':{'revision':'baseline-revision'}})
+        tasks=[f'task-{i:03d}' for i in range(100)]
+        dataset=root/'training/datasets/comparison500';dataset.mkdir(parents=True)
+        (dataset/'holdout.jsonl').write_text('\n'.join(json.dumps({'task_id':t,'task_version':'version-'+t}) for t in tasks)+'\n')
+        pilot=gepa/'current-stage32/comparison.json'; pilot.parent.mkdir(parents=True)
+        baseline32=gepa/'l0-current-stage32/result.json';baseline32.parent.mkdir(parents=True)
+        ids=_l0(baseline32);_candidate(pilot,ids,strict=7,quality=.6)
+        value=reproduce._read(pilot);progress=_candidate_checkpoint(pilot,reproduce._read(seed),value['items'])
+        for shard in progress['shards'].values():shard['complete']=True
+        progress.update(planned_tasks=32,total_parallelism=0,workers_per_shard=16)
+        reproduce._APPWORLD_LAYOUT.save(pilot.with_name('progress.json'),progress)
+        value.update(seed=str(seed),source_l0=str(baseline32),progress=str(pilot.with_name('progress.json')),host_version='fixture-host')
+        reproduce._APPWORLD_LAYOUT.save(pilot,value)
+        baseline=gepa/'l0-current-stage100';baseline.mkdir(parents=True)
+        config={'task_ids':tasks,'repetitions':1,'splits':['holdout'],'max_trials':100,
+                'variants':[{'id':'candidate','version':'baseline-revision','instrumentation_config':str(root/'training/runtime/l0-evaluation-service.json')}],
+                'judge':reproduce._APPWORLD_LAYOUT.judge_projection()}
+        reproduce._APPWORLD_LAYOUT.save(baseline/'capture.config.json',config)
+        (baseline/'capture.host-version').write_text('fixture-host')
+        folder=baseline/'capture';reproduce._APPWORLD_LAYOUT.save(folder/'started.json',{
+            'planned_trials':100,'run_id':'native-run','dataset_version':'native-dataset'})
+        row={'task_id':tasks[0],'task_version':'version-'+tasks[0],'trial_id':'trial-a','variant_id':'candidate',
+             'execution_status':'completed','verdict':'passed','checks':[],
+             'evidence':{'loaded_version':'baseline-native','output':{'framework_capture':{'status':'complete'}},
+                         'trace':{'events':[{'kind':'run.start'},{'kind':'run.end'}]}}}
+        trial=folder/'trials/trial-a.json';reproduce._APPWORLD_LAYOUT.save(trial,row)
+        with _isolated_gepa_outputs(root),patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',gepa), \
+             patch.object(reproduce._APPWORLD_LAYOUT,'RUNTIME',root/'training/runtime'),patch.object(compare,'DATASET',dataset), \
+             patch.object(reproduce,'_host_version',return_value='fixture-host'),patch.object(reproduce,'_CANDIDATE_STATE_LABEL',None), \
+             patch.object(reproduce._APPWORLD_LAYOUT,'version',side_effect=lambda a:'baseline-native' if a.get('level')=='L0' else 'candidate-native'):
+            search={'round':2,'current_seed':str(seed),'attempts':[{'round':2,'seed':str(seed),'host_version':'fixture-host',
+                'pilot_comparison':str(pilot),'validation_comparison':str(gepa/'current-stage100/comparison.json')}],
+                'automatic_seed_generation':{'round':2,'status':'frozen','seed':str(seed),'source_seed':str(root/'published/previous/strategy.json')}}
+            reproduce._save_search(search)
+            state={'status':'running','phase':'validation100','stop_reason':'appworld_seed_generation_duplicate',
+                'candidate':reproduce._candidate_identity(seed,'current'),'stage_results':{
+                    'pilot32':{'status':'complete','gate_passed':True},'validation100':{'status':'pending'}}}
+            reproduce._APPWORLD_LAYOUT.save(gepa/'lifecycle.json',state)
+            yield root,state,seed,baseline,trial,pilot
+
+    def test_real_formal_pilot_before_candidate_progress_preserves_partial_baseline_readonly(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+            passed,proof=gate.verify_stage('32',pilot,Path(reproduce._read(pilot)['source_l0']),seed)
+            self.assertTrue(passed,proof)
+            before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            self.assertFalse((root/'gepa/current-stage100/progress.json').exists())
+            self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            for p,data in before.items():self.assertEqual(p.read_bytes(),data)
+
+    def test_baseline_temporary_judge_failure_recovers_but_permanent_or_unbound_evidence_does_not(self):
+        for mutation in ('temporary','conflict','contract','schema','task','revision','judge','host','pilot','cancel','unknown','outside_output','authority_fault','bad_trace'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+                row=reproduce._read(trial)
+                if mutation in ('temporary','schema','conflict'):
+                    row.update(verdict='error',error_code='evaluation_judge_failed')
+                    row['checks']=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_429' if mutation=='temporary' else 'evaluation_judge_reason_conflict' if mutation=='conflict' else 'evaluation_judge_schema_invalid'}]
+                elif mutation=='bad_trace':row['evidence']['trace']['events']=[{'kind':'run.start'}]
+                elif mutation=='contract':row.update(execution_status='error',error_code='evaluation_entry_capture_contract_invalid')
+                elif mutation=='task':row['task_id']='task-outside-100'
+                elif mutation=='revision':row['task_version']='replaced'
+                elif mutation=='judge':
+                    config=reproduce._read(baseline/'capture.config.json');config['judge']['require_state_dependency']=False;reproduce._APPWORLD_LAYOUT.save(baseline/'capture.config.json',config)
+                elif mutation=='host':(baseline/'capture.host-version').write_text('wrong-host')
+                elif mutation=='pilot':
+                    value=reproduce._read(pilot);value['items'][0]['quality']=0;reproduce._APPWORLD_LAYOUT.save(pilot,value)
+                elif mutation=='cancel':state['cancel_requested']=True
+                elif mutation=='unknown':state['stop_reason']='source_authority_revoked'
+                elif mutation=='outside_output':
+                    search=reproduce.seed_search();search['attempts'][0]['validation_comparison']=str(root/'outside/comparison.json');reproduce._save_search(search)
+                elif mutation=='authority_fault':
+                    state['last_error']='source_authority_revoked'
+                    row.update(verdict='error',error_code='evaluation_judge_failed')
+                    row['checks']=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_429'}]
+                    search=reproduce.seed_search();search['experiment']={'status':'blocked','reason':'compare.py_failed:1'};reproduce._save_search(search)
+                reproduce._APPWORLD_LAYOUT.save(trial,row);reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):
+                    self.assertEqual(reproduce._worker_resume_check(),75 if mutation in ('temporary','conflict') else 0)
+                if mutation in ('temporary','conflict'):
+                    blocked=dict(state,status='blocked',stop_reason='compare.py_failed:1')
+                    self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError('compare.py_failed:1'),blocked),'appworld_stage_review_pending')
+
+    def test_actual_running_baseline_ignores_only_bound_previous_compare_exit(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+            state['stop_reason']='appworld_stage_failed'
+            state['stage_results']['validation100']={'status':'failed','reason':'RuntimeError:compare.py_failed:1','data':{}}
+            reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+            before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            for p,data in before.items():self.assertEqual(p.read_bytes(),data)
+            for reason in ('source_authority_revoked','evaluation_entry_capture_contract_invalid','model_credentials_invalid'):
+                state['stage_results']['validation100']['reason']=reason
+                reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),0)
+
+    def test_latest_baseline_review_cannot_hide_permanent_judge_failure_or_wrong_source(self):
+        from copy import deepcopy
+        for fault in ('transport','conflict','schema','credentials','uncertain','foreign_tasks','wrong_judge'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+                rows=[]
+                for i in range(100):
+                    row=deepcopy(reproduce._read(trial));row.update(task_id=f'task-{i:03d}',task_version=f'version-task-{i:03d}',trial_id=f'trial-{i:03d}',verdict='error',error_code='evaluation_judge_failed')
+                    row['checks']=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_429'}];rows.append(row)
+                reason={'conflict':'evaluation_judge_reason_conflict','schema':'evaluation_judge_schema_invalid','credentials':'evaluation_judge_http_401','uncertain':'evaluation_judge_uncertain'}.get(fault)
+                if reason:rows[0]['checks'][0]['reason']=reason
+                if fault=='foreign_tasks':rows[0]['task_id']='outside-100'
+                source=baseline/'regrade/report.json';reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                reproduce._APPWORLD_LAYOUT.save(source.with_name('manifest.json'),{'complete':True})
+                current=reproduce._APPWORLD_LAYOUT.judge_projection()
+                if fault=='wrong_judge':current['require_state_dependency']=False
+                reproduce._APPWORLD_LAYOUT.save(baseline/'regrade.regrade.config.json',{'judge':current})
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):
+                    self.assertEqual(reproduce._worker_resume_check(),75 if fault in ('transport','conflict') else 0)
+
+    def test_empty_baseline_waits_only_for_live_writer_and_failed_latest_attempt_not_hidden(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+            trial.unlink()
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),0)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            newer=baseline/'capture-retry-01';reproduce._APPWORLD_LAYOUT.save(newer/'started.json',reproduce._read(baseline/'capture/started.json'))
+            reproduce._APPWORLD_LAYOUT.save(newer/'trials/failure.json',{'task_id':'task-000','task_version':'version-task-000','variant_id':'candidate','execution_status':'error','error_code':'evaluation_entry_capture_contract_invalid','evidence':{'loaded_version':'baseline-native'}})
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),0)
