@@ -3238,7 +3238,7 @@ def _interrupted_worker_checkpoint(state: dict) -> str | None:
         draft = control.get('validated_model_draft')
         generated = control.get('generated_rules') or {}
         if (control.get('status') != 'generated' or type(control.get('model_calls')) is not int
-                or control['model_calls'] != 3 or not isinstance(draft, dict)
+                or not 1 <= control['model_calls'] <= 3 or not isinstance(draft, dict)
                 or not any(type(value) is int and value > 0 for value in generated.values())):
             return None
         from learning import _parse_control_draft, compile_seed_controls

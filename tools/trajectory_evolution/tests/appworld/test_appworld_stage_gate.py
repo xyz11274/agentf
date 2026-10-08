@@ -4874,6 +4874,19 @@ class GeneratedControlWorkerCheckpointTests(InterruptedWorkerCheckpointTests):
                 self.assertEqual(native_calls.count(['runtime','control-compile']),1)
                 self.assertTrue(all(op in (['runtime','recompile'],['runtime','control-compile']) for op in native_calls))
                 with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+                for paid in (1,2,3):
+                    with self.subTest(paid=paid):
+                        diagnostic['control_learning']['model_calls']=paid
+                        reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+                        self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+                for paid in (True,-1,4):
+                    with self.subTest(rejected_paid=paid):
+                        bad=deepcopy(diagnostic);bad['control_learning']['model_calls']=paid
+                        reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',bad)
+                        native_calls.clear()
+                        self.assertIsNone(reproduce._interrupted_worker_checkpoint(state))
+                        self.assertEqual(native_calls,[])
+                reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
                 initial=deepcopy(diagnostic);initial['english_trigger_learning']={'status':'pending','model_calls':0}
                 reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',initial)
                 self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')

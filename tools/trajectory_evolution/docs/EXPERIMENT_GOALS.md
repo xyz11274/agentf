@@ -1,4 +1,4 @@
-## 当前修复阶段（北京时间 2026-10-09 03:46:20）
+## 当前修复阶段（北京时间 2026-10-09 03:52:53）
 
 - 当前目标：用一条命令稳定运行GEPA变体，内部恢复临时失败、反思修正、生成真正不同候选、评测选优，直到产生真实达标可用节点。用户撤销连续5次失败停止；不依赖人工重启/重置。测试通过、启动成功和未达标收尾均不是完成。
 - 验收冻结：同题严格通过数和质量各相对提升≥5%，真实平均无效loop下降≥15%；资源如实报告。32→100达标后进入GEPA和完整对比发布。不能改旧分/裁判/阈值、补缺失loop0或伪造来源；健康TRAIN/L0/Agent执行和全部已知费用复用。
@@ -23,6 +23,10 @@
 - 前置条件正式修复：真实源码特异GET候选、同native段落、时序、全原负样本与full competing/native复验；仅一次同源本地替代，不新增paid，不改来源/body。6正式必要native tests PASS1.74秒；同段真实支持计数防1实窗+1跨段凑2，精准负例PASS.33秒。当前A9真实编译仍须全原生准入，不能把模拟测试或compiled当任务改善。
 - 最后稳定性修复已装：generated control3/English未开始或initialpending0仅本地native control复验后恢复；真实A9原稿0paid/Agent proof通过，正式1PASS.42秒。同label header和refresh-failed保留完整原paid/drafts，避免重启窗口丢账；额外2必要测试已运行并通过。未知来源/权限/取消仍尊重边界。
 - A9当前仍seed生成：control原3复用，English已2call，batch1从20到22 accepted含ed3，batch2 draft_ready；尚无32正式结果。d941/ed3早读机制不以synthetic或局部源proof冒称全134效果。目标保持active，不因修复、启动或未达标收尾标完成。
+
+- 03:52:53最新正常A9 pilot32 running，已10/32健康执行。manifest50157B有原control3+English3真实紧凑生成回执；最终accepted_conditions21，d941/ed3最终均未保留，不能声称两个源已提升效果。旧2runs/34queries局部证明与当前149runs/1227queries完整编译范围不同；没有新32/100/500正式改善结果。
+- 最后恢复范围已泛化实际generated1/2/3，保留source/owner/scope/native复编所有资格；正式1PASS/6subtests.43秒，bool/negative/4不授恢复。各类临时/已证本地故障正常程序内处理，不需要外部重置；未知source/auth/用户取消仍是明确停止边界。
+- 代码和必要验证/复现说明已直连push8bc0a9d至harness_agent_poc_evo。没有推送凭据、临时输出或未达标新成绩。最后1..3恢复小范围补充另提交；实验继续同A9，目标仍active。
 
 ## 新一轮GEPA修复与重试（北京时间 2026-10-08 08:17）
 
