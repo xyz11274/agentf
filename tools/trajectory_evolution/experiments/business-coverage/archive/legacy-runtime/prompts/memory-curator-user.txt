@@ -1,4 +1,0 @@
-判断 incoming_candidate 与 memory_options 的关系。
-输入：
-{{memory_json}}
-只返回一个 JSON 对象：{"relation":"DUPLICATE|RELATED|CONTRADICTS|DISTINCT","memory_id":"memory:...或空字符串","confidence":0.0,"reason":"中文理由"}。DUPLICATE 表示同一策略的不同表达；RELATED 表示相关但不能合并；CONTRADICTS 表示策略冲突；DISTINCT 表示独立策略。只能选择给出的 memory_id；DISTINCT 必须返回空 memory_id。

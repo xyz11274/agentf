@@ -39,7 +39,7 @@ template <class F> void rejects(F fn) {
 
 // 测试辅助函数：policy。
 // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
-v1::RuntimePolicy policy() {
+v1::RuntimePolicy policy(const char *experience_content = nullptr) {
   ep::EvolutionMemoryStore memory;
   memory.set_schema_version(1);
   memory.set_store_kind("trajectory_evolution_memory");
@@ -57,7 +57,8 @@ v1::RuntimePolicy policy() {
   candidate->set_status(ep::EVOLUTION_CANDIDATE_STATUS_PROPOSED);
   candidate->set_trigger_pattern("视频生成缺少素材");
   candidate->set_observed_problem("缺少图片仍重试");
-  candidate->set_proposed_change("请先补充图片素材，独立检索任务继续。");
+  candidate->set_proposed_change(experience_content ? experience_content
+                                                   : "请先补充图片素材，独立检索任务继续。");
   candidate->set_support_user_count(1);
   auto *evidence = candidate->add_support_evidence();
   evidence->set_evidence_id("evidence-a");
@@ -144,6 +145,68 @@ v1::RuntimeQuery query(const v1::RuntimePolicy &policy, const char *boundary = "
   query.set_execution_id("coordinator");
   query.set_boundary(boundary);
   return query;
+}
+
+// Two outstanding model calls keep the prepared decision with its own query.
+// Earlier advice in a later request is not a second L1 application.
+void interleaved_injection_receipts() {
+  const auto base = policy();
+  for (const auto level : {v1::L1, v1::L2, v1::L3}) {
+    auto options = base.options();
+    options.set_requested_level(level);
+    const auto p = te::compile_runtime_policy(base.snapshot(), options);
+    te::PolicyRuntime runtime(p);
+    auto first = query(p);
+    first.mutable_advice_query()->set_query_id("model-first");
+    first.mutable_advice_query()->set_decision_id("decision-first");
+    const auto prepared = runtime.decide(first);
+    check(prepared.status() == "ready" && prepared.experiences_size() == 1 &&
+          !prepared.context().empty());
+
+    v1::RuntimeObservation actual;
+    actual.set_call_id("actual-model-first");
+    actual.set_transport_allowed(true);
+    auto *message = (*actual.mutable_request()->mutable_fields())["messages"]
+                        .mutable_list_value()
+                        ->add_values()
+                        ->mutable_struct_value();
+    (*message->mutable_fields())["role"].set_string_value("system");
+    (*message->mutable_fields())["content"].set_string_value(prepared.context());
+
+    auto second = first;
+    second.mutable_advice_query()->set_query_id("model-second");
+    second.mutable_advice_query()->set_decision_id("decision-second");
+    const auto unchanged = runtime.decide(second);
+    check(unchanged.context().empty() && unchanged.experiences().empty());
+    check(runtime.verify(first, actual).application().status() == "applied");
+    check(runtime.verify(first, actual).application().status() == "applied");
+    check(runtime.decide(first).SerializeAsString() == prepared.SerializeAsString());
+
+    // The second request can carry earlier advice in its history without
+    // pretending that the native boundary injected it again.
+    actual.set_call_id("actual-model-second");
+    const auto no_second_application = runtime.verify(second, actual);
+    check(no_second_application.application().status() == "rejected" &&
+          no_second_application.experiences().empty());
+    check(runtime.decide(second).context().empty());
+
+    // Reusing identifiers cannot borrow a prepared decision for a different
+    // request, scope or execution. The original remains verifiable afterward.
+    auto changed = first;
+    changed.mutable_advice_query()->set_state("different observed request state");
+    check(runtime.decide(changed).context().empty());
+    check(runtime.verify(changed, actual).application().status() != "applied");
+    changed = first;
+    changed.set_execution_id("another-execution");
+    check(runtime.verify(changed, actual).application().status() != "applied");
+    changed = first;
+    changed.mutable_advice_query()->mutable_identity()->set_user_id("another-user");
+    rejects([&] { runtime.verify(changed, actual); });
+    actual.set_call_id("actual-model-first");
+    check(runtime.verify(first, actual).application().status() == "applied");
+    actual.set_transport_allowed(false);
+    check(runtime.verify(first, actual).application().status() == "failed");
+  }
 }
 
 // 测试辅助函数：injection_and_evidence。
@@ -288,6 +351,78 @@ void injection_and_evidence() {
 
 // 测试辅助函数：evolvable_applicability。
 // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
+void explicit_experience_allowlist() {
+  using te::integration::Json;
+  const auto p = policy();
+  const auto original = query(p);
+  const auto legacy = te::PolicyRuntime(p).decide(original);
+  check(!legacy.context().empty());
+  auto q = original;
+  const auto ref = te::integration::json(p.options().approved_experiences(0));
+  q.mutable_advice_query()->set_state(Json{{"retrieval_state", ""},
+      {"runtime_experience_allowlist", Json::Array{ref}}}.dump());
+  te::PolicyRuntime restricted(p);
+  const auto selected = restricted.decide(q);
+  check(selected.context() == legacy.context());
+  check(restricted.decide(q).SerializeAsString() == selected.SerializeAsString());
+  q.mutable_advice_query()->set_state(Json{{"retrieval_state", ""},
+      {"runtime_experience_allowlist", Json::Array{}}}.dump());
+  check(te::PolicyRuntime(p).decide(q).context().empty());
+  auto invalid = ref;
+  invalid["content_revision"] = "wrong-revision";
+  q.mutable_advice_query()->set_state(Json{{"retrieval_state", ""},
+      {"runtime_experience_allowlist", Json::Array{invalid}}}.dump());
+  rejects([&] { te::PolicyRuntime(p).decide(q); });
+  check(te::PolicyRuntime(p).decide(original).SerializeAsString() == legacy.SerializeAsString());
+}
+
+void explicit_allowlist_reaches_real_model_boundary() {
+  namespace in = te::integration;
+  using in::Json;
+  const auto old = policy();
+  ep::EvolutionMemoryStore memory;
+  memory.set_schema_version(1); memory.set_store_kind("trajectory_evolution_memory");
+  memory.set_store_version("evolution-memory-store-v1"); memory.set_revision(1);
+  auto *entry = memory.add_entries(); entry->set_memory_id("experience-a");
+  entry->set_status(ep::EVOLUTION_MEMORY_STATUS_CANDIDATE);
+  auto *source = entry->mutable_candidate(); source->set_schema_version(1);
+  source->set_candidate_id("candidate-a");
+  source->set_generator_version(agentflow::trajectory::kScopedExperienceGeneratorVersion);
+  source->set_target_type(ep::CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION);
+  source->set_target_scope("agent:agent-a/actor:coordinator");
+  source->set_status(ep::EVOLUTION_CANDIDATE_STATUS_PROPOSED);
+  source->set_trigger_pattern(old.snapshot().experiences(0).trigger_pattern());
+  source->set_observed_problem(old.snapshot().experiences(0).observed_problem());
+  source->set_proposed_change(old.snapshot().experiences(0).content()); source->set_support_user_count(1);
+  auto *support = source->add_support_evidence(); support->set_evidence_id("local-real-boundary");
+  support->mutable_source()->set_user_id("user-a"); support->mutable_source()->set_dialogue_id("source-a");
+  auto limits = old.snapshot().options(); limits.clear_target_scopes();
+  limits.add_target_scopes("agent:agent-a/actor:coordinator");
+  const auto snapshot = te::compile_shadow_policy(memory, old.snapshot().identity(), limits);
+  auto options = old.options(); options.clear_action_rules(); options.clear_loop_rules();
+  options.clear_approved_experiences();
+  for (const auto &card : snapshot.experiences()) {
+    auto *ref = options.add_approved_experiences(); ref->set_memory_id(card.memory_id());
+    ref->set_content_revision(card.content_revision());
+  }
+  const auto compiled = te::compile_runtime_policy(snapshot, options);
+  const Json config{{"agent_id", "agent-a"}, {"actors", Json::Array{"coordinator"}}};
+  auto call = [&](bool restrict) {
+    Json run{{"identity", in::json(snapshot.identity())}, {"level", 3}, {"input", "视频生成缺少图片素材"},
+      {"capabilities", Json::Array{"model"}}, {"events", Json::Array{Json{{"event_id", "begin"}}}},
+      {"policy", in::json(compiled)}};
+    in::initialize_boundary_run(run, Json::Object{});
+    Json request{{"operation", "activity.begin"}, {"request_id", "actual-model"}, {"kind", "model"},
+      {"name", "llm"}, {"actor_id", "coordinator"}, {"scope_id", "coordinator"},
+      {"input", "NEXT"}, {"binding", Json{{"pointer", ""}, {"mode", "text"}}}};
+    if (restrict) request["extensions"] = Json{{"runtime_experience_allowlist", Json::Array{}}};
+    te::PolicyRuntime runtime(compiled);
+    return in::dispatch_boundary(run, request, config, &runtime);
+  };
+  check(call(false)["input"].text() != "NEXT");
+  check(call(true)["input"].text() == "NEXT");
+}
+
 void evolvable_applicability() {
   const auto original = policy();
   auto options = original.options();
@@ -670,6 +805,143 @@ void failure_replanning() {
   q.set_iteration(1);
   q.set_failed_actions(0);
   check(runtime.decide(q).progress().decision() == "continue");
+}
+
+void source_bound_auth_replanning() {
+  namespace in = te::integration;
+  const auto p = policy("Read the public login contract and matching supervisor credentials. "
+                        "After a successful login, pass its actual access_token to every "
+                        "protected API call. Do not repeat unchanged failed credentials.");
+  auto base = p.options();
+  base.set_max_context_bytes(2048);
+  base.mutable_loop_rules(0)->set_max_no_progress(3);
+  const auto original = te::compile_runtime_policy(p.snapshot(), base);
+  const auto &source = p.snapshot().experiences(0);
+  check(source.memory_id() == "experience-a");
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto draft = in::Json{
+      {"action_rules", in::Json::Array{}},
+      {"loop_rules", in::Json::Array{in::Json{
+          {"memory_id", source.memory_id()}, {"replan_on_failure", true},
+          {"error_codes", in::Json::Array{"appworld_auth_401"}},
+          {"replan_context", source.content()}, {"reason", "Recover using the cited auth experience"}}}}};
+  const auto learned = te::compile_runtime_policy(
+      p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(learned.options().loop_rules_size() == 2);
+  check(learned.options().loop_rules(1).replan_context() == source.content());
+  check(learned.options().loop_rules(1).source_experience().content_revision() ==
+        source.content_revision());
+  check(learned.options().max_context_bytes() == 2048 &&
+        learned.options().loop_rules(1).max_replans() == 1);
+  check(learned.snapshot().SerializeAsString() == p.snapshot().SerializeAsString());
+  check(in::generated_controls_authorized(learned, original, settings));
+  auto legacy = draft;
+  legacy["loop_rules"].items()[0].fields().erase("replan_context");
+  const auto old = te::compile_runtime_policy(
+      p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, legacy));
+  check(old.options().loop_rules(1).replan_context() == base.loop_rules(0).replan_context());
+  check(in::generated_controls_authorized(old, original, settings));
+
+  auto rejected = [&](const in::Json &value, const v1::RuntimeOptions &limits,
+                      const v1::ShadowPolicySnapshot &snapshot) {
+    bool failed = false;
+    try { in::apply_control_draft(snapshot, limits, settings, value); }
+    catch (const in::Error &) { failed = true; }
+    check(failed);
+  };
+  for (const auto &text : {std::string(), source.content() + " unapproved instruction"}) {
+    auto bad = draft; bad["loop_rules"].items()[0]["replan_context"] = text;
+    rejected(bad, base, p.snapshot());
+  }
+  auto bad_type = draft; bad_type["loop_rules"].items()[0]["replan_context"] = true;
+  rejected(bad_type, base, p.snapshot());
+  auto unknown = draft; unknown["loop_rules"].items()[0]["memory_id"] = "not-approved";
+  rejected(unknown, base, p.snapshot());
+  auto unapproved = base; unapproved.clear_approved_experiences();
+  rejected(draft, unapproved, p.snapshot());
+  auto wrong_revision = base;
+  wrong_revision.mutable_approved_experiences(0)->set_content_revision("wrong-revision");
+  rejected(draft, wrong_revision, p.snapshot());
+  auto wrong_scope = p.snapshot(); wrong_scope.mutable_experiences(0)->set_target_scope("other");
+  rejected(draft, base, wrong_scope);
+  for (const auto &codes : {in::Json::Array{}, in::Json::Array{"appworld_api_422"},
+                            in::Json::Array{"appworld_auth_401", "appworld_missing_access_token"}}) {
+    auto bad = draft; bad["loop_rules"].items()[0]["error_codes"] = codes;
+    rejected(bad, base, p.snapshot());
+  }
+  auto without_condition = draft; without_condition["loop_rules"].items()[0].fields().erase("error_codes");
+  rejected(without_condition, base, p.snapshot());
+  auto no_failure = draft; no_failure["loop_rules"].items()[0]["replan_on_failure"] = false;
+  rejected(no_failure, base, p.snapshot());
+  auto no_replan = draft; no_replan["loop_rules"].items()[0]["max_replans"] = 0;
+  rejected(no_replan, base, p.snapshot());
+  auto over_budget = draft; over_budget["loop_rules"].items()[0]["max_replans"] = 2;
+  rejected(over_budget, base, p.snapshot());
+  auto two_base = base; two_base.mutable_loop_rules(0)->set_max_replans(2);
+  rejected(over_budget, two_base, p.snapshot());
+  auto small = base; small.set_max_context_bytes(source.content().size() + 127);
+  rejected(draft, small, p.snapshot());
+  auto altered = learned;
+  altered.mutable_options()->mutable_loop_rules(1)->set_replan_context("unapproved recovery");
+  check(!in::generated_controls_authorized(altered, original, settings));
+  altered = learned;
+  altered.mutable_options()->mutable_loop_rules(1)->mutable_source_experience()->set_content_revision("wrong");
+  check(!in::generated_controls_authorized(altered, original, settings));
+  altered = learned; altered.mutable_options()->mutable_loop_rules(1)->set_target_scope("other");
+  check(!in::generated_controls_authorized(altered, original, settings));
+
+  // A context change is an actual mutation even when the base already replans.
+  auto failure_base = base; failure_base.mutable_loop_rules(0)->set_replan_on_failure(true);
+  const auto context_only = te::compile_runtime_policy(
+      p.snapshot(), in::apply_control_draft(p.snapshot(), failure_base, settings, draft));
+  check(context_only.options().loop_rules_size() == 2 &&
+        context_only.options().loop_rules(1).replan_context() == source.content());
+  check(in::generated_controls_authorized(
+      context_only, te::compile_runtime_policy(p.snapshot(), failure_base), settings));
+
+  for (const auto &code : {"appworld_auth_401", "appworld_missing_access_token"}) {
+    auto exact = draft; exact["loop_rules"].items()[0]["error_codes"] = in::Json::Array{code};
+    const auto compiled = te::compile_runtime_policy(
+        p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, exact));
+    check(in::generated_controls_authorized(compiled, original, settings));
+    te::PolicyRuntime runtime(compiled);
+    auto q = query(compiled, "loop");
+    q.set_iteration(1); q.set_state_fingerprint("initial");
+    *q.mutable_previous() = runtime.decide(q).progress();
+    q.set_iteration(2); q.set_state_fingerprint("first-auth-error");
+    q.add_error_codes(code); q.set_failed_actions(1);
+    check(runtime.decide(q).progress().decision() == "continue");
+    *q.mutable_previous() = runtime.decide(q).progress();
+    q.set_iteration(3); q.set_state_fingerprint("repeated-auth-error");
+    q.set_repeated_failure_steps(1); q.set_pending_actions(true);
+    check(runtime.decide(q).progress().decision() == "continue");
+    q.set_pending_actions(false);
+    const auto replan = runtime.decide(q);
+    check(replan.progress().decision() == "replan" && replan.progress().replans() == 1);
+    check(replan.context().find(source.content()) != std::string::npos);
+    check(replan.experiences_size() == 1 && replan.experiences(0).memory_id() == source.memory_id());
+    v1::RuntimeObservation observed;
+    observed.set_loop_decision("replan");
+    check(runtime.verify(q, observed).application().status() == "failed");
+    observed.set_transport_allowed(true); observed.set_call_id("next-model-request");
+    auto *system = (*observed.mutable_request()->mutable_fields())["messages"]
+                       .mutable_list_value()->add_values()->mutable_struct_value();
+    (*system->mutable_fields())["role"].set_string_value("system");
+    (*system->mutable_fields())["content"].set_string_value("Original task\n" + replan.context());
+    check(runtime.verify(q, observed).application().status() == "applied");
+    observed.mutable_request()->Clear();
+    check(runtime.verify(q, observed).application().status() == "failed");
+    *q.mutable_previous() = replan.progress();
+    q.set_iteration(4); q.set_state_fingerprint("still-failed");
+    check(runtime.decide(q).progress().decision() == "continue"); // No second replan.
+    q.set_execution_id("independent");
+    rejects([&] { runtime.decide(q); }); // Cannot import another execution's progress.
+    q.clear_previous(); q.set_iteration(1); q.set_repeated_failure_steps(0);
+    q.set_failed_actions(0); q.clear_error_codes();
+    check(runtime.decide(q).progress().decision() == "continue");
+    q.set_iteration(2); q.set_repeated_failure_steps(1); q.add_error_codes("appworld_api_422");
+    check(runtime.decide(q).progress().decision() == "continue");
+  }
 }
 
 // 测试辅助函数：skill_orchestration。
@@ -1226,6 +1498,8 @@ void level_application_coverage() {
                          {"attributes", in::Json{{"receipt", in::json(receipt)}}}});
   };
   auto q = query(p);
+  q.mutable_advice_query()->set_query_id(q.boundary());
+  q.mutable_advice_query()->set_decision_id(q.boundary());
   v1::RuntimeObservation observed;
   observed.set_call_id("model");
   observed.set_transport_allowed(true);
@@ -1770,12 +2044,16 @@ int main() {
   const std::vector<std::pair<const char *, void (*)()>> cases = {
       {"scoped_control_roundtrip", scoped_control_roundtrip},
       {"injection_and_evidence", injection_and_evidence},
+      {"interleaved_injection_receipts", interleaved_injection_receipts},
       {"evolvable_applicability", evolvable_applicability},
+      {"explicit_experience_allowlist", explicit_experience_allowlist},
+      {"explicit_allowlist_reaches_real_model_boundary", explicit_allowlist_reaches_real_model_boundary},
       {"disabled_injection_keeps_control_approval", disabled_injection_keeps_control_approval},
       {"independent_actions", independent_actions},
       {"loop_controls", loop_controls},
       {"generated_controls", generated_controls},
       {"failure_replanning", failure_replanning},
+      {"source_bound_auth_replanning", source_bound_auth_replanning},
       {"bounded_recovery_budget", bounded_recovery_budget},
       {"conditional_recovery_budget", conditional_recovery_budget},
       {"finalization_condition", finalization_condition},

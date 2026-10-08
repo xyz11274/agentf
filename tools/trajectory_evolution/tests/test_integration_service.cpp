@@ -5,16 +5,20 @@
 #include "trajectory_evolution/integration.h"
 #include "trajectory_evolution/evolution.h"
 #include "trajectory_evolution/request_binding.h"
+#include "trajectory_evolution/dataset.h"
+#include "trajectory_evolution/task_evaluation.h"
 #include "agentflow/trajectory/experience.h"
 #include "integration_json.h"
 #include "instrumentation.h"
 #include "trace_internal.h"
+#include "../clients/c/evolution.h"
 
 #include <fstream>
 #include <future>
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <openssl/sha.h>
 #include <unistd.h>
 
 namespace te = trajectory::evolution;
@@ -2603,6 +2607,139 @@ void target_retry_tests(const fs::path &folder) {
   std::cout << "Target retry: redispatch, concurrency, success reset and run isolation passed\n";
 }
 
+// HTTP uses the same once-per-run interpreter and original prepared receipts
+// as query-batch, including after restoring an interrupted active run.
+void http_once_policy_tests(const fs::path &folder) {
+  auto c = config(folder);
+  c["port"] = 0;
+  c["preserve_runtime_policy_state"] = true;
+  c["auto_evaluate"] = false;
+  c["learning"]["min_new_runs"] = 32;
+  write(folder / "service.json", c.dump());
+  seed(folder / "data");
+  check(te_initialize() == 0, "HTTP fixture transport initialization");
+  unsigned sequence = 0;
+  Json run_a, run_b, first;
+  auto invoke = [&](te::IntegrationHttpServer &server, Json packet, int expected = 200) {
+    if (!packet.has("operation"))
+      packet["operation"] = "point";
+    packet["request_id"] = "http-once-" + std::to_string(++sequence);
+    const auto url = "http://127.0.0.1:" + std::to_string(server.port());
+    te_client client{url.c_str(), token_a.c_str(), 5000, 1048576, 0};
+    char *body = nullptr;
+    long status = 0;
+    const char *code = nullptr;
+    const auto error = te_invoke(&client, packet.dump().c_str(), &body, &status, &code);
+    std::unique_ptr<char, decltype(&te_free)> owned(body, &te_free);
+    check(status == expected && (expected != 200 ? error != 0 : (body && !error)),
+          "HTTP once request " + packet.str("operation") + "/" + packet.str("phase") +
+          "/" + packet.str("kind") + " status=" + std::to_string(status) +
+          " expected=" + std::to_string(expected) + " transport=" + std::to_string(error));
+    if (expected != 200) {
+      // The C SDK deliberately withholds response bytes on an HTTP error.
+      return Json{{"status", static_cast<std::size_t>(status)}};
+    }
+    auto envelope = Json::parse(body);
+    check(envelope.flag("ok", false), "HTTP once response envelope");
+    return envelope["result"];
+  };
+  auto start = [&](te::IntegrationHttpServer &server, const char *conversation, const char *level) {
+    return invoke(server, Json{{"phase", "before"}, {"kind", "run"},
+        {"conversation_id", conversation}, {"level", level},
+        {"input", "视频生成缺少素材"}, {"capabilities", Json::Array{"model"}}});
+  };
+  auto model = [&](te::IntegrationHttpServer &server, const Json &context) {
+    return invoke(server, Json{{"phase", "before"}, {"kind", "model"},
+        {"context", context}, {"name", "fixture.model"}, {"actor_id", "assistant"},
+        {"input", Json{{"messages", Json::Array{Json{{"role", "system"}, {"content", "Original public instructions."}}}}}},
+        {"binding", Json{{"pointer", "/messages"}, {"mode", "system_message"}}}});
+  };
+  auto finish = [&](te::IntegrationHttpServer &server, const Json &prepared) {
+    return invoke(server, Json{{"phase", "after"}, {"kind", "model"},
+        {"context", prepared["context"]}, {"actual_input", prepared["input"]},
+        {"executed", true}, {"output", "public model reply"}});
+  };
+  {
+    te::IntegrationHttpServer server(folder / "service.json");
+    run_a = start(server, "once-a", "L1");
+    run_b = start(server, "once-b", "L1");
+    first = model(server, run_a["context"]);
+    auto other = model(server, run_b["context"]);
+    check(first["input"].dump().find("先补充图片") != std::string::npos &&
+              other["input"].dump().find("先补充图片") != std::string::npos,
+          "separate HTTP runs each receive their first source experience");
+    finish(server, other);
+    invoke(server, Json{{"phase", "after"}, {"kind", "run"}, {"context", run_b["context"]}, {"output", "done"}});
+    // Leave the first actual prepared model pending for a genuine restart.
+  }
+  {
+    te::IntegrationHttpServer server(folder / "service.json");
+    finish(server, first);
+    const auto second = model(server, run_a["context"]);
+    check(second["input"]["messages"].items().size() == 1 &&
+              second["input"]["messages"].items().front().str("content") == "Original public instructions.",
+          "HTTP restore preserves once state without changing the later model request");
+    finish(server, second);
+    auto done = invoke(server, Json{{"phase", "after"}, {"kind", "run"},
+        {"context", run_a["context"]}, {"output", "done"}});
+    check(done.flag("closed", false) && done.flag("capture_complete", false),
+          "restored HTTP run completes with actual model boundaries");
+    auto rejected = start(server, "once-rejected", "L1");
+    invoke(server, Json{{"operation", "activity.begin"}, {"run_id", rejected["context"]["run_id"]},
+        {"kind", "model"}, {"name", "fixture.invalid-layout"},
+        {"input", Json{{"messages", "not a message array"}}},
+        {"binding", Json{{"pointer", "/messages"}, {"mode", "system_message"}}}}, 400);
+    auto recovered = model(server, rejected["context"]);
+    check(recovered["input"].dump().find("先补充图片") != std::string::npos,
+          "an uncommitted failed preparation cannot consume source advice");
+    finish(server, recovered);
+    invoke(server, Json{{"phase", "after"}, {"kind", "run"}, {"context", rejected["context"]}, {"output", "done"}});
+    auto neutral = start(server, "once-l0", "L0");
+    auto baseline = model(server, neutral["context"]);
+    check(baseline["input"]["messages"].items().size() == 1,
+          "L0 model input remains unchanged");
+    finish(server, baseline);
+    invoke(server, Json{{"phase", "after"}, {"kind", "run"}, {"context", neutral["context"]}, {"output", "done"}});
+  }
+  const auto trace = read(folder / "data/by-user/user-a/traces/once-a" /
+                          (run_a["context"].str("run_id") + ".trace.json"));
+  unsigned applied = 0;
+  for (const auto &event : trace["events"].items())
+    if (event.str("kind") == "advice.applied" &&
+        event["attributes"]["receipt"].str("boundary") == "llm" &&
+        event["application"].str("status") == "applied")
+      ++applied;
+  check(applied == 1 && te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(),
+        "only the original HTTP prepared advice has a valid applied receipt");
+  // Existing business configurations keep their established HTTP behavior.
+  c.fields().erase("preserve_runtime_policy_state");
+  write(folder / "service.json", c.dump());
+  {
+    te::IntegrationHttpServer server(folder / "service.json");
+    auto legacy = start(server, "once-default-compatible", "L1");
+    for (unsigned i = 0; i < 2; ++i) {
+      auto prepared = model(server, legacy["context"]);
+      check(prepared["input"].dump().find("先补充图片") != std::string::npos,
+            "omitted HTTP state option preserves existing business behavior");
+      finish(server, prepared);
+    }
+    invoke(server, Json{{"phase", "after"}, {"kind", "run"}, {"context", legacy["context"]}, {"output", "done"}});
+  }
+  // The existing policy identity binds full options. An option change needs
+  // its real compiled identity; retaining an old id is strictly rejected.
+  auto policy = proto<v1::RuntimePolicy>(read(folder / "data/runs" /
+                              (run_a["context"].str("run_id") + ".json"))["policy"]);
+  auto changed = policy;
+  changed.mutable_options()->set_max_context_bytes(policy.options().max_context_bytes() + 1);
+  bool rejected_policy = false;
+  try { te::PolicyRuntime invalid(changed); }
+  catch (const std::exception &) { rejected_policy = true; }
+  check(rejected_policy, "changed options cannot reuse an old runtime policy identity");
+  const auto recompiled = te::compile_runtime_policy(changed.snapshot(), changed.options());
+  check(recompiled.policy_id() != policy.policy_id(),
+        "actual compiled policy changes invalidate cached prepared-query provenance");
+}
+
 // 测试辅助函数：l123_boundary_regression_tests。
 // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
 void l123_boundary_regression_tests(const fs::path &folder) {
@@ -3317,6 +3454,333 @@ void finalization_capability_tests(const fs::path &folder) {
   }
 }
 
+// Retry real imported training caches in both protobuf-JSON counter encodings.
+// Successful caches remain idempotent; malformed counters never authorize retry.
+void training_analysis_cache_retry_tests(const fs::path &folder) {
+  const auto report_hash = [](const std::string &bytes) {
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size(), digest);
+    const char hex[] = "0123456789abcdef";
+    std::string result;
+    for (unsigned char byte : digest) {
+      result += hex[byte >> 4];
+      result += hex[byte & 15];
+    }
+    return result;
+  };
+  const Json task{{"task_id", "training-retry-case"},
+                  {"group_id", "training-retry-group"},
+                  {"task_input", "Observe a public fixture result"},
+                  {"expected_behavior", "Return the observed fixture result"},
+                  {"category", "fixture"}, {"difficulty", "easy"},
+                  {"review_status", "reviewed"}, {"split", "train"}};
+  write(folder / "tasks.jsonl", task.dump() + "\n");
+  write(folder / "dataset.json",
+        Json{{"schema_version", 1}, {"name", "training-retry-fixture"},
+             {"split_seed", "training-retry"}, {"split_percent", Json::Array{60, 20, 20}},
+             {"budget", Json{{"max_steps", 2}, {"max_tool_calls", 2}, {"timeout_ms", 1000}}},
+             {"sources", Json::Array{Json{{"kind", "golden"}, {"path", "tasks.jsonl"}}}}}.dump());
+  const auto dataset = te::build_evaluation_dataset(folder / "dataset.json");
+  check(dataset.tasks_size() == 1 &&
+            std::none_of(dataset.issues().begin(), dataset.issues().end(), [](const auto &issue) {
+              return issue.severity() == "error";
+            }),
+        "training retry fixture dataset");
+  te::write_evaluation_dataset(dataset, folder / "dataset");
+  for (const auto &encoding : {std::string("string"), std::string("number")}) {
+    const auto root = folder / encoding;
+    auto capture_config = config(root / "capture");
+    capture_config["auto_evaluate"] = false;
+    write(root / "capture/service.json", capture_config.dump());
+    std::string run_id;
+    {
+      te::IntegrationService capture(root / "capture/service.json");
+      Client client{capture};
+      client.start("L0", "training-cache-retry");
+      run_id = client.run;
+      const auto step = client.step();
+      client.invoke("step.end", Json{{"step_id", step["step_id"]},
+                                      {"decision", "continue"}, {"output", "public fixture result"}});
+      client.invoke("task.end", Json{{"status", "completed"},
+                                      {"business_status", "failed"}, {"output", "public fixture result"}});
+      check(capture.flush_capture(), "flush training retry fixture capture");
+      capture.process_evaluations();
+    }
+    auto trace = read(root / "capture/data/by-user/user-a/traces/training-cache-retry" /
+                      (run_id + ".trace.json"));
+    const std::string revision = "training-retry-fixture-v1", trial_id = "training-retry-trial";
+    const Json baseline{{"schema_version", 1},
+                        {"agent", Json{{"revision", revision}, {"name", "my-agent"}}},
+                        {"user_id", "user-a"}, {"level", "L0"}, {"policy", nullptr}};
+    const auto version = te::agent_version_id(baseline.dump());
+    for (auto &event : trace["events"].items())
+      if (event.str("kind") == "run.start") {
+        event["attributes"]["agent_version_id"] = version;
+        event["attributes"]["evaluation_trial_id"] = trial_id;
+      }
+    check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(),
+          "training retry source is a real valid native capture");
+    const Json report{{"run_id", "training-retry-report"}, {"complete", true},
+                      {"dataset_version", dataset.dataset_version()},
+                      {"configuration", Json{{"variants", Json::Array{Json{{"id", "L0"}, {"version", revision}}}}}},
+                      {"trials", Json::Array{Json{{"task_id", dataset.tasks(0).task_id()},
+                          {"task_version", dataset.tasks(0).task_version()}, {"trial_id", trial_id},
+                          {"split", "train"}, {"variant_id", "L0"}, {"verdict", "failed"},
+                          {"execution_status", "completed"},
+                          {"evidence", Json{{"trace", trace}, {"loaded_version", version}}}}}}};
+    write(root / "report/report.json", report.dump());
+    write(root / "report/manifest.json",
+          Json{{"run_id", "training-retry-report"}, {"complete", true},
+               {"dataset_version", dataset.dataset_version()},
+               {"files", Json{{"report.json", report_hash(report.dump())}}}}.dump());
+    auto learning_config = config(root / "learning");
+    learning_config["auto_evaluate"] = false;
+    write(root / "learning/service.json", learning_config.dump());
+    te::IntegrationService learning(root / "learning/service.json");
+    const auto first = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(first.status == 200 && Json::parse(first.body)["result"].num("imported", 0) == 1,
+          "first training report imports actual native source");
+    const auto cache = root / "learning/data/by-user/user-a/evaluation/training-cache-retry" /
+                       (run_id + ".evaluation.json");
+    Json successful{{"model_requested_count", 1}, {"model_failed_count", 0}};
+    if (encoding == "string") successful["model_failed_count"] = "0";
+    write(cache, successful.dump());
+    const auto reused = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(reused.status == 200 && Json::parse(reused.body)["result"].num("reused", 0) == 1,
+          "successful analysis cache remains idempotent in both encodings");
+    check(read(cache).dump() == successful.dump(), "successful cache unchanged");
+    Json failed = successful;
+    if (encoding == "string") failed["model_failed_count"] = "1";
+    else failed["model_failed_count"] = 1;
+    write(cache, failed.dump());
+    const auto retried = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(retried.status == 200 && Json::parse(retried.body)["result"].num("imported", 0) == 1,
+          "failed analysis cache genuinely requeues in both encodings");
+    check(!fs::exists(cache), "failed analysis cache removed after archiving");
+    const auto history = root / "learning/data/by-user/user-a/evaluation-retry-history/training-cache-retry";
+    check(fs::is_directory(history), "failed cache retry history exists");
+    unsigned archived = 0;
+    for (const auto &entry : fs::directory_iterator(history)) {
+      if (entry.path().extension() != ".json") continue;
+      check(read(entry.path()).dump() == failed.dump(), "archived failed cache preserves evidence");
+      ++archived;
+    }
+    check(archived == 1, "exactly the failed cache is archived");
+    const auto state = read(root / "learning/data/runs" / (run_id + ".json"));
+    check(state.str("evaluation_status") == "pending" &&
+              state["learning"].str("analysis_state") == "retry_authorized" &&
+              state["learning"].num("retry_count", 0) == 1 &&
+              !state["learning"].has("job_id") && !state["learning"].has("report_fingerprint"),
+          "failed run is actually pending new semantic analysis");
+    Json skipped{{"model_requested_count", 0}, {"model_failed_count", 0},
+                 {"dialogue_assessment", Json{{"status", "MODEL_CALL_STATUS_SKIPPED"},
+                                               {"error_code", "model_request_too_large"}}}};
+    if (encoding == "string") skipped["model_failed_count"] = "0";
+    write(cache, skipped.dump());
+    const auto skip_retry = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(skip_retry.status == 200 && Json::parse(skip_retry.body)["result"].num("imported", 0) == 1 &&
+              !fs::exists(cache),
+          "oversized skipped analysis retries despite zero requested/failed counters");
+    unsigned histories = 0;
+    for (const auto &entry : fs::directory_iterator(history))
+      histories += entry.path().extension() == ".json";
+    check(histories == 2, "oversized skipped cache also preserves original evidence");
+    check(read(root / "learning/data/runs" / (run_id + ".json"))["learning"].num("retry_count", 0) == 2,
+          "each explicit cache retry advances the existing job retry identity");
+    auto disabled = skipped;
+    disabled["dialogue_assessment"]["status"] = "MODEL_CALL_STATUS_NOT_REQUESTED";
+    disabled["dialogue_assessment"]["error_code"] = "model_disabled";
+    write(cache, disabled.dump());
+    const auto disabled_reuse = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(disabled_reuse.status == 200 && Json::parse(disabled_reuse.body)["result"].num("reused", 0) == 1 &&
+              read(cache).dump() == disabled.dump(),
+          "intentionally disabled model is not force-retried or relabelled successful");
+
+    // Reproduce a pre-model setup failure after the old failed cache was archived.
+    // The retry must get a fresh existing retry identity without losing that job.
+    const auto state_path = root / "learning/data/runs" / (run_id + ".json");
+    const auto source_path = root / "learning/data/by-user/user-a/traces/training-cache-retry" /
+                             (run_id + ".trace.json");
+    const auto source_before = read(source_path).dump(), report_before = read(root / "report/report.json").dump();
+    const auto old_job_id = report_hash(std::string("user-a") + '\0' + run_id + ":0");
+    const auto job_path = root / "learning/data/learning/jobs" / (old_job_id + ".json");
+    Json old_job{{"schema_version", 1}, {"id", old_job_id}, {"user", "user-a"},
+                 {"runs", Json::Array{run_id}}, {"retry_counts", Json{{run_id, 0}}},
+                 {"errors", Json::Object{}}, {"phase", "analysis"}, {"state", "failed"},
+                 {"error", "evaluation_configuration_failed"}};
+    auto failed_state = read(state_path);
+    failed_state["evaluation_status"] = "failed";
+    failed_state["evaluation_error"] = "evaluation_configuration_failed";
+    failed_state["learning"]["analysis_state"] = "retry_authorized";
+    failed_state["learning"]["phase"] = "failed";
+    failed_state["learning"]["retry_count"] = 0;
+    failed_state["learning"]["job_id"] = old_job_id;
+    write(state_path, failed_state.dump());
+    write(job_path, old_job.dump());
+    fs::remove(cache);
+    const auto missing_retry = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(missing_retry.status == 200 && Json::parse(missing_retry.body)["result"].num("imported", 0) == 1,
+          "failed authorized setup with no cache or reserved model call requeues");
+    const auto queued = read(state_path);
+    check(queued.str("evaluation_status") == "pending" &&
+              queued["learning"].num("retry_count", 0) == 1 &&
+              !queued["learning"].has("job_id") && read(job_path).dump() == old_job.dump(),
+          "new retry identity leaves the old failure job intact");
+    const auto pending_reuse = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(Json::parse(pending_reuse.body)["result"].num("reused", 0) == 1 &&
+              read(state_path)["learning"].num("retry_count", 0) == 1,
+          "already queued missing-cache retry remains idempotent");
+    learning.process_evaluations(true);
+    const auto fresh = read(state_path);
+    check(!fresh["learning"].str("job_id").empty() &&
+              fresh["learning"].str("job_id") != old_job_id &&
+              read(job_path).dump() == old_job.dump(),
+          "native analysis actually creates the new job instead of colliding with retry zero");
+    check(read(source_path).dump() == source_before && read(root / "report/report.json").dump() == report_before,
+          "training recovery preserves original trace and authoritative evaluation");
+    // A reserved request has an uncertain outcome and must not be replayed merely
+    // because its cache is absent.
+    old_job["analysis_model_calls"][run_id] = 1;
+    write(job_path, old_job.dump());
+    write(state_path, failed_state.dump());
+    fs::remove(cache);
+    const auto reserved_reuse = learning.import_training_evaluation(root / "report", folder / "dataset");
+    check(Json::parse(reserved_reuse.body)["result"].num("reused", 0) == 1 &&
+              read(state_path).str("evaluation_status") == "failed" &&
+              read(state_path)["learning"].num("retry_count", 0) == 0,
+          "missing cache does not authorize replay of a reserved model request");
+
+    // A colliding pre-existing job must keep its evidence and expose its actual
+    // static error code, not be replaced by an empty configuration-failure job.
+    auto collision_config = config(root / "collision");
+    write(root / "collision/service.json", collision_config.dump());
+    te::IntegrationService collision(root / "collision/service.json");
+    const auto collision_import = collision.import_training_evaluation(root / "report", folder / "dataset");
+    check(Json::parse(collision_import.body)["result"].num("imported", 0) == 1,
+          "collision fixture queues the original retry-zero native run");
+    const auto collision_job = root / "collision/data/learning/jobs" / (old_job_id + ".json");
+    write(collision_job, old_job.dump());
+    collision.process_evaluations(true);
+    check(read(root / "collision/data/learning/schedule.json").str("last_error") ==
+              "learning_job_already_exists" && read(collision_job).dump() == old_job.dump(),
+          "job collision reports its exact safe code and preserves prior failure evidence");
+  }
+}
+
+// 真实本地采集 + 成功分析桩缓存重放，不请求远程模型或执行 Agent。
+void evidence_refresh_tests(const fs::path &folder) {
+  const auto report_hash = [](const std::string &bytes) {
+    unsigned char bytes_digest[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size(), bytes_digest);
+    std::string value;
+    constexpr char hex[] = "0123456789abcdef";
+    for (unsigned char byte : bytes_digest) { value += hex[byte >> 4]; value += hex[byte & 15]; }
+    return value;
+  };
+  auto configuration = config(folder);
+  configuration["auto_evaluate"] = false;
+  write(folder / "service.json", configuration.dump());
+  std::string run_id;
+  {
+    te::IntegrationService capture(folder / "service.json");
+    Client client{capture};
+    client.start("L0", "evidence-refresh");
+    run_id = client.run;
+    const auto step = client.step();
+    client.invoke("step.end", Json{{"step_id", step["step_id"]}, {"decision", "continue"},
+                                    {"output", "public fixture observation"}});
+    client.invoke("task.end", Json{{"status", "completed"}, {"business_status", "succeeded"},
+                                    {"output", "public fixture observation"}});
+    check(capture.flush_capture(), "evidence fixture capture complete");
+    capture.process_evaluations();
+  }
+  const auto trace_path = folder / "data/by-user/user-a/traces/evidence-refresh" / (run_id + ".trace.json");
+  te::EvaluatorOptions evaluator_options;
+  evaluator_options.model_selection = agentflow::trajectory::ModelSelection::none;
+  auto report = te::Evaluator(evaluator_options).evaluate_file(trace_path).report;
+  check(report.source_trace_integrity_valid() && report.assessments_size() > 0,
+        "refresh fixture has real complete native episode packets");
+  auto *assessment = report.mutable_assessments(0);
+  const auto scope = assessment->evidence().scope();
+  check(!scope.empty() && assessment->evidence().source_event_ids_size() > 0,
+        "refresh fixture has a real scope and event binding");
+  assessment->set_final_verdict(ep::SEMANTIC_VERDICT_USEFUL);
+  assessment->set_final_confidence(0.9);
+  assessment->mutable_model()->set_status(ep::MODEL_CALL_STATUS_SUCCEEDED);
+  assessment->mutable_model()->set_verdict(ep::SEMANTIC_VERDICT_USEFUL);
+  assessment->mutable_model()->set_confidence(0.9);
+  report.mutable_dialogue_assessment()->set_status(ep::MODEL_CALL_STATUS_SUCCEEDED);
+  report.mutable_dialogue_assessment()->set_confidence(0.9);
+  const auto event_id = assessment->evidence().source_event_ids(0);
+  report.mutable_reflection()->add_evidence_event_ids(event_id);
+  auto *advice = report.mutable_reflection()->add_experience_details();
+  advice->set_target_scope(scope);
+  advice->set_trigger_pattern("公开步骤需要检查结果");
+  advice->set_proposed_change("先检查真实执行结果，再判断是否继续。");
+  advice->add_evidence_event_ids(event_id);
+  te::EvolutionOptions evolution_options;
+  evolution_options.min_supporting_dialogues = 1;
+  evolution_options.min_supporting_episodes = 1;
+  evolution_options.enable_meta_reflection = false;
+  auto batch = te::Pipeline(evaluator_options, evolution_options).synthesize_reports({report}).report;
+  ep::EvolutionMemoryStore legacy_memory;
+  te::Pipeline::merge_memory(batch, &legacy_memory);
+  check(legacy_memory.entries_size() == 1 &&
+            legacy_memory.entries(0).candidate().support_evidence_size() == 1,
+        "refresh fixture goes through real candidate synthesis and memory admission");
+  // Simulate the old generator bug in this isolated fixture only.
+  legacy_memory.mutable_entries(0)->mutable_candidate()->mutable_support_evidence(0)->set_verdict(
+      ep::SEMANTIC_VERDICT_UNASSESSED);
+  const auto memory_path = folder / "data/by-user/user-a/memory/evolution-memory.pb";
+  write(memory_path, legacy_memory.SerializeAsString());
+  const auto cache_path = folder / "data/by-user/user-a/evaluation/evidence-refresh" / (run_id + ".evaluation.json");
+  const auto state_path = folder / "data/runs" / (run_id + ".json");
+  const auto save_cache = [&](const ep::HybridEvaluationReport &value) {
+    const auto bytes = json(value).dump();
+    write(cache_path, bytes);
+    auto state = read(state_path);
+    state["learning"]["analysis_state"] = "completed";
+    state["learning"]["report_fingerprint"] = report_hash(bytes);
+    write(state_path, state.dump());
+  };
+  save_cache(report);
+  const auto trace_before = read(trace_path).dump(), cache_before = read(cache_path).dump();
+  te::IntegrationService learning(folder / "service.json");
+  const auto response = learning.refresh_evidence();
+  check(response.status == 200 && Json::parse(response.body).num("model_calls", 1) == 0 &&
+            Json::parse(response.body).num("refreshed_evidence", 0) == 1,
+        "native refresh applies exactly the actual useful episode without any model request");
+  auto fresh = te::Pipeline::load_memory(memory_path);
+  const auto &updated = fresh.entries(0).candidate().support_evidence(0);
+  check(updated.verdict() == ep::SEMANTIC_VERDICT_USEFUL &&
+            updated.evidence_id() == legacy_memory.entries(0).candidate().support_evidence(0).evidence_id() &&
+            fresh.entries(0).memory_id() == legacy_memory.entries(0).memory_id() &&
+            fresh.entries(0).candidate().proposed_change() == legacy_memory.entries(0).candidate().proposed_change(),
+        "refresh keeps original memory/evidence identity and content");
+  const auto revision = fresh.revision();
+  check(learning.refresh_evidence().status == 200 &&
+            te::Pipeline::load_memory(memory_path).revision() == revision,
+        "successful refresh is idempotent without a new version or repeated analysis");
+  for (const auto &failure : {std::string("failed-model"), std::string("wrong-event"),
+                              std::string("wrong-source"), std::string("wrong-scope")}) {
+    auto old = legacy_memory;
+    auto value = report;
+    if (failure == "failed-model") value.mutable_dialogue_assessment()->set_status(ep::MODEL_CALL_STATUS_TRANSPORT_ERROR);
+    if (failure == "wrong-event") old.mutable_entries(0)->mutable_candidate()->mutable_support_evidence(0)->add_evidence_event_ids("unknown-event");
+    if (failure == "wrong-source") old.mutable_entries(0)->mutable_candidate()->mutable_support_evidence(0)->set_source_fingerprint("another-real-source");
+    if (failure == "wrong-scope") old.mutable_entries(0)->mutable_candidate()->set_target_scope("agent:other/actor:assistant");
+    write(memory_path, old.SerializeAsString());
+    save_cache(value);
+    check(learning.refresh_evidence().status == 200 &&
+              te::Pipeline::load_memory(memory_path).entries(0).candidate().support_evidence(0).verdict() ==
+                  ep::SEMANTIC_VERDICT_UNASSESSED,
+          "failed, foreign or unknown evidence stays genuinely unassessed: " + failure);
+  }
+  check(read(trace_path).dump() == trace_before, "refresh never reruns or edits captured execution");
+  save_cache(report);
+  check(read(cache_path).dump() == cache_before, "refresh never rewrites successful analysis output");
+}
+
 // 回归用例：main。
 // 构造本函数中的固定输入并核验状态与返回结果；不发起真实业务实验。
 int main(int argc, char **argv) {
@@ -3347,9 +3811,31 @@ int main(int argc, char **argv) {
       }
     } cleanup{path};
 
+    if (argc == 2 && std::string(argv[1]) == "--training-analysis-retry") {
+      training_analysis_cache_retry_tests(fs::path(path) / "training-analysis-retry");
+      std::cout << "Training retry: cache counters, missing-cache recovery, job identity, "
+                   "reserved-call safety and collision diagnostics passed\n";
+      return 0;
+    }
+
+    if (argc == 2 && std::string(argv[1]) == "--refresh-evidence") {
+      evidence_refresh_tests(fs::path(path) / "evidence-refresh");
+      std::cout << "Native refresh: same-source success, identity preservation, idempotence, and failed/unknown rejection passed\n";
+      return 0;
+    }
+
+    if (argc == 2 && std::string(argv[1]) == "--http-once") {
+      http_once_policy_tests(fs::path(path) / "http-once");
+      std::cout << "HTTP once: isolated runs, actual receipts, restart and L0 passed\n";
+      return 0;
+    }
+
     run_tests(path);
+    evidence_refresh_tests(fs::path(path) / "evidence-refresh");
+    training_analysis_cache_retry_tests(fs::path(path) / "training-analysis-retry");
     delegation_tests(fs::path(path) / "delegation");
     boundary_tests(fs::path(path) / "boundary");
+    http_once_policy_tests(fs::path(path) / "http-once");
     failure_replan_tests(fs::path(path) / "failure-replan");
     outcome_progress_tests(fs::path(path) / "outcome-progress");
     aggressive_failure_tests(fs::path(path) / "aggressive-failures");

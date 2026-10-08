@@ -9,6 +9,7 @@ import copy
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -22,9 +23,114 @@ from test_shadow_hook import (
     SDK,
     Namespace,
     load_module,
+    memory_entry,
     memory_store,
     rpc_server,
 )
+
+
+def _batch_cli(operation, request):
+    return subprocess.run(
+        [str(BINARY), 'runtime', operation],
+        input=json.dumps(request, ensure_ascii=False), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+    )
+
+
+def _batch_policy(tmp_path, count=57):
+    memory = memory_store()
+    memory['entries'] = [memory_entry('batch-%02d' % i) for i in range(count)]
+    for i, entry in enumerate(memory['entries']):
+        entry['candidate']['proposed_change'] += ' 对应独立案例序号 %d。' % i
+    filename = tmp_path / 'memory.json'
+    filename.write_text(json.dumps(memory, ensure_ascii=False))
+    config = json.loads((COMPONENT / 'config/policy-runtime.json').read_text())
+    identity = dict(agent_id='agent-a', user_id='user-a', conversation_id='conv-a', run_id='run-a')
+    options = config['options']
+    options.update(requested_level='L1', host_capabilities=['context.request'],
+                   allowed_users=['user-a'], allowed_conversations=['conv-a'],
+                   experience_template='授权经验：{{experience}}')
+    request = dict(memory_path=str(filename), identity=identity,
+                   shadow_options=config['shadow_options'], options=options)
+    # Compile once to read the unchanged native content revisions, then approve
+    # the complete snapshot rather than constructing an artificial top-k.
+    provisional = _batch_cli('compile', request)
+    assert provisional.returncode == 0, provisional.stdout
+    policy = json.loads(provisional.stdout)
+    entries = policy['snapshot']['experiences']
+    assert len(entries) == count
+    options['approved_experiences'] = [
+        {key: entry[key] for key in ('memory_id', 'content_revision')} for entry in entries
+    ]
+    result = _batch_cli('compile', request)
+    assert result.returncode == 0, result.stdout
+    return json.loads(result.stdout), identity
+
+
+def _batch_query(identity, index, **changes):
+    query = dict(advice_query=dict(identity=copy.deepcopy(identity),
+                 query_id='query-%d' % index, decision_id='decision-%d' % index,
+                 target_scope='coordinator', task='生成视频时缺少图片素材'),
+                 boundary='llm', execution_id='coordinator')
+    query.update(changes)
+    return query
+
+
+def test_native_query_batch_keeps_full_competition_and_once_per_run(tmp_path):
+    policy, identity = _batch_policy(tmp_path)
+    first = _batch_query(identity, 1)
+    second = _batch_query(identity, 2)
+    single = _batch_cli('query', dict(policy=policy, query=first))
+    assert single.returncode == 0
+    result = _batch_cli('query-batch', dict(policy=policy, queries=[first, second]))
+    assert result.returncode == 0, result.stdout
+    decisions = json.loads(result.stdout)
+    assert len(decisions) == 2
+    assert decisions[0] == json.loads(single.stdout)
+    assert decisions[0].get('experiences') and not decisions[1].get('experiences')
+    assert not decisions[1].get('context')
+    assert len(policy['snapshot']['experiences']) == 57
+    # Each batch owns its runtime; changing query IDs within the first batch
+    # deliberately did not reopen injection. A fresh bound runtime starts
+    # with the same native decision, without retaining state across CLI calls.
+    result = _batch_cli('query-batch', dict(policy=policy, queries=[first, second]))
+    assert result.returncode == 0, result.stdout
+    assert json.loads(result.stdout) == decisions
+
+
+def test_native_query_batch_preserves_native_query_budget_and_identity(tmp_path):
+    policy, identity = _batch_policy(tmp_path, 1)
+    for query in [_batch_query(identity, i) for i in (1, 2, 3)]:
+        if query['advice_query']['query_id'] == 'query-1':
+            query['advice_query']['state'] = 'x' * 17000
+        elif query['advice_query']['query_id'] == 'query-2':
+            query['advice_query']['identity']['user_id'] = 'unauthorized-user'
+        else:
+            query['advice_query']['identity']['run_id'] = 'unbound-run'
+        single = _batch_cli('query', dict(policy=policy, query=query))
+        batch = _batch_cli('query-batch', dict(policy=policy, queries=[query]))
+        assert batch.returncode == single.returncode
+        if single.returncode:
+            assert json.loads(batch.stdout) == json.loads(single.stdout)
+            assert 'unauthorized-user' not in batch.stdout and 'xxxxx' not in batch.stdout
+        else:
+            assert json.loads(batch.stdout) == [json.loads(single.stdout)]
+
+
+def test_native_query_batch_rejects_bad_shapes_and_transport_overflow(tmp_path):
+    policy, identity = _batch_policy(tmp_path, 1)
+    query = _batch_query(identity, 1)
+    requests = [dict(policy=policy, queries={}),
+                dict(policy=policy, queries=[dict(query, unknown_field='private-value')]),
+                dict(policy=policy, queries=[query], unknown_field='private-value'),
+                dict(policy=policy, queries=[dict(query, actor_id='x' * (2 * 1024 * 1024))])]
+    for request in requests:
+        result = _batch_cli('query-batch', request)
+        assert result.returncode == 2
+        assert json.loads(result.stdout) == {'status': 'error', 'reason': 'runtime_request_failed'}
+        assert 'private-value' not in result.stdout
+    empty = _batch_cli('query-batch', dict(policy=policy, queries=[]))
+    assert empty.returncode == 0 and json.loads(empty.stdout) == []
 
 
 @pytest.fixture

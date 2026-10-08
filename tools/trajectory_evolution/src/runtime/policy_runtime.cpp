@@ -9,6 +9,7 @@
 #include "trajectory_evolution/request_binding.h"
 #include "agentflow/trajectory/evolution_pipeline.h"
 #include "agentflow/trajectory/experience.h"
+#include "../service/integration_json.h"
 
 #include <algorithm>
 #include <array>
@@ -17,6 +18,7 @@
 #include <tuple>
 #include <google/protobuf/io/coded_stream.h>
 #include <google/protobuf/io/zero_copy_stream_impl_lite.h>
+#include <google/protobuf/util/message_differencer.h>
 #include <openssl/sha.h>
 
 namespace trajectory::evolution {
@@ -368,11 +370,23 @@ PolicyRuntime::PolicyRuntime(v1::RuntimePolicy policy)
         approved_ids_.insert(e.memory_id());
 }
 
-// 决策函数没有副作用：它只把当前打点查询映射为建议、控制或循环结论。
+// 固定策略解释打点查询；仅保留同一 run 的一次 L1 注入及其原准备决定。
 // 业务状态只能在宿主随后提交实际执行结果时推进，不能把策略建议误记为已发生事实。
 // 运行时读取当前边界事实并产生有界决策；这里不调用远程模型进行语义裁判。
 v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery &query) const {
   ensure_safe_evolution_data(query);
+  const auto &run_id = query.advice_query().identity().run_id();
+  if (run_id != seen_run_id_) {
+    seen_run_id_ = run_id;
+    injected_experience_ids_.clear();
+    prepared_injections_.clear();
+  }
+  const PreparedQueryKey prepared_key{run_id, query.advice_query().query_id(),
+                                      query.advice_query().decision_id(), query.boundary()};
+  const auto prepared = prepared_injections_.find(prepared_key);
+  if (prepared != prepared_injections_.end() &&
+      google::protobuf::util::MessageDifferencer::Equals(prepared->second.query(), query))
+    return prepared->second;
   require(query.observed_operations_size() <= 64 && query.error_codes_size() <= 64 &&
               query.rejected_actions() <= 10000,
           "runtime_query_invalid");
@@ -381,6 +395,34 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery &query) const {
   for (const auto &code : query.error_codes())
     require(identifier(code) && code.size() <= 128, "runtime_query_invalid");
   auto eligible = approved_ids_;
+  // An explicit model-boundary allowlist can only narrow the frozen approvals.
+  // Its envelope is separate from retrieval text and cannot become anchors.
+  std::string retrieval_state = query.advice_query().state();
+  const auto first_state = retrieval_state.find_first_not_of(" \t\r\n");
+  if (query.boundary() == "llm" && first_state != std::string::npos && retrieval_state[first_state] == '{' &&
+      retrieval_state.find("runtime_experience_allowlist") != std::string::npos) {
+    const auto envelope = integration::Json::parse(retrieval_state);
+    if (envelope.object() && envelope.has("runtime_experience_allowlist")) {
+      integration::keys(envelope, {"retrieval_state", "runtime_experience_allowlist"});
+      const auto &refs = envelope["runtime_experience_allowlist"];
+      require(refs.array() && refs.items().size() <= static_cast<std::size_t>(
+                  policy_.options().approved_experiences_size()) && envelope["retrieval_state"].string(),
+              "runtime_experience_allowlist_invalid");
+      std::set<std::string> allowed;
+      for (const auto &ref : refs.items()) {
+        integration::keys(ref, {"memory_id", "content_revision"});
+        bool approved = false;
+        for (const auto &source : policy_.options().approved_experiences())
+          approved |= source.memory_id() == ref.str("memory_id") &&
+                      source.content_revision() == ref.str("content_revision");
+        require(approved && allowed.insert(ref.str("memory_id")).second,
+                "runtime_experience_allowlist_source_invalid");
+      }
+      for (auto it = eligible.begin(); it != eligible.end();)
+        if (!allowed.count(*it)) it = eligible.erase(it); else ++it;
+      retrieval_state = envelope["retrieval_state"].text();
+    }
+  }
   // L1 停用仅改变文字注入；动作、编排与循环仍使用原来源批准。
   if (query.boundary() == "llm")
     for (const auto &disabled : policy_.options().disabled_injections()) {
@@ -414,7 +456,19 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery &query) const {
         eligible.erase(relation.shared_memory_id());
   }
   // 三类边界共用身份、作用域和输入预算校验，保证检索的适用口径一致。
-  const auto advice = shadow_.query_advice(query.advice_query(), eligible, triggers);
+  // AdviceQuery predates structured RuntimeQuery error fields.  Carry the
+  // bounded, exact host error codes into its state so L1 retrieval can branch
+  // on TypeError/401/422 without relying on redacted natural language.
+  auto advice_query = query.advice_query();
+  advice_query.set_state(retrieval_state);
+  if (query.boundary() == "llm" && query.error_codes_size()) {
+    auto state = advice_query.state();
+    for (const auto &code : query.error_codes())
+      if (identifier(code))
+        state += "\nobserved_error_code:" + code;
+    advice_query.set_state(state);
+  }
+  const auto advice = shadow_.query_advice(advice_query, eligible, triggers);
   require(advice.status() != "error" && identifier(query.execution_id()) &&
               query.ByteSizeLong() <= 128U * 1024U && query.actions_size() <= 128,
           "runtime_query_invalid");
@@ -460,6 +514,10 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery &query) const {
     std::set<std::pair<std::string, std::string>> injected_content;
     for (const auto &match : advice.advice()) {
       const auto &experience = match.experience();
+      // Only the original prepared query may replay its injection. A later
+      // query remains unchanged even if its history contains earlier advice.
+      if (injected_experience_ids_.count(experience.memory_id()))
+        continue;
       // 优先采用已批准的私有重复记录；相关或独立建议仍可补充。若无私有批准记录，
       // 公共副本才可入选。
       if (experience.application_shared() &&
@@ -498,6 +556,7 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery &query) const {
       if (injected_content.count(content_key) || !append_context(item))
         continue;
       injected_content.insert(content_key);
+      injected_experience_ids_.insert(experience.memory_id());
       *result.add_experiences() = *approved;
       applied.insert(experience.memory_id());
     }
@@ -662,6 +721,11 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery &query) const {
       }
     }
   }
+  // Every retained L1 decision consumed at least one previously unused
+  // approved experience, so this run-local cache is naturally bounded by
+  // the approved experience count. No unchanged query or control is stored.
+  if (query.boundary() == "llm" && !result.context().empty())
+    prepared_injections_[prepared_key] = result;
   return result;
 }
 
@@ -728,7 +792,13 @@ v1::RuntimeReceipt PolicyRuntime::verify(const v1::RuntimeQuery &query,
         applied = false;
       }
     } else if (query.boundary() == "loop") {
-      applied = decision.progress().decision() == "stop" && observation.loop_decision() == "stop" &&
+      // A host-confirmed replan is a real loop application as well.  The
+      // previous stop-only check marked every successful replan as failed,
+      // under-counting L3 receipts.
+      const auto proposed = decision.progress().decision();
+      const auto observed = observation.loop_decision();
+      applied = ((proposed == "stop" && observed == "stop") ||
+                 (proposed == "replan" && observed == "replan")) &&
                 !query.pending_actions();
     }
   }

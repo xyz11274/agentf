@@ -273,6 +273,13 @@ bool contains_secret(const std::string &value, const std::vector<std::string> &s
   const auto visit_limit = std::max<std::size_t>(
       1024, std::min(value.size(), std::numeric_limits<std::size_t>::max() / 2) * 2);
   std::size_t visited = 0;
+  // Repeated trace snapshots contain identical decoded strings. Cache only
+  // successful pattern checks within this invocation; known-secret matching,
+  // JSON decoding, depth and visitation checks still run for every occurrence.
+  constexpr std::size_t memo_entry_limit = 4096;
+  constexpr std::size_t memo_byte_limit = 4 * 1024 * 1024;
+  std::set<std::string, std::less<>> regex_safe_strings;
+  std::size_t memo_bytes = 0;
   while (!pending.empty()) {
     auto current = std::move(pending.back());
     pending.pop_back();
@@ -310,6 +317,8 @@ bool contains_secret(const std::string &value, const std::vector<std::string> &s
         continue;
       }
     }
+    if (regex_safe_strings.find(text) != regex_safe_strings.end())
+      continue;
     // 只有精确匹配的宿主占位符可豁免，相邻凭据文本仍需检查。
     // 已知敏感值，包括 JSON 转义形式，仍须拒绝。
     auto inspected = text;
@@ -320,6 +329,11 @@ bool contains_secret(const std::string &value, const std::vector<std::string> &s
     if (std::any_of(credential_patterns().begin(), credential_patterns().end(),
                     [&](const auto &pattern) { return std::regex_search(inspected, pattern); }))
       return true;
+    if (regex_safe_strings.size() < memo_entry_limit &&
+        text.size() <= memo_byte_limit - memo_bytes) {
+      if (regex_safe_strings.insert(text).second)
+        memo_bytes += text.size();
+    }
   }
   return false;
 }
@@ -584,8 +598,14 @@ ep::CandidateEvidence make_evidence(ep::CandidateEvidenceKind kind,
 // 合入经过归属校验的证据，避免重复引用扩大支持数量。
 void add_evidence(google::protobuf::RepeatedPtrField<ep::CandidateEvidence> *destination,
                   const ep::CandidateEvidence &evidence) {
-  for (const auto &existing : *destination) {
+  for (auto &existing : *destination) {
     if (existing.evidence_id() == evidence.evidence_id()) {
+      // 同一真实来源补齐原先未记录的评审，不改写已经有结论的证据。
+      if (existing.verdict() == ep::SEMANTIC_VERDICT_UNASSESSED &&
+          evidence.verdict() != ep::SEMANTIC_VERDICT_UNASSESSED &&
+          evidence.verdict() != ep::SEMANTIC_VERDICT_UNSPECIFIED) {
+        existing.CopyFrom(evidence);
+      }
       return;
     }
   }
@@ -801,14 +821,6 @@ void add_scoped_experiences(const ep::HybridEvaluationReport &report,
       continue;
     const std::set<std::string> cited(advice.evidence_event_ids().begin(),
                                       advice.evidence_event_ids().end());
-    std::vector<std::string> episodes;
-    for (const auto &assessment : report.assessments()) {
-      const auto &packet = assessment.evidence();
-      if (std::any_of(packet.source_event_ids().begin(), packet.source_event_ids().end(),
-                      [&](const auto &id) { return cited.count(id); })) {
-        episodes.push_back(packet.episode_id());
-      }
-    }
     ep::EvolutionCandidate candidate;
     candidate.set_schema_version(1);
     candidate.set_generator_version(kScopedExperienceGeneratorVersion);
@@ -820,11 +832,32 @@ void add_scoped_experiences(const ep::HybridEvaluationReport &report,
     candidate.set_expected_benefit(benefit_for_target(candidate.target_type()));
     candidate.set_required_supporting_dialogues(options.min_supporting_dialogues);
     candidate.set_required_supporting_episodes(options.min_supporting_episodes);
-    // 只引用本经验自己的事件，不能引用整段对话所有浪费片段。
-    *candidate.add_support_evidence() =
-        make_evidence(ep::CANDIDATE_EVIDENCE_KIND_DIALOGUE_REFLECTION, report, episodes, {},
-                      strings_from(advice.evidence_event_ids()), ep::SEMANTIC_VERDICT_UNASSESSED,
-                      report.dialogue_assessment().confidence());
+    // 每个被引用片段保留自己的真实融合结论，不能把混合证据整体标为有效。
+    std::set<std::string> matched_events;
+    for (const auto &assessment : report.assessments()) {
+      const auto &packet = assessment.evidence();
+      if (packet.episode_id().empty() || scope_for(packet) != advice.target_scope()) continue;
+      std::vector<std::string> events;
+      for (const auto &id : packet.source_event_ids()) {
+        if (cited.count(id)) events.push_back(id);
+      }
+      if (events.empty()) continue;
+      sort_unique(&events);
+      matched_events.insert(events.begin(), events.end());
+      *candidate.add_support_evidence() =
+          make_evidence(ep::CANDIDATE_EVIDENCE_KIND_DIALOGUE_REFLECTION, report,
+                        {packet.episode_id()}, {}, events, assessment.final_verdict(),
+                        assessment.final_confidence());
+    }
+    std::vector<std::string> unmatched_events;
+    for (const auto &id : cited) {
+      if (!matched_events.count(id)) unmatched_events.push_back(id);
+    }
+    if (!unmatched_events.empty()) {
+      *candidate.add_support_evidence() =
+          make_evidence(ep::CANDIDATE_EVIDENCE_KIND_DIALOGUE_REFLECTION, report, {}, {},
+                        unmatched_events, ep::SEMANTIC_VERDICT_UNASSESSED, 0.0);
+    }
     add_seed(candidates, std::move(candidate));
     ++(*seed_count);
   }
@@ -1963,6 +1996,60 @@ ParsedMemoryMatch validate_memory_match_response(const RawModelResponse &respons
 }
 
 } // 结束当前匿名命名空间。
+
+bool refresh_scoped_experience_evidence(
+    const evaluation_proto::HybridEvaluationReport &report, const std::string &target_scope,
+    evaluation_proto::CandidateEvidence *evidence) {
+  namespace ep = evaluation_proto;
+  if (evidence == nullptr || target_scope.empty() ||
+      evidence->kind() != ep::CANDIDATE_EVIDENCE_KIND_DIALOGUE_REFLECTION ||
+      evidence->verdict() != ep::SEMANTIC_VERDICT_UNASSESSED ||
+      !report.source_trace_integrity_valid() ||
+      report.dialogue_assessment().status() != ep::MODEL_CALL_STATUS_SUCCEEDED ||
+      report.source_fingerprint().empty() ||
+      evidence->source_fingerprint() != report.source_fingerprint() ||
+      !google::protobuf::util::MessageDifferencer::Equals(evidence->source(), report.source()) ||
+      evidence->episode_ids().empty() || evidence->evidence_event_ids().empty()) {
+    return false;
+  }
+  const std::set<std::string> cited(evidence->evidence_event_ids().begin(),
+                                    evidence->evidence_event_ids().end());
+  std::set<std::string> covered;
+  auto verdict = ep::SEMANTIC_VERDICT_UNSPECIFIED;
+  double confidence = 1.0;
+  for (const auto &episode_id : evidence->episode_ids()) {
+    const ep::EpisodeAssessment *selected = nullptr;
+    for (const auto &assessment : report.assessments()) {
+      if (assessment.evidence().episode_id() == episode_id) {
+        // 重复或跨作用域的片段身份不提供可验证支持。
+        if (selected != nullptr) return false;
+        selected = &assessment;
+      }
+    }
+    if (selected == nullptr || scope_for(selected->evidence()) != target_scope ||
+        selected->model().status() != ep::MODEL_CALL_STATUS_SUCCEEDED ||
+        !std::isfinite(selected->final_confidence())) return false;
+    const auto current = selected->final_verdict();
+    if (current == ep::SEMANTIC_VERDICT_UNSPECIFIED ||
+        current == ep::SEMANTIC_VERDICT_UNASSESSED || current == ep::SEMANTIC_VERDICT_UNCERTAIN ||
+        (verdict != ep::SEMANTIC_VERDICT_UNSPECIFIED && verdict != current)) return false;
+    bool matched = false;
+    for (const auto &id : selected->evidence().source_event_ids()) {
+      if (cited.count(id)) {
+        covered.insert(id);
+        matched = true;
+      }
+    }
+    if (!matched) return false;
+    verdict = current;
+    confidence = std::min(confidence, std::clamp(selected->final_confidence(), 0.0, 1.0));
+  }
+  if (covered != cited || verdict == ep::SEMANTIC_VERDICT_UNSPECIFIED) return false;
+  // 只补齐真实结论；既有来源、事件、episode 和 evidence_id 保持原样。
+  evidence->set_verdict(verdict);
+  evidence->set_confidence(confidence);
+  return true;
+}
 
 // 初始化 TrajectoryEvolutionPipeline 的状态和资源；输入参数的校验与所有权在构造阶段确定。
 // 对象创建后复用既有配置，实际执行与收尾分别由后续接口负责。

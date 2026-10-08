@@ -55,6 +55,19 @@ def _artifact_version(artifact: dict) -> str:
 def _publish_locked() -> dict:
     """版本文件只保存一份；latest.json 是指向该版本的轻量登记。"""
     plan = gepa.verify()
+    # Publication is downstream of the fixed 500-task paired comparison.  The
+    # GEPA holdout gate alone is insufficient because it covers only the
+    # search/holdout protocol and cannot prove the historical seed004 scope.
+    best_file = layout.PUBLISHED / "best-strategy.json"
+    if not best_file.is_file():
+        raise RuntimeError("fixed_comparison_missing")
+    best = coverage.read(best_file)
+    comparison = best.get("comparison") if isinstance(best, dict) else None
+    fixed = comparison.get("fixed_500") if isinstance(comparison, dict) else None
+    gate = comparison.get("fixed_500_gate") if isinstance(comparison, dict) else None
+    if (not isinstance(fixed, dict) or fixed.get("status") != "complete"
+            or not isinstance(gate, dict) or gate.get("passed") is not True):
+        raise RuntimeError("fixed_comparison_gate_failed")
     status = coverage.read(gepa.STATUS)
     progress = gepa.progress()
     if progress.get("memory_feedback", {}).get("status") not in ("empty", "committed"):

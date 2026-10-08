@@ -65,14 +65,14 @@ int run_learning_import(int argc, char **argv) {
   namespace fs = std::filesystem;
   try {
     fs::path input, config, training_report, dataset;
-    bool enqueue_only = false, evaluation_only = false;
+    bool enqueue_only = false, evaluation_only = false, refresh_evidence = false;
     std::size_t max_cycles = 1000;
     for (int i = 2; i < argc; ++i) {
       const std::string arg = argv[i];
       if (arg == "--help" || arg == "-h") {
         std::cout
             << "trajectory_evolution learn [LOG_OR_DIRECTORY] --config SERVICE_JSON "
-               "[--enqueue-only] [--evaluation-only] [--max-cycles N]\n"
+               "[--enqueue-only] [--evaluation-only] [--refresh-evidence] [--max-cycles N]\n"
                "Imports complete traces into the same workspace/queue as serve and LocalRuntime.\n"
                "Omit input to resume pending work. Duplicate imports never re-evaluate. No HTTP "
                "server is started.\n";
@@ -84,6 +84,8 @@ int run_learning_import(int argc, char **argv) {
         enqueue_only = true;
       else if (arg == "--evaluation-only")
         evaluation_only = true;
+      else if (arg == "--refresh-evidence")
+        refresh_evidence = true;
       else if (arg == "--config" || arg == "--max-cycles" || arg == "--training-evaluation" ||
                arg == "--dataset") {
         require(++i < argc, "learning_option_value_missing");
@@ -109,8 +111,16 @@ int run_learning_import(int argc, char **argv) {
     require(training_report.empty() == dataset.empty() &&
                 (training_report.empty() || input.empty()),
             "learning_training_arguments_invalid");
+    require(!refresh_evidence || (input.empty() && training_report.empty() && dataset.empty() &&
+                                  !enqueue_only && !evaluation_only),
+            "evidence_refresh_arguments_invalid");
     EvaluationSignalMask signals(evaluation_only);
     IntegrationService service(config);
+    if (refresh_evidence) {
+      const auto response = service.refresh_evidence();
+      std::cout << response.body << '\n';
+      return response.status == 200 ? 0 : 3;
+    }
     if (evaluation_only) {
       require(input.empty() && training_report.empty() && dataset.empty() && !enqueue_only,
               "evaluation_only_arguments_invalid");

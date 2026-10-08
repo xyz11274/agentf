@@ -331,7 +331,7 @@ public:
 
   // 为策略构造有界、分支隔离的查询快照；该快照不替代宿主保存的完整状态。
   v1::RuntimeQuery query(const Json &item, const std::string &boundary, const std::string &id,
-                         const Json &state) const {
+                         const Json &state, const Json &extra = Json()) const {
     v1::RuntimeQuery q;
     *q.mutable_advice_query()->mutable_identity() = proto<v1::Identity>(run["identity"]);
     q.mutable_advice_query()->set_target_scope(qualified_scope(config, item.str("scope_id")));
@@ -341,12 +341,25 @@ public:
       // 只有供检索的视图受长度限制；原始请求和完整轨迹保持不变。
       q.mutable_advice_query()->set_task(bounded_query_text(run["input"], config, true));
       q.mutable_advice_query()->set_state(bounded_query_text(state, config, false));
+      if (boundary == "llm" && extra.has("runtime_experience_allowlist")) {
+        q.mutable_advice_query()->set_state(Json{
+            {"retrieval_state", q.advice_query().state()},
+            {"runtime_experience_allowlist", extra["runtime_experience_allowlist"]}}.dump());
+      }
       if (boundary == "llm" && item.has("observation_scope")) {
-        const auto &operations =
-            static_cast<const Json &>(run)["observed_operations"][item.str("observation_scope")];
+        const auto scope = item.str("observation_scope");
+        const auto &operations = static_cast<const Json &>(run)["observed_operations"][scope];
         if (operations.object())
           for (const auto &operation : operations.fields())
             q.add_observed_operations(operation.first);
+        // L1 must consume only exact, host-declared error codes from this
+        // observation scope.  Do not infer an error from redacted natural
+        // language or from another concurrent branch.
+        const auto &errors = static_cast<const Json &>(run)["observed_error_codes"][scope];
+        if (errors.object())
+          for (const auto &error : errors.fields())
+            if (identifier(error.first) && q.error_codes_size() < 64)
+              q.add_error_codes(error.first);
       }
     }
     q.set_execution_id(item.str("stream_id"));
@@ -367,10 +380,10 @@ public:
   }
 
   // 构造或解析标准回执，使宿主可以区分建议、应用、降级和业务结果。
-  void receipt(const Json &item, const Json &stored, const v1::RuntimeObservation &observed,
+  Json receipt(const Json &item, const Json &stored, const v1::RuntimeObservation &observed,
                const Json &binding = Json{}) {
     if (stored.null())
-      return;
+      return Json::Object{};
     std::unique_ptr<PolicyRuntime> owned;
     if (!cached_policy)
       owned = std::make_unique<PolicyRuntime>(proto<v1::RuntimePolicy>(run["policy"]));
@@ -383,9 +396,12 @@ public:
     fields["attributes"] = Json{{"receipt", json(result)}};
     if (!binding.null())
       fields["attributes"]["request_binding"] = binding;
-    emit("advice.applied", fields, item.str("step_id"));
+    const auto event_id = emit("advice.applied", fields, item.str("step_id"));
     run["receipt_counts"][result.application().status()] =
         run["receipt_counts"].num(result.application().status(), 0) + 1;
+    auto summary = json(result);
+    summary["event_id"] = event_id;
+    return summary;
   }
 
   // 只在宿主报告真实结束后写入循环账本；派发建议本身不能被当作业务结果。
@@ -613,7 +629,8 @@ public:
     if (apply_policy && !contract_failed && !item.flag("finalizing", false) &&
         semantic != "custom" && run.num("level", 0) > 0) {
       auto q = query(item, semantic == "model" ? "llm" : "actions", id,
-                     activity_query_state(request, semantic, config, item["binding"]));
+                     activity_query_state(request, semantic, config, item["binding"]),
+                     static_cast<const Json &>(request)["extensions"]);
       if (semantic == "action") {
         auto *action = q.add_actions();
         action->set_action_id(id);
@@ -920,6 +937,7 @@ public:
     keys(request, {"operation", "request_id", "run_id", "activity_id", "status", "output",
                    "actual_input", "executed", "error", "extensions", "caused_by", "metrics"});
     const auto id = request.str("activity_id"), status = terminal(request);
+    Json model_receipt = Json::Object{};
     require(run["activities"].has(id), "activity_not_found", 404);
     auto &item = run["activities"][id];
     require(!ended(item), "activity_already_ended", 409);
@@ -1012,18 +1030,37 @@ public:
       fields["attributes"]["semantic"] = semantic;
       if (semantic == "action" && !interrupted) {
         const bool failed = failed_action(request);
+        std::string observed_code;
         fields["attributes"]["observed_failure"] = failed;
         if (failed) {
           auto code = structured_error_code(request["output"]);
           // 将已校验的显式错误同步到轨迹属性，使在线控制和离线回放使用相同的失败码。
           if (code.empty() && request.has("error"))
             code = structured_error_code(request["error"]);
+          observed_code = code;
           if (!code.empty())
             fields["attributes"]["observed_error_code"] = code;
         }
         if (item.flag("delegates_schedule", false))
           fields["attributes"]["delegates_schedule"] = true;
         record_action_outcome(item, request, failed);
+        if (item.has("observation_scope") && request.flag("executed", false)) {
+          auto &by_scope = run["observed_error_codes"];
+          if (by_scope.null())
+            by_scope = Json::Object{};
+          const auto scope = item.str("observation_scope");
+          if (observed_code.empty()) {
+            // A successful action clears only this branch's stale error code;
+            // concurrent sibling observations remain isolated.
+            by_scope.fields().erase(scope);
+          } else if (by_scope.has(scope) || by_scope.fields().size() < 128) {
+            auto &errors = by_scope[scope];
+            if (errors.null())
+              errors = Json::Object{};
+            if (errors.has(observed_code) || errors.fields().size() < 16)
+              errors[observed_code] = run["events"].items().size();
+          }
+        }
       }
       if (request.has("metrics") && !interrupted && request.flag("executed", false))
         for (const auto &metric : request["metrics"].fields())
@@ -1060,6 +1097,21 @@ public:
           if (operations.fields().empty())
             by_scope.fields().erase(scope);
         }
+        // Consume structured L1 error evidence after the model has observed
+        // it, using the same cursor rule as operation evidence.
+        auto &error_scopes = run["observed_error_codes"];
+        if (semantic == "model" && status == "completed" && error_scopes.object() &&
+            error_scopes.has(scope)) {
+          auto &errors = error_scopes[scope];
+          for (auto it = errors.fields().begin(); it != errors.fields().end();) {
+            if (it->second.integer() <= item.num("observation_cursor", 0))
+              it = errors.fields().erase(it);
+            else
+              ++it;
+          }
+          if (errors.fields().empty())
+            error_scopes.fields().erase(scope);
+        }
       }
       v1::RuntimeObservation observation;
       if (!interrupted) {
@@ -1073,7 +1125,7 @@ public:
         else
           observation.add_skipped_action_ids(id);
       }
-      receipt(item, item["query"], observation, item["binding"]);
+      model_receipt = receipt(item, item["query"], observation, item["binding"]);
       if (semantic == "model" && item.has("control_id")) {
         auto &control = run["controls"][item.str("control_id")];
         if (control.str("decision") == "replan" && control.str("actual_decision") == "replan") {
@@ -1101,7 +1153,14 @@ public:
     item["ended"] = true;
     item["status"] = status;
     item["output"] = request["output"];
-    return Json{{"ended", true}, {"event_id", item["end_event"]}};
+    Json response{{"ended", true}, {"event_id", item["end_event"]}};
+    // The optional summary is limited to the already verified native receipt.
+    // Older hosts ignore this field; AppWorld uses it to retain advice only
+    // after host_boundary_verified, never from a before-point suggestion.
+    if (semantic == "model" && !interrupted && model_receipt.object() &&
+        !model_receipt.fields().empty())
+      response["application_receipt"] = model_receipt;
+    return response;
   }
 
   // check 只快照截至当前的状态；真正消费故障和进度要等宿主通过 commit 确认决定后才发生。
@@ -1225,12 +1284,17 @@ public:
     links.push(item["start_event"]);
     if (!interrupted)
       item["commit_event"] = emit("loop.decision", fields, item.str("step_id"), join(links, id));
+    // A replan decision is only an instruction to the next model turn.  Do
+    // not emit a successful L3 receipt here: the receipt is written by the
+    // model activity after its request contains the replan context.  Stop and
+    // continue decisions can be verified at this boundary because they have
+    // no pending model context to apply.
     if (item.str("decision") != "replan" || decision != "replan" || interrupted) {
       v1::RuntimeObservation observation;
       if (!interrupted)
         observation.set_loop_decision(decision);
       receipt(item, item["query"], observation);
-      item["replan_observed"] = true;
+      item["replan_observed"] = interrupted;
     }
     fields = event_context(item);
     fields["status"] = interrupted ? "unknown" : "completed";
@@ -1473,6 +1537,7 @@ void initialize_boundary_run(Json &run, const Json &request) {
   run["activities"] = Json::Object{};
   run["loops"] = Json::Object{};
   run["controls"] = Json::Object{};
+  run["observed_error_codes"] = Json::Object{};
   run["extensions"] = extensions(request);
   run["events"].items().front()["attributes"] =
       Json{{"protocol", "evolution.boundary.v1"}, {"extensions", run["extensions"]}};

@@ -209,7 +209,7 @@ def records(directory: Path, split: str) -> list[dict]:
 
 def checked_stage1() -> Path:
     state = coverage.read(STAGE1 / "status.json")
-    if state.get("status") != "completed" or state.get("captured_tasks") != 400:
+    if state.get("status") != "completed" or state.get("captured_tasks") != len((coverage.CONFIG / "datasets/pack/train.jsonl").read_text().splitlines()):
         raise RuntimeError("training_stage_not_complete")
     source = STAGE1 / "evolution"
     if not (source / f"by-user/{USER}/memory/evolution-memory.pb").is_file():
@@ -1206,8 +1206,8 @@ def run(retry_job: str = "", timeout_hours: float | None = None,
 
 def run_to_publication(publisher=None,
                        max_recoveries: int = FRESH_MAX_RECOVERIES,
-                       initial_job_id: str = "") -> dict:
-    """在冻结配置下把一个 job/树自动接续到反馈落定和原子发布。"""
+                       initial_job_id: str = "", *, publish: bool = True) -> dict:
+    """在冻结配置下接续 job；仅 ``publish=True`` 才跨越发布边界。"""
     if max_recoveries < 0:
         raise ValueError("max_recoveries_must_be_nonnegative")
     # A resume must explicitly bind to an existing durable job.  Starting the
@@ -1281,14 +1281,35 @@ def run_to_publication(publisher=None,
             or current.get("memory_feedback", {}).get("status") not in ("empty", "committed")
             or not current.get("published_in_offline_workspace")):
         raise RuntimeError("gepa_fresh_candidate_not_publishable")
+    # Build the auditable paired comparison before crossing the publication
+    # boundary.  The publisher independently verifies this receipt, so a
+    # candidate cannot be reported as published while the fixed 500-task
+    # acceptance run is missing, partial, or rejected.
+    from best_strategy import build_best
+    best = build_best(job_id, run_full_comparison=True)
+    fixed_gate = ((best.get("comparison") or {}).get("fixed_500_gate") or {})
+    if fixed_gate.get("passed") is not True:
+        runner = coverage.read(STATUS)
+        runner.update(status="finished", publication_skipped=True,
+                      fixed_500_gate=fixed_gate,
+                      finished_at=datetime.now(timezone.utc).isoformat())
+        coverage.save(STATUS, runner)
+        return {"status": "best_available", "best_strategy": best,
+                "formal_release": False, "publication_skipped": True}
+    if not publish:
+        # GEPA and the fixed paired comparison are durable proof stages.  The
+        # shared lifecycle owns the single publication transition, so leave
+        # the native runner candidate_ready and return the proof without
+        # invoking the publisher here.
+        return {"status": "candidate_ready", "job_id": job_id,
+                "best_strategy": best, "formal_release": False,
+                "publication_skipped": True}
     if publisher is None:
         from offline_publish import publish as publisher
     publication = publisher()
     runner.update(status="published", publication=publication,
                   published_at=datetime.now(timezone.utc).isoformat())
     coverage.save(STATUS, runner)
-    from best_strategy import build_best
-    best = build_best(job_id, run_full_comparison=True)
     runner["architect_strategy"] = best
     coverage.save(STATUS, runner)
     return {**publication, "architect_strategy": best}
@@ -1318,8 +1339,8 @@ def fresh(seed_report: Path | None = None, baseline_report: Path | None = None,
         plan = prepare(seed_report, baseline_report, **requested)
         readiness()  # 无模型启动门禁；从这里开始配置和运行文件均由 plan 哈希冻结。
         publication = run_to_publication(publisher=publisher)
-        if publication.get("status") == "best_observed":
-            return {"status": "best_observed", "plan": plan, **publication}
+        if publication.get("status") in {"best_observed", "best_available"}:
+            return {"status": publication["status"], "plan": plan, **publication}
         return {"status": "published", "plan": plan, "publication": publication}
 
 
@@ -1346,6 +1367,9 @@ def main() -> int:
     parser.add_argument("--patience", type=int,
                         help="prepare/retry：连续无改善上限；0 表示禁用（最大256）")
     args = parser.parse_args()
+    if (args.fresh or args.prepare or args.run or args.retry) and os.environ.get(
+            "AGENTFLOW_SHARED_LIFECYCLE") != "1":
+        parser.error("mutating business GEPA stages must be entered through reproduce.py shared lifecycle")
     if (args.seed_report is not None or args.baseline_report is not None) and not (
             args.prepare or args.fresh):
         parser.error("--seed-report / --baseline-report 只用于新实验，不在已有作业中替换成绩")

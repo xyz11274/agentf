@@ -47,8 +47,22 @@ inline std::string unwrap_model_json(const std::string &response, bool *unwrappe
   if (first != std::string::npos)
     body = body.substr(first, last - first + 1U);
   const auto line_end = body.find('\n');
-  const auto header = body.substr(0, line_end);
-  if ((header == "```json" || header == "```" || header == "```json\r" || header == "```\r") &&
+  auto header = body.substr(0, line_end);
+  const auto header_last = header.find_last_not_of(" \t\r");
+  if (header_last != std::string::npos)
+    header.resize(header_last + 1U);
+  // Markdown language labels are case-insensitive. Only a complete JSON fence
+  // is normalized; prose, other languages and multiple blocks stay invalid.
+  if (header.compare(0, 3, "```") == 0) {
+    auto label = header.substr(3);
+    const auto label_first = label.find_first_not_of(" \t");
+    label = label_first == std::string::npos ? "" : label.substr(label_first);
+    for (auto &character : label)
+      if (character >= 'A' && character <= 'Z')
+        character = static_cast<char>(character - 'A' + 'a');
+    header = "```" + label;
+  }
+  if ((header == "```json" || header == "```") &&
       line_end != std::string::npos && body.size() >= line_end + 5U &&
       body.compare(body.size() - 4U, 4U, "\n```") == 0) {
     body = body.substr(line_end + 1U, body.size() - line_end - 5U);

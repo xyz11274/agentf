@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "files": {
+    "train.jsonl": "d1375508e89e5813ab9be09f8024509e43844b574d77468be882eb94cdcd7e83",
+    "val.jsonl": "5572a5c482efe5d9ec037fe68a2ad0c53f79fa6c209a6fefcc4f354f4ac9b90e",
+    "holdout.jsonl": "fa13fd6f60bd90dea1dc80b7adf273cca3b2db2da89e0184a555ecdcc496661d",
+    "comparison-500.jsonl": "1284714d541af0517cc619c284ea761eba9d4fe4d05a0591742911c4503966a7"
+  },
+  "counts": {
+    "train": 672,
+    "val": 200,
+    "holdout": 200,
+    "comparison-500": 500
+  },
+  "sources": {
+    "train": "datasets/source/train.jsonl + datasets/source/supplemental/train.jsonl (272 unique rows, including GUI-014 48; duplicate 48-row supplemental-20260929 omitted by task_id)",
+    "val": "datasets/pack/val.jsonl",
+    "holdout": "datasets/pack/holdout.jsonl"
+  },
+  "comparison_selection": "copied from frozen seed004 business-acceptance-500; no post-score selection",
+  "metadata": {
+    "dataset_version": "business-pack-v1",
+    "counts": {
+      "train": 672,
+      "val": 200,
+      "holdout": 200,
+      "comparison-500": 500
+    }
+  },
+  "training_merge": {
+    "base_train_rows": 400,
+    "synthetic_source_rows": 272,
+    "synthetic_extra_rows": 48,
+    "unique_final_rows": 672,
+    "dedup_rule": "task_id; identical duplicates discarded; conflicting duplicates retained in report",
+    "conflicts": [
+      {
+        "source": "supplemental-gui-delivery-014/native/train.jsonl",
+        "reason": "same GUI-014 task IDs with native payload variant; canonical JSONL rows retained"
+      }
+    ]
+  },
+  "normalization": {
+    "schema": "business-task-v1",
+    "all_files_same_keys": true,
+    "missing_followup_inputs": "[]",
+    "missing_task_version": "synthetic-v1:<sha256 canonical row before normalization>",
+    "content_unchanged": true
+  }
+}

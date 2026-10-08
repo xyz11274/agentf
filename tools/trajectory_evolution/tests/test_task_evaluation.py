@@ -44,6 +44,14 @@ class Provider(http.server.BaseHTTPRequestHandler):
             "reason": "实际输出与给定标准一致。",
             "evidence_paths": ["/state"],
         }
+        if Provider.behavior.startswith("privacy_diagnostic_"):
+            judgment["verdict"] = "passed"
+            if Provider.behavior == "privacy_diagnostic_known_secret":
+                judgment["reason"] = KEY
+            elif Provider.behavior == "privacy_diagnostic_literal":
+                judgment["reason"] = "password='fixture-private-password-123456789'"
+            else:
+                judgment["reason"] = "公开无效令牌 str(0) 与 [REDACTED] 不含真实凭据。"
         if Provider.behavior.startswith("loops") and "loop_inventory" in json.loads(
                 body["messages"][1]["content"]):
             packet = json.loads(body["messages"][1]["content"])
@@ -167,12 +175,50 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     reviews[0]["reason"] = "首次合理探索取得新的数据源信息，即使调用失败也有独立贡献。"
                 elif reviews and Provider.behavior in ("loops_consistency_repair",
                                                        "loops_consistency_exhausted",
+                                                       "loops_consistency_exhausted_many",
                                                        "loops_consistency_missing"):
                     reviews[0]["reason"] = "已知参数不合法，空调度没有派发或答复，也没有新信息，但仍保留。"
                     if (Provider.behavior == "loops_consistency_repair"
                             and packet.get("validation_feedback", {}).get("reason_conflicts")):
                         reviews[0]["decision"] = "waste"
                         reviews[0]["reason"] = "已知空调度只返回参数错误，没有独立贡献，整轮可省。"
+                if Provider.behavior == "loops_consistency_exhausted_many":
+                    for item in reviews:
+                        item["reason"] = "已知相同参数导致认证失败，重复执行没有新增信息，但仍保留。" * 30
+                if Provider.behavior == "loops_consistency_diagnostic_secret":
+                    reviews[0]["reason"] = KEY
+                if Provider.behavior in ('loops_consistency_state_repair', 'loops_consistency_state_exhausted'):
+                    repaired = bool(packet.get('validation_feedback', {}).get('reason_conflicts'))
+                    reviews[0].update(
+                        decision='keep' if repaired and Provider.behavior.endswith('_repair') else 'waste',
+                        reason=('本轮成功保存状态，后续在覆盖前实际读取；删除本轮会丢失消费所需状态。'
+                                if repaired and Provider.behavior.endswith('_repair') else
+                                '本轮没有打印，故忽略其成功保存且后续实际读取的状态，整轮可省。'))
+                if Provider.behavior == "loops_consistency_dispatch_dependency":
+                    repaired = bool(packet.get("validation_feedback", {}).get("reason_conflicts"))
+                    for item in reviews:
+                        if inventory[item['iteration_id']]['execution_id'] == 'coord1' and not repaired:
+                            item.update(decision='waste', reason='相同技能继续运行，删去派发不会影响随后已保留的执行。')
+                if Provider.behavior == "loops_consistency_dispatch_both_waste":
+                    for item in reviews:
+                        if inventory[item['iteration_id']]['execution_id'] in ('coord1', 'skill1'):
+                            item.update(decision='waste', reason='子请求重复开始前已知无效操作，没有新信息或必要成果，整轮可省。')
+                review = dict(status="complete", iteration_reviews=reviews)
+            if Provider.behavior.startswith("loops_known_http_"):
+                reviews = []
+                for k, v in inventory.items():
+                    repeat = v["execution_id"] == "left" and str(v["iteration"]) == "2"
+                    repaired = bool(packet.get("validation_feedback", {}).get("reason_conflicts"))
+                    reason = ("已知认证或参数前提未修复，重发相同请求只得到等价错误，没有新信息或独立交付。"
+                              if repeat and repaired else "合理探索、继续处理，故保留。"
+                              if repeat else "首次取得此前未知的具体错误，省去会丢失认证或参数契约信息。"
+                              if v["execution_id"] == "left" else
+                              "实际修复前提并完成请求，省去会丢失有效修改。"
+                              if str(v["iteration"]) == "1" else
+                              "首次向用户交付修改结果，省去会丢失必要交付。")
+                    reviews.append(dict(iteration_id=k, reason=reason,
+                                        decision="waste" if repeat and repaired else "keep",
+                                        evidence_event_ids=[v["anchor_event_id"]]))
                 review = dict(status="complete", iteration_reviews=reviews)
             judgment.update(verdict="passed", loop_review=review)
         if Provider.behavior == "reference":
@@ -378,7 +424,38 @@ class Provider(http.server.BaseHTTPRequestHandler):
                     loop_conflicts.append(dict(
                         iteration_id=loop_rows[0]["iteration_id"],
                         issue="unsupported_retention"))
+                if Provider.behavior == "loops_consistency_exhausted_many":
+                    loop_conflicts = [dict(iteration_id=row["iteration_id"],
+                                           issue="unsupported_retention") for row in loop_rows]
+                if Provider.behavior.startswith("loops_known_http_"):
+                    loop_conflicts = [dict(iteration_id=row["iteration_id"],
+                                           issue="unsupported_retention")
+                                      for row in loop_rows if row["decision"] == "keep"
+                                      and row["evidence"]["execution_id"] == "left"
+                                      and str(row["evidence"]["iteration"]) == "2"]
+                if Provider.behavior in ('loops_consistency_state_repair', 'loops_consistency_state_exhausted'):
+                    loop_conflicts = [dict(iteration_id=row['iteration_id'],
+                                           issue='necessary_contribution_discarded')
+                                      for row in loop_rows if row['decision'] == 'waste']
                 judgment["loop_conflicts"] = loop_conflicts
+        if packet.get("kind") in ("task-judge-consistency.v1", "task-loop-consistency.v1"):
+            repair = "validation_feedback" in packet
+            if Provider.behavior == "loops_consistency_protocol_schema_repair" and not repair:
+                judgment = {}
+            if Provider.behavior == "loops_consistency_protocol_unknown":
+                judgment = (dict(conflicts=[dict(id="not-a-goal", issue="condition_conflict")])
+                            if packet["kind"] == "task-judge-consistency.v1" else
+                            dict(loop_conflicts=[dict(iteration_id="not-an-iteration",
+                                                      issue="unsupported_retention")]))
+            if Provider.behavior == "loops_consistency_protocol_duplicate" and packet["kind"] == "task-loop-consistency.v1":
+                conflict = dict(iteration_id=packet["loop_reviews"][0]["iteration_id"],
+                                issue="unsupported_retention")
+                judgment = dict(loop_conflicts=[conflict, dict(conflict)])
+            if Provider.behavior == "loops_consistency_protocol_enum" and packet["kind"] == "task-loop-consistency.v1":
+                judgment = dict(loop_conflicts=[dict(iteration_id=packet["loop_reviews"][0]["iteration_id"],
+                                                    issue="not-an-issue")])
+        if packet.get("kind") == "task-loop-repair.v1":
+            judgment = dict(loop_review=judgment["loop_review"])
         content = json.dumps(judgment)
         if Provider.behavior == "fence":
             content = "```json\n" + content + "\n```"
@@ -386,6 +463,14 @@ class Provider(http.server.BaseHTTPRequestHandler):
             body["messages"][1]["content"]
         ):
             content = "invalid response"
+        if packet.get("kind") in ("task-judge-consistency.v1", "task-loop-consistency.v1"):
+            if Provider.behavior in ("loops_consistency_protocol_parse", "loops_consistency_protocol_parse_repair") and (
+                    Provider.behavior == "loops_consistency_protocol_parse" or "validation_feedback" not in packet):
+                content = "unvalidated private-looking prose, not JSON"
+            if Provider.behavior == "loops_consistency_protocol_privacy":
+                content = json.dumps(dict(conflicts=[], private=KEY))
+        if Provider.behavior == "loops_consistency_protocol_upper_fence":
+            content = "```JSON \n" + content + "\n```"
         result = {
             "choices": [
                 {
@@ -524,6 +609,8 @@ class TrialTests(unittest.TestCase):
         write_json(self.root / "runtime.json", runtime)
         self.config["judge"] = dict(
             enabled=True,
+            # Existing fixtures explicitly replay the historical rubric.
+            require_state_dependency=False,
             runtime_config="runtime.json",
             prompt="prompts/task-judge-system.txt",
             max_model_calls=10,
@@ -1988,9 +2075,62 @@ class TrialTests(unittest.TestCase):
         self.assertTrue(list((self.root / "limited/trials").glob("*.json")))
         self.assertFalse((self.root / "limited/report.json").exists())
 
+    def test_completed_trial_survives_report_capacity_failure_and_resumes_without_execution(self):
+        """容量拒绝批次，但不能丢失真实完成的执行或在恢复时重跑健康宿主。"""
+        counter = self.root / "capacity-host-count"
+        host = self.config["variants"][0]["command"]
+        payload = "verified payload " * 500
+        self.config["variants"][0]["command"] = [
+            sys.executable, "-c",
+            "import json, pathlib, subprocess, sys\n"
+            f"counter=pathlib.Path({str(counter)!r})\n"
+            "counter.write_text(str(int(counter.read_text())+1) if counter.exists() else '1')\n"
+            f"response=json.loads(subprocess.run({host!r},input=sys.stdin.read(),capture_output=True,text=True,check=True).stdout)\n"
+            "response['state']['details']='verified payload '*500\nprint(json.dumps(response))\n",
+        ]
+        self.config["max_report_bytes"] = 32768
+        reference = self.evaluate(name="checkpoint-template")
+        self.assertEqual(counter.read_text(), "1")
+
+        self.config["max_report_bytes"] = 1024
+        failed = self.root / "capacity-failed"
+        write_json(self.root / "evaluation.json", self.config)
+        rejected = self.call("run", self.dataset, "--config", self.root / "evaluation.json",
+                             "--output-root", failed, code=2)
+        self.assertIn("evaluation_report_size_limit", rejected.stderr)
+        self.assertEqual(counter.read_text(), "2")
+        self.assertFalse((failed / "report.json").exists())
+        self.assertFalse((failed / "manifest.json").exists())
+        saved = list((failed / "trials").glob("*.json"))
+        self.assertEqual(len(saved), 1)
+        original = saved[0].read_bytes()
+        trial = json.loads(original)
+        self.assertEqual(trial["execution_status"], "completed")
+        self.assertEqual(trial["verdict"], "passed")
+        self.assertEqual(trial["evidence"]["state"]["details"], payload)
+
+        # 仅从原生实际输出装配本地恢复清单。执行/评分设置与模板相同，
+        # 扩大纯存储容量；不改已完成 trial 的任何字段或源文件。
+        checkpoint = self.root / "checkpoint"
+        checkpoint.mkdir()
+        reference["complete"] = False
+        reference["trials"] = [trial]
+        source = checkpoint / "report.json"
+        write_json(source, reference)
+        write_json(checkpoint / "manifest.json", {
+            "run_id": reference["run_id"], "complete": False,
+            "files": {"report.json": hashlib.sha256(source.read_bytes()).hexdigest()},
+        })
+        self.config["max_report_bytes"] = 32768
+        restored = self.evaluate(name="capacity-restored", extra=("--resume-report", source))
+        self.assertEqual(restored["summary"]["reused_trials"], 1)
+        self.assertEqual(restored["trials"], [trial])
+        self.assertEqual(saved[0].read_bytes(), original)
+        self.assertEqual(counter.read_text(), "2")
+
     # 容量配置允许大批次，但不预分配整份预算；所有输出保持同一试验顺序和摘要。
     def test_large_report_capacity_keeps_formats_and_hard_limit(self):
-        self.config["max_report_bytes"] = 1073741824
+        self.config["max_report_bytes"] = 2 * 1024 * 1024 * 1024
         report = self.evaluate(name="large-capacity")
         output = self.root / "large-capacity"
         rows = [json.loads(line) for line in (output / "results.jsonl").read_text().splitlines()]
@@ -2016,6 +2156,19 @@ class TrialTests(unittest.TestCase):
         )
         self.assertEqual(restored["summary"]["reused_trials"], len(report["trials"]))
         self.assertEqual(restored["trials"], report["trials"])
+
+        # 仅写一个字节的稀疏文件，验证读取器先按文件长度拒绝越界，不分配 2 GiB。
+        oversized = self.root / "oversized-report.json"
+        with oversized.open("wb") as stream:
+            stream.seek(self.config["max_report_bytes"])
+            stream.write(b" ")
+        self.assertEqual(oversized.stat().st_size, self.config["max_report_bytes"] + 1)
+        rejected = self.call(
+            "run", self.dataset, "--config", self.root / "evaluation.json",
+            "--output-root", self.root / "oversized-resume",
+            "--resume-report", oversized, code=2,
+        )
+        self.assertIn("evaluation_file_size_invalid", rejected.stderr)
 
         self.config["max_report_bytes"] += 1
         self.evaluate(code=2, name="over-capacity")
@@ -2607,8 +2760,14 @@ class TrialTests(unittest.TestCase):
         self.assertIn("unsupported_retention", instruction)
         self.assertIn("整轮无新贡献", instruction)
         self.assertEqual(
-            packets[3]["validation_feedback"]["previous_response"]
+            packets[3]["previous_response"]
             ["loop_review"]["iteration_reviews"][0]["decision"], "keep")
+        self.assertEqual(packets[3]["kind"], "task-loop-repair.v1")
+        self.assertEqual(len(packets[3]["loop_inventory"]), 1)
+        self.assertNotIn("assessment", packets[3])
+        self.assertNotIn("previous_response", packets[3]["validation_feedback"])
+        self.assertEqual(packets[1]["goals"], packets[4]["goals"])
+        self.assertEqual(packets[2]["loop_reviews"][1:], packets[5]["loop_reviews"][1:])
         self.assertEqual(packets[5]["loop_reviews"][0]["decision"], "waste")
         self.assertEqual(trial["evidence"]["judge_batches"][0]
                          ["consistency_review"]["reviewed_iterations"], 4)
@@ -2629,6 +2788,80 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(packets[1]["kind"], "task-judge-consistency.v1")
         self.assertEqual(packets[2]["kind"], "task-loop-consistency.v1")
         self.assertEqual(packets[2]["loop_reviews"][0]["decision"], "keep")
+
+    def _known_http_failure_loop_contract(self, status):
+        """本地桩验证重复错误的复核修复协议，不代表远程模型已遵守语义。"""
+        self.loop_consistency_mode(objectives=False)
+        Provider.behavior = f"loops_known_http_{status}"
+        host = self.config["variants"][0]["command"]
+        initial = ("apis.phone.show_alarms(login_result)" if status == 401
+                   else "apis.phone.update_alarm(alarm_id=alarm_id, hour='invalid')")
+        correction = ("login_result = apis.phone.login(user, secret)\n"
+                      "apis.phone.show_alarms(login_result)" if status == 401
+                      else "apis.phone.update_alarm(alarm_id=alarm_id, hour=7)")
+        observation = "appworld_auth_401" if status == 401 else "HTTP422: hour must be an integer"
+        wrapper = (
+            "import json, subprocess, sys\n"
+            f"response=json.loads(subprocess.run({host!r},input=sys.stdin.read(),capture_output=True,text=True,check=True).stdout)\n"
+            "for event in response['trace']['events']:\n"
+            " step=event.get('step_id',''); kind=event['kind']\n"
+            " if step=='right-1' and kind=='step.start': event['caused_by']=['left-2-step.end']\n"
+            " if kind.startswith('action.'):\n"
+            f"  code={initial!r} if step.startswith('left-') else {correction!r} if step=='right-1' else 'print(\"first delivery\")'\n"
+            "  event['operation']='appworld.execute'; event['input']={'code':code}\n"
+            "  if kind=='action.end':\n"
+            f"   event['output']={{'observation':{observation!r} if step.startswith('left-') else 'request corrected and result delivered'}}\n"
+            "   if step.startswith('left-'):\n"
+            "    event['status']='failed'; event['error']={'code':'appworld_request_failed','retryability':'unknown'}\n"
+            "response['metrics'].update(steps=4,tool_calls=4,loop_count=4)\n"
+            "print(json.dumps(response,ensure_ascii=False))\n"
+        )
+        self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper]
+        report = self.evaluate(name=f"http-{status}")
+        trial = report["trials"][0]
+        review = trial["evidence"]["loop_review"]
+        self.assertEqual(review["status"], "complete")
+        self.assertEqual(review["count"], 1)
+        self.assertEqual(trial["execution_status"], "completed")
+        calls = REQUESTS[self.start_requests:]
+        packets = [json.loads(r["messages"][1]["content"]) for r in calls]
+        consistency = [packet for packet in packets if packet.get("kind") == "task-loop-consistency.v1"]
+        self.assertEqual(len(consistency), 2)
+        for request in calls:
+            system = request["messages"][0]["content"]
+            if "task-loop-consistency.v1" in request["messages"][1]["content"]:
+                self.assertIn("401 反例", system)
+                self.assertIn("422 反例", system)
+                self.assertIn("caused_by 只证明发生关系，不证明必要性", system)
+            elif "loop_inventory" in request["messages"][1]["content"]:
+                self.assertIn("不能用事后失败否定首次合理探索", system)
+                self.assertIn("前提未改变", system)
+        before = consistency[0]["loop_reviews"]
+        after = consistency[1]["loop_reviews"]
+        self.assertTrue(all(row["decision"] == "keep" for row in before))
+        repeated = next(row for row in after if row["evidence"]["execution_id"] == "left"
+                        and str(row["evidence"]["iteration"]) == "2")
+        first = next(row for row in after if row["evidence"]["execution_id"] == "left"
+                     and str(row["evidence"]["iteration"]) == "1")
+        self.assertEqual(repeated["decision"], "waste")
+        self.assertEqual(first["decision"], "keep")
+        self.assertTrue(all(row["decision"] == "keep" for row in after
+                            if row["evidence"]["execution_id"] == "right"))
+        repaired = next(packet for packet in packets if packet.get("validation_feedback", {}).get("reason_conflicts"))
+        self.assertEqual(repaired["validation_feedback"]["reason_conflicts"], [dict(
+            iteration_id=repeated["iteration_id"], issue="unsupported_retention")])
+        trace = trial["evidence"]["trace"]
+        by_id = {event["event_id"]: event for event in trace["events"]}
+        self.assertEqual(by_id["left-1-action.end"]["input"], by_id["left-2-action.end"]["input"])
+        self.assertEqual(by_id["left-1-action.end"]["output"], by_id["left-2-action.end"]["output"])
+        self.assertEqual(by_id["right-1-step.start"]["caused_by"], ["left-2-step.end"])
+        self.assertEqual(report["summary"]["model_calls"], 4)
+
+    def test_loop_consistency_repairs_known_401_but_keeps_first_exploration(self):
+        self._known_http_failure_loop_contract(401)
+
+    def test_loop_consistency_repairs_known_422_but_keeps_actual_correction(self):
+        self._known_http_failure_loop_contract(422)
 
     def test_loop_consistency_without_goals_still_reviews_iterations(self):
         """没有目标评分行时，逐轮一致性不能因空 goals 早退。"""
@@ -2652,6 +2885,58 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(report["trials"][0]["verdict"], "error")
         self.assertIsNone(report["summary"]["invalid_loop_assessment"]["mean"])
 
+    def test_consistency_protocol_repairs_only_same_request_with_static_feedback(self):
+        """格式修复只重发复核，不重跑主判/Agent，也不放行逻辑冲突。"""
+        for behavior in ("parse_repair", "schema_repair"):
+            with self.subTest(behavior=behavior):
+                self.loop_consistency_mode()
+                Provider.behavior = "loops_consistency_protocol_" + behavior
+                start = len(REQUESTS)
+                report = self.evaluate(name="consistency-protocol-" + behavior)
+                packets = [json.loads(r["messages"][1]["content"]) for r in REQUESTS[start:]]
+                self.assertEqual(len(packets), 5)
+                self.assertEqual(sum("assessment" in p for p in packets), 1)
+                self.assertEqual(report["trials"][0]["execution_status"], "completed")
+                self.assertEqual(report["trials"][0]["evidence"]["loop_review"]["count"], 0)
+                for index in (2, 4):
+                    feedback = packets[index].pop("validation_feedback")
+                    self.assertEqual(packets[index], packets[index - 1])
+                    self.assertEqual(feedback["diagnostic"]["stage"],
+                                     "parse" if behavior.startswith("parse") else "schema")
+                    self.assertNotIn("unvalidated private-looking", json.dumps(feedback))
+                self.assertNotIn("validation_error", report["trials"][0]["evidence"]["judge_batches"][0])
+
+    def test_consistency_protocol_errors_are_staged_bounded_and_never_zero(self):
+        """完整性/隐私/枚举/ID错误只留下静态诊断，不伪造完整或零loop。"""
+        for behavior, stage, calls in (("parse", "parse", 4), ("unknown", "unknown_id", 4),
+                                       ("duplicate", "duplicate_id", 5), ("enum", "enum", 5),
+                                       ("privacy", "privacy", 2)):
+            with self.subTest(behavior=behavior):
+                self.loop_consistency_mode()
+                self.config["judge"]["max_repair_attempts"] = 3
+                Provider.behavior = "loops_consistency_protocol_" + behavior
+                report = self.evaluate(code=3, name="consistency-staged-" + behavior)
+                trial = report["trials"][0]
+                error = trial["evidence"]["judge_batches"][0]["validation_error"]
+                diagnostic = error["consistency_response_error"]
+                self.assertEqual(error["code"], "evaluation_consistency_response_invalid")
+                self.assertEqual(diagnostic["stage"], stage)
+                self.assertEqual(diagnostic["attempt"], 1 if stage == "privacy" else 3)
+                self.assertEqual(report["summary"]["model_calls"], calls)
+                self.assertIsNone(report["summary"]["invalid_loop_assessment"]["mean"])
+                self.assertNotIn(KEY, json.dumps(error))
+                self.assertNotIn("unvalidated private-looking", json.dumps(error))
+                if stage == "parse":
+                    self.assertEqual(diagnostic["json_error"]["offset"], 0)
+
+    def test_consistency_complete_uppercase_json_fence_shares_strict_parser(self):
+        """主判和两种复核统一接受完整JSON围栏标签大小写，不增加调用。"""
+        self.loop_consistency_mode()
+        Provider.behavior = "loops_consistency_protocol_upper_fence"
+        report = self.evaluate()
+        self.assertEqual(report["summary"]["model_calls"], 3)
+        self.assertEqual(report["trials"][0]["evidence"]["loop_review"]["count"], 0)
+
     def test_loop_consistency_unresolved_conflict_is_not_zero_waste(self):
         """持续无根据保留整轮时，耗尽有界修复后隔离该题。"""
         self.loop_consistency_mode()
@@ -2661,6 +2946,177 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(trial["execution_status"], "completed")
         self.assertEqual(trial["verdict"], "error")
         self.assertIsNone(report["summary"]["invalid_loop_assessment"]["mean"])
+        diagnostic = trial['evidence']['judge_batches'][0]['validation_error']
+        rejected = diagnostic['rejected_loop_reviews']
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(set(rejected[0]), {'iteration_id', 'decision', 'reason'})
+        self.assertEqual(rejected[0]['decision'], 'keep')
+        self.assertEqual(rejected[0]['reason'],
+                         '已知参数不合法，空调度没有派发或答复，也没有新信息，但仍保留。')
+        self.assertNotIn(KEY, json.dumps(diagnostic))
+
+    def test_shared_state_dependency_default_and_bounded_consistency(self):
+        self.loop_consistency_mode()
+        Provider.behavior = 'loops_consistency_safe'
+        old = self.evaluate(name='state-rule-historical')
+        source = self.root / 'state-rule-historical/report.json'
+        original = source.read_bytes()
+        self.config['judge'].pop('require_state_dependency')
+        self.mode('nonzero')
+        start = len(REQUESTS)
+        current = self.evaluate(name='state-rule-default', extra=('--regrade-report', source))
+        requests = REQUESTS[start:]
+        packets = [json.loads(r['messages'][1]['content']) for r in requests]
+        self.assertEqual(len(requests), 3)
+        self.assertIn('状态依赖与无输出', requests[0]['messages'][0]['content'])
+        self.assertIn('覆盖之前读取或消费', requests[0]['messages'][0]['content'])
+        self.assertIn('状态依赖与无输出', requests[-1]['messages'][0]['content'])
+        for request in (requests[0], requests[-1]):
+            prompt = request['messages'][0]['content']
+            self.assertIn('首次使用新参数、访问此前未看过的分页', prompt)
+            self.assertIn('不能仅因最终未命中目标', prompt)
+            self.assertIn('新参数或新页码也不自动构成必要贡献', prompt)
+        self.assertEqual(packets[-1]['kind'], 'task-loop-consistency.v1')
+        self.assertNotEqual(old['configuration']['judge_fingerprint'], current['configuration']['judge_fingerprint'])
+        self.assertFalse(current['summary']['agent_reexecuted'])
+        self.assertEqual(old['trials'][0]['evidence']['trace'], current['trials'][0]['evidence']['trace'])
+        self.config['judge']['require_state_dependency'] = True
+        explicit = self.evaluate(name='state-rule-explicit', extra=('--regrade-report', source))
+        self.assertEqual(current['configuration']['judge_fingerprint'], explicit['configuration']['judge_fingerprint'])
+        Provider.behavior = 'loops_consistency_state_repair'
+        repaired = self.evaluate(name='state-rule-repaired', extra=('--regrade-report', source))
+        self.assertEqual(repaired['trials'][0]['evidence']['loop_review']['count'], 0)
+        self.assertEqual(old['trials'][0]['evidence']['trace'], repaired['trials'][0]['evidence']['trace'])
+        Provider.behavior = 'loops_consistency_state_exhausted'
+        exhausted = self.evaluate(code=3, name='state-rule-exhausted', extra=('--regrade-report', source))
+        self.assertEqual(exhausted['trials'][0]['execution_status'], 'completed')
+        self.assertIsNone(exhausted['summary']['invalid_loop_assessment']['mean'])
+        # The rule does not automatically retain every round or clear actual waste.
+        Provider.behavior = 'loops_detailed'
+        wasted = self.evaluate(name='state-rule-actual-waste', extra=('--regrade-report', source))
+        self.assertEqual(wasted['trials'][0]['evidence']['loop_review']['count'], 1)
+        self.config['judge']['require_state_dependency'] = False
+        Provider.behavior = 'loops_consistency_safe'
+        start = len(REQUESTS)
+        historical = self.evaluate(name='state-rule-off', extra=('--regrade-report', source))
+        self.assertEqual(old['configuration']['judge_fingerprint'], historical['configuration']['judge_fingerprint'])
+        self.assertFalse(any('状态依赖与无输出' in r['messages'][0]['content'] for r in REQUESTS[start:]))
+        self.config['judge']['require_state_dependency'] = 'true'
+        start = len(REQUESTS)
+        self.assertIsNone(self.evaluate(code=2, name='state-rule-wrong-type', extra=('--regrade-report', source)))
+        self.assertEqual(len(REQUESTS), start)
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_unconditional_resume_refreshes_changed_or_missing_judge_without_runner(self):
+        self.loop_consistency_mode()
+        self.config.update(repetitions=2, parallelism=1)
+        Provider.behavior = 'loops_consistency_safe'
+        old = self.evaluate(name='resume-old-rubric')
+        source = self.root / 'resume-old-rubric/report.json'
+        original = source.read_bytes()
+        self.config['judge']['require_state_dependency'] = True
+        self.mode('nonzero')
+        start = len(REQUESTS)
+        # Strict recovery keeps its existing configuration identity check.
+        self.assertIsNone(self.evaluate(code=2, name='resume-strict-mismatch',
+                                       extra=('--resume-report', source)))
+        self.assertEqual(len(REQUESTS), start)
+        self.env['TRAJECTORY_UNCONDITIONAL_RESUME'] = '1'
+        current = self.evaluate(name='resume-new-rubric', extra=('--resume-report', source))
+        self.assertEqual(current['summary']['regraded_trials'], 2)
+        self.assertEqual(current['summary']['reused_trials'], 0)
+        self.assertFalse(current['summary']['agent_reexecuted'])
+        self.assertNotEqual(old['configuration']['judge_fingerprint'],
+                            current['configuration']['judge_fingerprint'])
+        self.assertEqual(len(REQUESTS) - start, 6)
+        for before, after in zip(old['trials'], current['trials']):
+            for key in ('trial_id', 'duration_ms', 'execution_status', 'metrics'):
+                self.assertEqual(before.get(key), after.get(key))
+            self.assertEqual(before['evidence']['trace'], after['evidence']['trace'])
+        start = len(REQUESTS)
+        same = self.evaluate(name='resume-same-rubric', extra=(
+            '--resume-report', self.root / 'resume-new-rubric/report.json'))
+        self.assertEqual(len(REQUESTS), start)
+        self.assertEqual(same['summary']['reused_trials'], 2)
+        self.assertEqual(same['summary']['regraded_trials'], 0)
+        # A fixture with a missing judge identity/check must retain execution,
+        # rather than launch the now deliberately failing host command.
+        legacy = json.loads(original)
+        legacy['configuration'].pop('judge_fingerprint')
+        for row in legacy['trials']:
+            row['checks'] = [c for c in row['checks'] if c['check_id'] != 'model']
+            row['evidence'].pop('loop_review', None)
+            row['verdict'] = 'uncertain'
+        write_json(source, legacy)
+        manifest_path = source.with_name('manifest.json')
+        manifest = json.loads(manifest_path.read_text())
+        manifest['files']['report.json'] = hashlib.sha256(source.read_bytes()).hexdigest()
+        write_json(manifest_path, manifest)
+        missing_bytes = source.read_bytes()
+        missing = self.evaluate(name='resume-missing-judge', extra=('--resume-report', source))
+        self.assertEqual(missing['summary']['regraded_trials'], 2)
+        self.assertFalse(missing['summary']['agent_reexecuted'])
+        self.assertEqual(source.read_bytes(), missing_bytes)
+
+    def test_loop_conflict_diagnostic_is_eight_rows_and_512_utf8_bytes(self):
+        self.loop_consistency_mode()
+        self.config['judge']['max_repair_attempts'] = 0
+        host = self.root / 'many-loop-host.py'
+        host.write_text('''import contextlib,copy,io,json,runpy,sys
+sys.argv=[%r,'loop_trace']
+buffer=io.StringIO()
+with contextlib.redirect_stdout(buffer): runpy.run_path(sys.argv[0],run_name='__main__')
+result=json.loads(buffer.getvalue())
+old={event['event_id']:event for event in result['trace']['events']}
+events=[old['start']]
+completed=[]
+for branch in ('left','right'):
+    previous='start'
+    sequence=0
+    for iteration in range(1,7):
+        step=f'{branch}-{iteration}'
+        for kind in ('step.start','action.start','action.end','step.end'):
+            sequence+=1
+            event=copy.deepcopy(old[f'{branch}-1-{kind}'])
+            event.update(event_id=f'{step}-{kind}',step_id=step,iteration=iteration,
+                         sequence=sequence,timestamp_us=str(len(events)+1),caused_by=[previous])
+            if kind.startswith('action.'):event['action_id']=step+'-call'
+            events.append(event)
+            previous=event['event_id']
+    completed.append(previous)
+end=old['end'];end.update(timestamp_us=str(len(events)+1),caused_by=completed)
+events.append(end)
+result['trace']['events']=events
+print(json.dumps(result,ensure_ascii=False))
+''' % str(SOURCE / 'tests/evaluation_host.py'))
+        self.config['variants'][0]['command'] = [sys.executable, '-B', str(host)]
+        Provider.behavior = 'loops_consistency_exhausted_many'
+        report = self.evaluate(code=3)
+        trial = report['trials'][0]
+        error = trial['evidence']['judge_batches'][0]['validation_error']
+        self.assertEqual(trial['execution_status'], 'completed')
+        self.assertEqual(trial['verdict'], 'error')
+        self.assertEqual(error['code'], 'evaluation_judge_reason_conflict')
+        self.assertEqual(len(error['reason_conflicts']), 12)
+        self.assertEqual(len(error['rejected_loop_reviews']), 8)
+        for row in error['rejected_loop_reviews']:
+            self.assertEqual(set(row), {'iteration_id', 'decision', 'reason'})
+            self.assertLessEqual(len(row['reason'].encode('utf8')), 512)
+            self.assertGreater(len(row['reason'].encode('utf8')), 500)
+            self.assertEqual(row['decision'], 'keep')
+            self.assertNotIn(KEY, json.dumps(row))
+        self.assertEqual(report['summary']['model_calls'], 3)
+        self.assertIsNone(report['summary']['invalid_loop_assessment']['mean'])
+
+    def test_loop_conflict_diagnostic_never_persists_credential_reason(self):
+        self.loop_consistency_mode()
+        self.config['judge']['max_repair_attempts'] = 0
+        Provider.behavior = 'loops_consistency_diagnostic_secret'
+        report = self.evaluate(code=3)
+        self.assertEqual(report['trials'][0]['execution_status'], 'completed')
+        self.assertEqual(report['trials'][0]['verdict'], 'error')
+        self.assertNotIn(KEY, json.dumps(report))
+        self.assertIsNone(report['summary']['invalid_loop_assessment']['mean'])
 
     def test_loop_consistency_error_isolated_from_other_variant(self):
         """一条轨迹的复核冲突不能让同批另一策略评测失效。"""
@@ -2735,7 +3191,9 @@ class TrialTests(unittest.TestCase):
         trial = report["trials"][0]
         self.assertEqual(trial["verdict"], "error")
         self.assertEqual(trial["evidence"]["assessment"]["coverage"], 0)
-        self.assertEqual(report["summary"]["model_calls"], 2)
+        self.assertEqual(report["summary"]["model_calls"], 3)
+        self.assertEqual(trial["evidence"]["judge_batches"][0]["validation_error"]
+                         ["consistency_response_error"]["stage"], "unknown_id")
 
     def test_failed_goal_cannot_be_accused_of_waived_success(self):
         """复现真实失败：主裁判已经失败，复核误报被放行；保留业务失败并记录无效指控。"""
@@ -2904,6 +3362,177 @@ class TrialTests(unittest.TestCase):
         )
         self.assertEqual(provenance["config_fingerprint"], first["config_fingerprint"])
         self.assertEqual(source.read_bytes(), original)
+
+    def test_saved_code_projection_is_local_verified_and_view_only(self):
+        self.model()
+        fixture = self.root / 'public-code-host.py'
+        text = (SOURCE / 'tests/evaluation_host.py').read_text()
+        text = text.replace('print(json.dumps(response, ensure_ascii=False))',
+            'for event in response.get("trace", {}).get("events", []):\n'
+            '    if event["kind"] in ("action.start", "action.end"):\n'
+            '        event["input"] = {"code": "print(20)"}\n'
+            'print(json.dumps(response, ensure_ascii=False))')
+        fixture.write_text(text)
+        self.config['variants'][0]['command'] = [sys.executable, '-B', str(fixture), 'loop_trace']
+        first = self.evaluate()
+        source = self.root / 'evaluation/report.json'
+        original = source.read_bytes()
+        original_manifest = source.with_name('manifest.json').read_bytes()
+        adapter = self.root / 'local-code-projector.py'
+        invocation = self.root / 'projection-invocations.jsonl'
+        deadline = self.root / 'local-code-projector-deadline.py'
+        deadline.write_text('import subprocess,sys\n'
+                            'try: raise SystemExit(subprocess.run(sys.argv[1:], timeout=0.1).returncode)\n'
+                            'except subprocess.TimeoutExpired: raise SystemExit(124)\n')
+        adapter.write_text('''import json,sys,time
+from pathlib import Path
+request=json.load(sys.stdin)
+assert type(request['schema_version']) is int and request['schema_version']==1
+fresh=request.get('source_kind')=='completed_capture'
+snapshot=fresh or request.get('source_kind')=='historical_snapshot'
+assert set(request)==({'schema_version','source_kind','source_trial','trial_id','task_id','execution_run_id'} if snapshot else
+                      {'schema_version','source_report','trial_id','task_id','execution_run_id'})
+with Path(sys.argv[2]).open('a') as output:output.write(json.dumps(request)+'\\n')
+source=Path(request['source_trial']) if snapshot else Path(request['source_report']).parent/'trials'/(request['trial_id']+'.json')
+trial=json.loads(source.read_text())
+if fresh:
+    assert trial['verdict']=='uncertain'
+    assert trial['execution_status']=='completed'
+    assert not any(row['check_id']=='model' for row in trial['checks'])
+trace=trial['evidence']['trace']
+event=next(row for row in trace['events'] if row['kind']=='action.end' and 'code' in row.get('input',{}))
+mode=sys.argv[1]
+patch={'run_id':trace['identity']['run_id'],'event_id':event['event_id'],
+       'old_code':event['input']['code'],'code':event['input']['code']+'\\n# restored public structure',
+       'source':{'path':str(source),'input_index':0}}
+reply={'schema_version':1,'trial_id':request['trial_id'],'execution_run_id':request['execution_run_id'],
+       'status':'complete','patches':[patch]}
+if mode=='wrong_run':patch['run_id']='different-run'
+if mode=='wrong_event':patch['event_id']='different-event'
+if mode=='wrong_code':patch['old_code']='different-code'
+if mode=='wrong_trial':reply['trial_id']='different-trial'
+if mode=='noncode':patch['output']={'fabricated':True}
+if mode=='credential':patch['code']="password='opaque-private-credential-123456789'"
+if mode=='unknown':reply['status']='unknown'
+if mode=='timeout':time.sleep(10)
+if mode=='nonjson':print('invalid protocol')
+else:print(json.dumps(reply))
+''')
+        self.config['judge']['evidence_projection_command'] = [sys.executable, str(adapter), 'valid', str(invocation)]
+        self.mode('nonzero')  # These grading requests must not run the host again.
+        second = self.evaluate(name='projected', extra=('--regrade-report', source))
+        before, after = first['trials'][0], second['trials'][0]
+        self.assertEqual(before['evidence']['trace'], after['evidence']['trace'])
+        for key in ('trial_id', 'duration_ms', 'metrics', 'execution_status'):
+            self.assertEqual(before.get(key), after.get(key))
+        self.assertEqual(after['evidence']['output'], before['evidence']['output'])
+        self.assertEqual(after['evidence']['evidence_projection']['recovered_events'], 1)
+        patches = after['evidence']['evidence_projection']['code_patches']
+        self.assertEqual(len(patches), 1)
+        self.assertEqual(set(patches[0]), {'run_id', 'event_id', 'code'})
+        self.assertIn('# restored public structure', patches[0]['code'])
+        self.assertFalse(second['summary']['agent_reexecuted'])
+        packet = json.loads(REQUESTS[-1]['messages'][1]['content'])
+        self.assertIn('# restored public structure', json.dumps(packet['evidence']))
+        self.assertNotIn('evidence_projection', packet['evidence'])
+        self.assertNotEqual(first['configuration']['judge_fingerprint'], second['configuration']['judge_fingerprint'])
+        for mode in ('wrong_run', 'wrong_event', 'wrong_code', 'wrong_trial', 'noncode',
+                     'credential', 'unknown', 'nonjson', 'timeout'):
+            command = [sys.executable, str(adapter), mode, str(invocation)]
+            # A short local test deadline exercises process-timeout rejection
+            # without waiting for the production 30-second projection bound.
+            if mode == 'timeout':
+                command = [sys.executable, str(deadline), *command]
+            self.config['judge']['evidence_projection_command'] = command
+            calls = len(REQUESTS)
+            failed = self.evaluate(code=3, name='projection-' + mode, extra=('--regrade-report', source))
+            row = failed['trials'][0]
+            self.assertEqual(row['execution_status'], 'completed')
+            self.assertEqual(row['error_code'], 'evaluation_judge_failed')
+            self.assertEqual(row['evidence']['evidence_projection']['status'], 'error')
+            self.assertEqual(row['evidence']['trace'], before['evidence']['trace'])
+            self.assertEqual(len(REQUESTS), calls)
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(source.with_name('manifest.json').read_bytes(), original_manifest)
+        self.config['judge']['evidence_projection_command'] = [sys.executable, str(adapter), 'valid', str(invocation)]
+        atomic = source.parent / 'trials' / (before['trial_id'] + '.json')
+        original_atomic = atomic.read_bytes()
+        changed = json.loads(original_atomic)
+        target = next(row for row in changed['evidence']['trace']['events'] if row['kind'] == 'action.end')
+        target['input']['code'] = 'print(99)'
+        write_json(atomic, changed)
+        calls = len(invocation.read_text().splitlines())
+        rejected = self.evaluate(code=3, name='projection-changed-atomic', extra=('--regrade-report', source))
+        self.assertEqual(rejected['trials'][0]['checks'][-1]['reason'],
+                         'evaluation_evidence_projection_source_mismatch')
+        self.assertEqual(len(invocation.read_text().splitlines()), calls)
+        atomic.write_bytes(original_atomic)
+        # Omitted and gzip-retained redundant atomics both use the exact row
+        # from the already manifest-verified report, without editing that source.
+        import gzip
+        atomic.unlink()
+        compressed = atomic.with_suffix('.json.gz')
+        for compressed_retention in (False, True):
+            if compressed_retention:
+                compressed.write_bytes(gzip.compress(original_atomic))
+            retained = compressed.read_bytes() if compressed.exists() else None
+            name = 'projection-history-gzip' if compressed_retention else 'projection-history-omitted'
+            recovered = self.evaluate(name=name, extra=('--regrade-report', source))
+            row = recovered['trials'][0]
+            self.assertEqual(row['evidence']['evidence_projection']['source_kind'], 'historical_snapshot')
+            self.assertEqual(row['evidence']['trace'], before['evidence']['trace'])
+            for key in ('trial_id', 'duration_ms', 'metrics', 'execution_status'):
+                self.assertEqual(before.get(key), row.get(key))
+            self.assertFalse(recovered['summary']['agent_reexecuted'])
+            self.assertFalse(list((self.root / name).rglob('historical-execution.json')))
+            request = json.loads(invocation.read_text().splitlines()[-1])
+            self.assertEqual(request['source_kind'], 'historical_snapshot')
+            self.assertNotIn('source_report', request)
+            self.assertFalse(atomic.exists())
+            if retained is not None:
+                self.assertEqual(compressed.read_bytes(), retained)
+        self.config['judge']['evidence_projection_command'][2] = 'wrong_run'
+        calls = len(REQUESTS)
+        rejected = self.evaluate(code=3, name='projection-history-wrong-run', extra=('--regrade-report', source))
+        self.assertEqual(rejected['trials'][0]['error_code'], 'evaluation_judge_failed')
+        self.assertEqual(len(REQUESTS), calls)
+        self.assertFalse(list((self.root / 'projection-history-wrong-run').rglob('historical-execution.json')))
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(source.with_name('manifest.json').read_bytes(), original_manifest)
+        self.config['judge']['evidence_projection_command'][2] = 'valid'
+        compressed.unlink()
+        atomic.write_bytes(original_atomic)
+        self.mode('loop_trace')
+        fresh = self.evaluate(name='projection-fresh-capture')
+        self.assertEqual(fresh['trials'][0]['evidence']['evidence_projection']['source_kind'], 'completed_capture')
+        self.assertEqual(fresh['trials'][0]['evidence']['evidence_projection']['recovered_events'], 1)
+        self.assertFalse(list((self.root / 'projection-fresh-capture').rglob('completed-execution.json')))
+        packet = json.loads(REQUESTS[-1]['messages'][1]['content'])
+        self.assertIn('# restored public structure', json.dumps(packet['evidence']))
+        request = json.loads(invocation.read_text().splitlines()[-1])
+        self.assertEqual(request['source_kind'], 'completed_capture')
+        self.assertNotIn('source_report', request)
+        self.mode('nonzero')
+        replay = self.evaluate(name='projection-fresh-regrade', extra=(
+            '--regrade-report', self.root / 'projection-fresh-capture/report.json'))
+        self.assertEqual(replay['trials'][0]['evidence']['trace'], fresh['trials'][0]['evidence']['trace'])
+        self.assertEqual(replay['trials'][0]['evidence']['evidence_projection']['recovered_events'], 1)
+        self.assertEqual(replay['trials'][0]['verdict'], fresh['trials'][0]['verdict'])
+        self.assertFalse(replay['summary']['agent_reexecuted'])
+        for mode in ('wrong_run', 'credential', 'unknown'):
+            self.mode('loop_trace')
+            self.config['judge']['evidence_projection_command'][2] = mode
+            calls = len(REQUESTS)
+            rejected = self.evaluate(code=3, name='projection-fresh-' + mode)
+            self.assertEqual(rejected['trials'][0]['execution_status'], 'completed')
+            self.assertEqual(rejected['trials'][0]['error_code'], 'evaluation_judge_failed')
+            self.assertEqual(len(REQUESTS), calls)
+            self.assertFalse(list((self.root / ('projection-fresh-' + mode)).rglob('completed-execution.json')))
+        self.mode('nonzero')
+        calls = len(invocation.read_text().splitlines())
+        self.config['judge'].pop('evidence_projection_command')
+        self.evaluate(name='projection-off', extra=('--regrade-report', source))
+        self.assertEqual(len(invocation.read_text().splitlines()), calls)
 
     # 回归用例：test_model_only_regrade_explicit_subset_of_paused_batch。
     # 关键断言：self.assertTrue(entered.exists())；此处只验证测试构造的场景。
@@ -3087,7 +3716,7 @@ class TrialTests(unittest.TestCase):
 
     # 回归用例：test_model_only_regrade_cancellation_does_not_mix_old_grades。
     # 重点核验字段或诊断：not_started_trials；异常路径不能被当成成功。
-    def test_model_only_regrade_cancellation_does_not_mix_old_grades(self):
+    def _cancelled_regrade_does_not_mix_old_grades(self, *, ordinary_refresh=False):
         self.model()
         self.config.update(repetitions=3, parallelism=1)
         self.evaluate()
@@ -3116,6 +3745,9 @@ class TrialTests(unittest.TestCase):
             )
             write_json(runtime_path, runtime)
             self.mode("nonzero")
+            if ordinary_refresh:
+                self.env['TRAJECTORY_UNCONDITIONAL_RESUME'] = '1'
+                self.config['judge']['require_state_dependency'] = True
             write_json(self.root / "evaluation.json", self.config)
             process = subprocess.Popen(
                 [
@@ -3127,7 +3759,7 @@ class TrialTests(unittest.TestCase):
                     str(self.root / "evaluation.json"),
                     "--output-root",
                     str(self.root / "cancelled"),
-                    "--regrade-report",
+                    "--resume-report" if ordinary_refresh else "--regrade-report",
                     str(self.root / "evaluation/report.json"),
                 ],
                 env=self.env,
@@ -3153,6 +3785,12 @@ class TrialTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_model_only_regrade_cancellation_does_not_mix_old_grades(self):
+        self._cancelled_regrade_does_not_mix_old_grades()
+
+    def test_unconditional_judge_refresh_cancellation_does_not_copy_old_scores(self):
+        self._cancelled_regrade_does_not_mix_old_grades(ordinary_refresh=True)
 
     # 回归用例：test_execution_view_omits_only_typed_model_requests_not_captured_evidence。
     # 重点核验字段或诊断：tool_call_id、max_output_bytes、include_model_requests；异常路径不能被当成成功。
@@ -3237,6 +3875,284 @@ class TrialTests(unittest.TestCase):
         self.config["judge"]["include_model_requests"] = "false"
         count = len(REQUESTS)
         self.assertIsNone(self.evaluate(code=2, name="invalid-view"))
+        self.assertEqual(len(REQUESTS), count)
+
+
+    def test_dispatch_handoffs_are_opt_in_unique_and_shared_by_both_judges(self):
+        """真实参数交接只作证据；不补 DAG 边，也不自动把派发判 keep。"""
+        self.loop_consistency_mode()
+        Provider.behavior = "loops_detailed"
+        host = self.config['variants'][0]['command']
+        wrapper = r'''
+import json, subprocess, sys
+response=json.loads(subprocess.run(HOST,input=sys.stdin.read(),capture_output=True,text=True,check=True).stdout)
+original=response['trace']['events'];events=[original[0]]
+def event(key,kind,actor,execution,iteration,causes,**extra):
+ row=dict(event_id=key,kind=kind,producer_id='handoff-fixture',actor_id=actor,execution_id=execution,
+          loop_id=execution,iteration=iteration,step_id=key.split(':')[0],sequence=len(events),
+          timestamp_us=str(len(events)+1),caused_by=causes)
+ row.update(extra);events.append(row);return key
+def model(key,actor,parent,iteration,prompt,output,skill_key=None):
+ attrs=dict(semantic='model',executed=True,extensions=dict(source_event_name='llm.request.prepared',
+   source_call_id=key+'-source',exec_skill_key=(skill_key or key+'-skill') if actor=='skill_executor' else ''))
+ messages=[dict(role='system',content='## Skill: appworld-office\nrequest-body-must-be-omitted' if actor=='skill_executor' else 'private-model-request'),dict(role='user',content=prompt)]
+ if MODE=='large_document' and actor=='skill_executor':messages[0]['content']+='x'*40000
+ start=event(key+':step.start','step.start',actor,key,iteration,[parent],attributes=dict(semantic='model',activity_kind='model'))
+ action=event(key+':action.start','action.start',actor,key,iteration,[start],action_id=key+'-call',operation='agentflow.llm',input=dict(messages=messages),attributes=dict(semantic='model'))
+ end=event(key+':action.end','action.end',actor,key,iteration,[action],action_id=key+'-call',operation='agentflow.llm',status='completed',input=dict(messages=messages),output=output,attributes=attrs)
+ event(key+':step.end','step.end',actor,key,iteration,[end],status='completed',output=output)
+ return end
+for n in (1,2):
+ outer=event('outer'+str(n)+':step.start','step.start','host','main',n,['start'],operation='appworld-agentflow',attributes=dict(activity_kind='agent-turn',semantic='custom'))
+ prompt='Read the current public request '+str(n)
+ target='appworld-office'
+ skills=[dict(name=target,prompt=prompt)]
+ if MODE=='duplicate_dispatch' and n==1:skills.append(dict(name=target,prompt=prompt))
+ coord=model('coord'+str(n),'coordinator_decide',outer,n,prompt,dict(choices=[dict(tool_calls=[dict(tool_name='run_skills',tool_call_id='handoff-call-'+str(n),arguments=dict(skills=skills))])]))
+ child_prompt=prompt+' changed' if MODE=='unmatched' and n==1 else (prompt+' normalized' if MODE=='normalized' and n==1 else prompt)
+ child_parent='start' if MODE=='unowned' and n==1 else outer
+ code='apis.api_docs.show_api_descriptions("amazon")' if n==1 else 'apis.api_docs.show_api_descriptions(app_name="amazon")'
+ child_key=('dispatch:normalized-'+str(n)) if MODE=='normalized' and n==1 else ('skill'+str(n)+'-skill')
+ child=model('skill'+str(n),'skill_executor',child_parent,n,child_prompt,dict(choices=[dict(tool_calls=[dict(tool_name='appworld_submit_code',tool_call_id='submit-'+str(n),arguments=dict(code=code))])]),skill_key=child_key)
+ if MODE=='ambiguous_child' and n==1:model('duplicate-child','skill_executor',outer,n,prompt,dict(choices=[dict(content='independent local fixture')]))
+ event('outer'+str(n)+':step.end','step.end','host','main',n,[coord,child],status='completed',output=None)
+terminal=original[-1];terminal.update(timestamp_us=str(len(events)+1),caused_by=['outer1:step.end','outer2:step.end']);events.append(terminal)
+response['trace']['events']=events
+if MODE=='failed_equivalent':
+    by_id={e['event_id']:e for e in events}
+    dispatch=by_id['coord1:action.end']; execution=by_id['skill1:action.end']
+    dispatch['status']='failed'; execution['status']='failed'
+    execution['input']=dispatch['input']
+    response['trace']['attributes']={'dispatch_handoffs':[{
+        'dispatch_event_id':'coord1:action.end', 'skill_event_id':'skill1:action.end'}]}
+print(json.dumps(response))
+'''
+        self.config['max_output_bytes'] = 1048576
+        self.config['judge'].update(include_model_requests=False, keep_causal_anchors=True,
+                                    share_repeated_text=False, share_repeated_inputs=False)
+        def execute(mode, flag, name):
+            script = wrapper.replace('HOST', repr(host)).replace('MODE', repr(mode))
+            self.config['variants'][0]['command'] = [sys.executable, '-c', script]
+            if flag is None:
+                self.config['judge'].pop('keep_dispatch_bindings', None)
+            else:
+                self.config['judge']['keep_dispatch_bindings'] = flag
+            begin=len(REQUESTS)
+            report=self.evaluate(name=name)
+            packets=[json.loads(request['messages'][1]['content']) for request in REQUESTS[begin:]]
+            return report,packets,REQUESTS[begin:]
+        def packet_trace(packet):
+            return packet['evidence'].get('trace') or packet['evidence']['traces'][0]
+        default, packets, requests=execute('good',None,'handoffs-default')
+        self.assertNotIn('dispatch_handoffs',packet_trace(packets[0]).get('attributes',{}))
+        default_prompt=requests[0]['messages'][0]['content']
+        report, packets, requests=execute('good',True,'handoffs-enabled')
+        self.assertEqual(report['trials'][0]['evidence']['loop_review']['count'],1)
+        self.assertEqual(len(packets[0]['loop_inventory']),4)
+        self.assertEqual(packets[2]['kind'],'task-loop-consistency.v1')
+        self.assertIn('dispatch_handoffs',requests[0]['messages'][0]['content'])
+        self.assertIn('dispatch_handoffs',requests[2]['messages'][0]['content'])
+        raw={e['event_id']:e for e in report['trials'][0]['evidence']['trace']['events']}
+        expected=[('coord1:action.end','skill1:action.end'),('coord2:action.end','skill2:action.end')]
+        for packet in (packets[0],packets[2]):
+            trace=packet_trace(packet);links=trace['attributes']['dispatch_handoffs']
+            self.assertEqual([(r['dispatch_event_id'],r['skill_event_id']) for r in links],expected)
+            self.assertEqual([r['tool_call_id'] for r in links],['handoff-call-1','handoff-call-2'])
+            self.assertEqual([r['parent_event_id'] for r in links],['outer1:step.start','outer2:step.start'])
+            self.assertTrue(all(r['matching_basis']=='unique_same_parent_exact_prompt' for r in links))
+            for e in trace['events']:
+                self.assertEqual(e.get('caused_by',[]),raw[e['event_id']].get('caused_by',[]))
+                if e.get('attributes',{}).get('semantic')=='model':self.assertNotIn('input',e)
+            self.assertNotIn('request-body-must-be-omitted',json.dumps(trace))
+            self.assertNotIn('private-model-request',json.dumps(trace))
+        self.assertNotIn('dispatch_handoffs',report['trials'][0]['evidence']['trace'].get('attributes',{}))
+        # The same actual fixture must repair the contradictory routing review,
+        # preserving its retained child and all goal judgments. No Agent replay.
+        Provider.behavior = 'loops_consistency_dispatch_dependency'
+        self.config['judge']['require_dispatch_dependency'] = True
+        repaired, repair_packets, repair_requests = execute('good', True, 'dispatch-dependency')
+        self.assertEqual([packet['kind'] for packet in repair_packets[1:]],
+                         ['task-loop-repair.v1', 'task-judge-consistency.v1', 'task-loop-consistency.v1'])
+        feedback = repair_packets[1]['validation_feedback']['reason_conflicts']
+        self.assertEqual(len(feedback), 1)
+        self.assertEqual(feedback[0]['constraint'], 'actual_dispatch_required_by_retained_child')
+        self.assertEqual(feedback[0]['dispatch_event_id'], 'coord1:action.end')
+        self.assertEqual(feedback[0]['skill_event_id'], 'skill1:action.end')
+        self.assertEqual(len(repair_packets[1]['loop_inventory']), 1)
+        self.assertEqual(repaired['trials'][0]['evidence']['loop_review']['count'], 0)
+        self.assertNotEqual(report['configuration']['judge_fingerprint'],
+                            repaired['configuration']['judge_fingerprint'])
+        self.assertEqual(len(repaired['trials'][0]['evidence']['trace']['events']), len(raw))
+        self.assertIn('实际执行依赖', repair_requests[0]['messages'][0]['content'])
+        self.assertIn('实际执行依赖', repair_requests[-1]['messages'][0]['content'])
+        # A real skill document larger than the unchanged preview budget must
+        # retain its pre-preview identities. Legacy False still uses the old
+        # projection; True repairs parent-waste/retained-child contradictions.
+        self.config['judge'].update(evidence_field_bytes=32768)
+        legacy_large, legacy_packets, _ = execute('large_document', True, 'large-handoff-legacy')
+        self.assertNotIn('dispatch_handoffs', packet_trace(legacy_packets[0]).get('attributes', {}))
+        self.assertEqual(legacy_large['trials'][0]['evidence']['loop_review']['count'], 1)
+        self.config['judge']['keep_dispatch_bindings_before_preview'] = True
+        fixed_large, fixed_packets, _ = execute('large_document', True, 'large-handoff-fixed')
+        self.assertEqual(fixed_large['trials'][0]['evidence']['loop_review']['count'], 0)
+        self.assertEqual(len(fixed_packets[1]['validation_feedback']['reason_conflicts']), 1)
+        self.assertEqual([(r['dispatch_event_id'], r['skill_event_id']) for r in
+                         packet_trace(fixed_packets[0])['attributes']['dispatch_handoffs']], expected)
+        self.assertNotIn('x' * 40000, json.dumps(fixed_packets))
+        self.assertEqual([(v['execution_id'], v['event_ids']) for v in
+                          fixed_packets[0]['loop_inventory'].values()],
+                         [(v['execution_id'], v['event_ids']) for v in
+                          legacy_packets[0]['loop_inventory'].values()])
+        self.assertNotEqual(legacy_large['configuration']['judge_fingerprint'],
+                            fixed_large['configuration']['judge_fingerprint'])
+        fixed_events = fixed_large['trials'][0]['evidence']['trace']['events']
+        self.assertEqual(len(fixed_events), len(legacy_large['trials'][0]['evidence']['trace']['events']))
+        skill_end = next(e for e in fixed_events if e['event_id'] == 'skill1:action.end')
+        self.assertIn('x' * 40000, skill_end['input']['messages'][0]['content'])
+        self.assertNotIn('dispatch_handoffs', fixed_large['trials'][0]['evidence']['trace'].get('attributes', {}))
+        fixed_short, short_packets, _ = execute('good', True, 'short-handoff-before-preview')
+        self.assertEqual(fixed_short['trials'][0]['evidence']['loop_review']['count'], 0)
+        self.assertEqual(packet_trace(short_packets[0])['attributes']['dispatch_handoffs'],
+                         packet_trace(fixed_packets[0])['attributes']['dispatch_handoffs'])
+        Provider.behavior = 'loops_consistency_dispatch_both_waste'
+        both_waste, both_packets, _ = execute('large_document', True, 'large-handoff-both-waste')
+        self.assertEqual(both_waste['trials'][0]['evidence']['loop_review']['count'], 2)
+        self.assertFalse(any(p.get('kind') == 'task-loop-repair.v1' for p in both_packets))
+        self.config['judge']['keep_dispatch_bindings_before_preview'] = 'true'
+        begin = len(REQUESTS)
+        self.assertIsNone(self.evaluate(code=2, name='raw-handoff-invalid-type'))
+        self.assertEqual(len(REQUESTS), begin)
+        self.config['judge'].pop('keep_dispatch_bindings_before_preview')
+        Provider.behavior = 'loops_consistency_dispatch_dependency'
+        self.config['judge']['require_dispatch_dependency'] = 'true'
+        begin = len(REQUESTS)
+        self.assertIsNone(self.evaluate(code=2, name='dispatch-dependency-invalid-type'))
+        self.assertEqual(len(REQUESTS), begin)
+        self.config['judge'].pop('require_dispatch_dependency')
+        Provider.behavior = 'loops_detailed'
+        for mode in ('ambiguous_child','duplicate_dispatch','unmatched','unowned'):
+            with self.subTest(mode=mode):
+                report,packets,_=execute(mode,True,'handoffs-'+mode)
+                for packet in (packets[0],packets[2]):
+                    links=packet_trace(packet)['attributes']['dispatch_handoffs']
+                    self.assertEqual([(r['dispatch_event_id'],r['skill_event_id']) for r in links],[expected[1]])
+        # The AppWorld wrapper may normalize the child user prompt after
+        # dispatch.  A unique framework dispatch key + skill header still
+        # preserves the handoff evidence without implying a keep decision.
+        report, packets, _ = execute('normalized', True, 'handoffs-normalized')
+        for packet in (packets[0], packets[2]):
+            links = packet_trace(packet)['attributes']['dispatch_handoffs']
+            self.assertEqual([(r['dispatch_event_id'], r['skill_event_id']) for r in links], expected)
+            self.assertEqual([r['matching_basis'] for r in links],
+                             ['unique_same_parent_dispatch_key',
+                              'unique_same_parent_exact_prompt'])
+        _,packets,requests=execute('good',False,'handoffs-disabled')
+        self.assertEqual(requests[0]['messages'][0]['content'],default_prompt)
+        self.assertNotIn('dispatch_handoffs',packet_trace(packets[0]).get('attributes',{}))
+        self.config['judge']['keep_dispatch_bindings']='true'
+        count=len(REQUESTS)
+        self.assertIsNone(self.evaluate(code=2,name='handoffs-invalid-type'))
+        self.assertEqual(len(REQUESTS),count)
+
+        # A failed framework dispatch that only hands the same request to the
+        # real skill execution is one invalid loop. The dispatch group has no
+        # independent action and must not be counted a second time.
+        report, packets, _ = execute('failed_equivalent', True, 'handoffs-failed-equivalent')
+        inventory = packets[0]['loop_inventory']
+        self.assertEqual(len(inventory), 3)
+        self.assertFalse(any(item['execution_id'] == 'coord1'
+                            for item in inventory.values()))
+
+    def test_opt_in_causal_anchors_preserve_real_chains_in_both_judge_packets(self):
+        """保留真实因果身份，不恢复模型正文、不增加轮数或伪造兄弟分支依赖。"""
+        self.loop_consistency_mode()
+        Provider.behavior = "loops_consistency_safe"
+        host = self.config["variants"][0]["command"]
+        wrapper = (
+            "import json, subprocess, sys\n"
+            f"response=json.loads(subprocess.run({host!r},input=sys.stdin.read(),capture_output=True,text=True,check=True).stdout)\n"
+            "for event in response['trace']['events']:\n"
+            " if event.get('execution_id') == 'left':\n"
+            "  event.setdefault('attributes', {})['semantic']='model'\n"
+            "  if 'input' in event: event['input']={'messages':[{'role':'system','content':'request-only-data' * 2000}], 'tools':[{'name':'placeholder'}]}\n"
+            " elif 'input' in event: event['input']={'messages':'business-field-must-stay','value':20}\n"
+            "print(json.dumps(response))\n"
+        )
+        self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper]
+        self.config["max_output_bytes"] = 1048576
+        self.config["judge"]["include_model_requests"] = False
+
+        # 默认投影与明确关闭选项的业务投影逐字相同（仅规范化测试 Run ID）。
+        start = len(REQUESTS)
+        original = self.evaluate(name="anchors-default")
+        default_packets = [json.loads(r["messages"][1]["content"])
+                           for r in REQUESTS[start:]]
+        self.config["judge"]["keep_causal_anchors"] = False
+        start = len(REQUESTS)
+        self.evaluate(name="anchors-disabled")
+        disabled_packets = [json.loads(r["messages"][1]["content"])
+                            for r in REQUESTS[start:]]
+        def packet_trace(packet):
+            return (packet["evidence"].get("trace") or
+                    packet["evidence"]["traces"][0])
+        def canonical_trace(packet):
+            trace = json.loads(json.dumps(packet_trace(packet)))
+            trace["identity"]["run_id"] = "test-run"
+            return json.dumps(trace, separators=(",", ":"))
+        self.assertEqual(canonical_trace(default_packets[0]),
+                         canonical_trace(disabled_packets[0]))
+        old_inventory = default_packets[0]["loop_inventory"]
+        old_ids = {e["event_id"] for e in packet_trace(default_packets[0])["events"]}
+        self.assertNotIn("left-1-action.start", old_ids)
+        self.assertNotIn("left-1-step.start", old_ids)
+
+        self.config["judge"]["keep_causal_anchors"] = True
+        start = len(REQUESTS)
+        report = self.evaluate(name="anchors-enabled")
+        requests = REQUESTS[start:]
+        packets = [json.loads(r["messages"][1]["content"]) for r in requests]
+        self.assertEqual(len(packets), 3)
+        self.assertEqual(packets[2]["kind"], "task-loop-consistency.v1")
+        self.assertEqual(len(packets[0]["loop_inventory"]), len(old_inventory))
+        self.assertEqual(len(packets[0]["loop_inventory"]), 4)
+        trial = report["trials"][0]
+        self.assertEqual(trial["evidence"]["loop_review"]["observed_iterations"], 4)
+        self.assertEqual(trial["evidence"]["loop_review"]["count"], 0)
+        raw = {e["event_id"]: e for e in trial["evidence"]["trace"]["events"]}
+        previous_order = {e["event_id"]: i for i, e in enumerate(
+            trial["evidence"]["trace"]["events"])}
+        for packet in (packets[0], packets[2]):
+            compact = packet_trace(packet)["events"]
+            by_id = {e["event_id"]: e for e in compact}
+            self.assertEqual(by_id["left-1-action.end"]["caused_by"],
+                             ["left-1-action.start"])
+            self.assertEqual(by_id["left-1-action.start"]["caused_by"],
+                             ["left-1-step.start"])
+            self.assertEqual(by_id["left-1-step.start"]["caused_by"], ["start"])
+            self.assertEqual([previous_order[e["event_id"]] for e in compact],
+                             sorted(previous_order[e["event_id"]] for e in compact))
+            for event in compact:
+                self.assertIn(event["event_id"], raw)
+                self.assertEqual(event.get("caused_by", []),
+                                 raw[event["event_id"]].get("caused_by", []))
+                for cause in event.get("caused_by", []):
+                    if cause in raw:
+                        self.assertIn(cause, by_id)
+                if event["event_id"] not in old_ids:
+                    self.assertFalse(set(event) & {"input", "output", "application", "request"})
+            self.assertNotIn("request-only-data", json.dumps(compact))
+            self.assertEqual(by_id["right-1-action.end"]["input"],
+                             {"messages": "business-field-must-stay", "value": 20})
+            self.assertEqual(by_id["right-1-action.end"]["operation"], "calculate")
+            # 两支仅有共同起点，不能被新视图连成彼此依赖。
+            self.assertEqual(by_id["right-1-step.start"]["caused_by"], ["start"])
+        self.assertLess(len(requests[0]["messages"][1]["content"].encode()), 49152)
+        self.assertLess(len(requests[2]["messages"][1]["content"].encode()), 262144)
+        self.assertTrue(any("request-only-data" in json.dumps(e.get("input"))
+                            for e in raw.values()))
+        self.config["judge"]["keep_causal_anchors"] = "true"
+        count = len(REQUESTS)
+        self.assertIsNone(self.evaluate(code=2, name="anchors-invalid-type"))
         self.assertEqual(len(REQUESTS), count)
 
     # 回归用例：test_execution_view_omits_retrieval_payload_but_keeps_decisions。
@@ -4631,6 +5547,39 @@ print(json.dumps(response, ensure_ascii=False))""",
 
     # 回归用例：test_model_pass_and_prompt_separation。
     # 重点核验字段或诊断：evidence_text_refs；异常路径不能被当成成功。
+    def test_model_privacy_diagnostic_keeps_rejection_and_omits_values(self):
+        self.model()
+        self.config["judge"]["max_repair_attempts"] = 2
+        fingerprints = []
+        for behavior in ("privacy_diagnostic_known_secret", "privacy_diagnostic_literal"):
+            with self.subTest(behavior=behavior):
+                Provider.behavior = behavior
+                write_json(self.root / "evaluation.json", self.config)
+                result = self.call("run", self.dataset, "--config", self.root / "evaluation.json",
+                                   "--output-root", self.root / behavior, code=3)
+                diagnostics = [json.loads(line) for line in result.stderr.splitlines()
+                               if line.startswith('{"')]
+                self.assertEqual(len(diagnostics), 1)
+                diagnostic = diagnostics[0]
+                self.assertEqual(diagnostic["kind"], "judge_privacy_rejection")
+                self.assertEqual(diagnostic["stage"], "model_response")
+                self.assertEqual(diagnostic["code"], "credential_value_rejected")
+                self.assertEqual(diagnostic["fields"][0]["path"], "/reason")
+                self.assertEqual(diagnostic["fields"][0]["type"], "string")
+                self.assertGreater(diagnostic["fields"][0]["byte_length"], 12)
+                self.assertNotIn("fixture-private-password", result.stderr)
+                self.assertNotIn(KEY, result.stderr)
+                report = json.loads((self.root / behavior / "report.json").read_text())
+                self.assertEqual(report["summary"]["model_calls"], 1)
+                self.assertEqual(report["trials"][0]["verdict"], "error")
+                self.assertNotIn("fixture-private-password", json.dumps(report))
+                fingerprints.append(report["configuration"]["judge_fingerprint"])
+        Provider.behavior = "privacy_diagnostic_public_placeholder"
+        report = self.evaluate(name="public-placeholder")
+        self.assertEqual(report["trials"][0]["verdict"], "passed")
+        self.assertEqual(report["summary"]["model_calls"], 1)
+        self.assertEqual(fingerprints, [report["configuration"]["judge_fingerprint"]] * 2)
+
     def test_model_pass_and_prompt_separation(self):
         constraints = ["只使用本次工作区。", "失败后停止，不得重试或伪造成功。"]
         self.make_dataset(

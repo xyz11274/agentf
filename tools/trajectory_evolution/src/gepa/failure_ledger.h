@@ -9,6 +9,7 @@
 #include "local_support.h"
 #include <algorithm>
 #include <openssl/sha.h>
+#include <string>
 
 namespace trajectory::evolution::integration {
 
@@ -38,6 +39,41 @@ inline std::string structured_error_code(Json output, unsigned depth = 0) {
   if (output["code"].string() && output["code"].text().size() <= 128)
     return output["code"].text();
   return structured_error_code(output["error"], depth + 1);
+}
+
+// Failure keys may contain model-generated source code.  Keep only a digest in
+// the ledger, and normalize redaction markers first so the same redacted code
+// still has a stable retry identity.  This is deliberately deterministic and
+// does not attempt to recover or inspect a secret.
+inline std::string failure_sha256(const std::string &material) {
+  unsigned char digest[SHA256_DIGEST_LENGTH];
+  SHA256(reinterpret_cast<const unsigned char *>(material.data()), material.size(), digest);
+  std::string result;
+  result.reserve(SHA256_DIGEST_LENGTH * 2);
+  constexpr char hex[] = "0123456789abcdef";
+  for (const auto byte : digest) {
+    result += hex[byte >> 4];
+    result += hex[byte & 15];
+  }
+  return result;
+}
+
+inline std::string normalize_failure_text(std::string value) {
+  const auto replace_marker = [&](const std::string &marker) {
+    std::size_t begin = 0;
+    while ((begin = value.find(marker, begin)) != std::string::npos) {
+      const auto close = value.find(marker.front() == '<' ? '>' : ']', begin + marker.size());
+      if (close == std::string::npos)
+        break;
+      value.replace(begin, close + 1 - begin,
+                    marker.front() == '<' ? "<redacted>" : "[redacted]");
+      begin += 10;
+    }
+  };
+  replace_marker("<redacted");
+  replace_marker("[REDACTED");
+  replace_marker("[redacted");
+  return value;
 }
 
 // 显式目标参数用于识别跨执行实例的重试，
@@ -92,14 +128,22 @@ inline Json target_failure_snapshot(const Json &options, const std::string &scop
         complete = false;
         break;
       }
-      // 脱敏占位符不再具有身份区分能力，不能合并不同目标的失败链。
+      // 终态配置缺少可区分身份时仍拒绝脱敏值，避免把未知配置合并成一个全局断路。
+      // 重复动作规则走稳定指纹，允许 host 统计脱敏代码的真实重复失败。
       if (value.string() && (value.text().find("<redacted") != std::string::npos ||
                              value.text().find("[REDACTED") != std::string::npos ||
                              value.text().find("[redacted") != std::string::npos)) {
-        complete = false;
-        break;
+        if (terminal) {
+          complete = false;
+          break;
+        }
+        selected[field.text()] = "sha256:" + failure_sha256(normalize_failure_text(value.text()));
+        continue;
       }
-      selected[field.text()] = value;
+      if (!terminal && value.string())
+        selected[field.text()] = "sha256:" + failure_sha256(normalize_failure_text(value.text()));
+      else
+        selected[field.text()] = value;
     }
     if (!complete)
       continue;
@@ -112,16 +156,10 @@ inline Json target_failure_snapshot(const Json &options, const std::string &scop
     const auto material = identity.dump();
     if (material.size() > 8192)
       continue;
-    unsigned char digest[SHA256_DIGEST_LENGTH];
-    SHA256(reinterpret_cast<const unsigned char *>(material.data()), material.size(), digest);
-    std::string key;
-    const char *hex = "0123456789abcdef";
-    for (auto byte : digest) {
-      key += hex[byte >> 4];
-      key += hex[byte & 15];
-    }
-    const auto &previous = ledger["entries"][key];
-    result[rule.str("rule_id")] = Json{{"key", key},
+    const std::string base_key = failure_sha256(material);
+    const auto &previous = ledger["entries"][base_key];
+    result[rule.str("rule_id")] = Json{{"key", base_key},
+                                       {"error_code", previous.str("error_code")},
                                        {"count", previous.num("count", 0)},
                                        {"epoch", previous.num("epoch", 0)},
                                        {"execution_id", previous.str("execution_id")}};
@@ -144,6 +182,7 @@ inline void settle_target_failure(Json &ledger, const Json &attempts, bool faile
     const auto &attempt = pair.second;
     const auto key = attempt.str("key");
     const bool terminal = attempt["terminal_error_codes"].array();
+    const auto error_code = failed ? structured_error_code(output) : attempt.str("error_code");
     if (failed && terminal) {
       const auto code = structured_error_code(output);
       if (code.empty() || std::none_of(attempt["terminal_error_codes"].items().begin(),
@@ -160,15 +199,28 @@ inline void settle_target_failure(Json &ledger, const Json &attempts, bool faile
       // 保留成功代次，避免并发迟到失败把已经清零的旧失败链复活。
       ledger["epoch"] = ledger.num("epoch", 0) + 1;
       current = Json{{"count", 0}, {"epoch", ledger["epoch"]}};
+      current["error_code"] = error_code;
       continue;
     }
     if (current.has("epoch") && current.num("count", 0) == 0 &&
         current.num("epoch", 0) != attempt.num("epoch", 0))
       continue;
+    // 换错误码是一次真实恢复边界；重试预算必须依据同一结构化错误连续发生。
+    // 普通总次数预算与终态断路不按错误码拆分，维持原有语义。
+    if (failed && !terminal && !attempt.flag("attempt_budget", false) &&
+        current.has("epoch") && current.str("error_code") != error_code) {
+      // A late completion from the previous error epoch must not reopen the
+      // old recovery chain after a newer structured error was observed.
+      if (attempt.num("epoch", 0) != current.num("epoch", 0))
+        continue;
+      ledger["epoch"] = ledger.num("epoch", 0) + 1;
+      current = Json{{"count", 0}, {"epoch", ledger["epoch"]}};
+    }
     if (!current.has("epoch")) {
       ledger["epoch"] = ledger.num("epoch", 0) + 1;
       current["epoch"] = ledger["epoch"];
     }
+    current["error_code"] = error_code;
     // 同时发生的首次尝试不是彼此的重试；一次成功
     // 会重置失败时期，迟到回执不能恢复旧的连续失败计数。
     const auto next =

@@ -5,10 +5,12 @@
 #include "agentflow/trajectory/evolution_pipeline.h"
 #include <google/protobuf/struct.pb.h>
 #include "agentflow/trajectory/experience.h"
+#include "trajectory_evolution/shadow_runtime.h"
 
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -729,6 +731,173 @@ void test_scoped_and_legacy_experiences_remain_separate() {
   trajectory::TrajectoryEvolutionPipeline no_model({}, {});
   expect(no_model.synthesize_reports({third}).report.candidates_size() == 0,
          "invalid structured advice fell back to unscoped display text");
+}
+
+// Reflection evidence must retain the real fused episode assessment.  A
+// successful reflection alone never upgrades an unknown or invalid episode.
+void test_scoped_reflection_preserves_cited_episode_verdicts() {
+  namespace te = ::trajectory::evolution;
+  trajectory::EvolutionOptions options;
+  options.min_supporting_dialogues = 1;
+  options.min_supporting_episodes = 1;
+  trajectory::TrajectoryEvolutionPipeline pipeline({}, options);
+  const auto make = [](ep::SemanticVerdict verdict) {
+    auto report = make_reflection_report("user-a", "reflection-conv", "reflection-run",
+                                          "episode-main", "先核对前置条件，再选择可执行动作。");
+    report.mutable_assessments(0)->set_final_verdict(verdict);
+    report.mutable_assessments(0)->set_final_confidence(0.73);
+    auto *advice = report.mutable_reflection()->add_experience_details();
+    advice->set_target_scope("skill:video-gen");
+    advice->set_trigger_pattern("执行技能时缺少必要前置条件");
+    advice->set_proposed_change("先核对前置条件，再选择可执行动作。");
+    advice->add_evidence_event_ids("event-episode-main");
+    return report;
+  };
+  const auto compile = [](const ep::EvolutionMemoryStore &memory) {
+    te::v1::Identity identity;
+    identity.set_agent_id("reflection-fixture");
+    identity.set_user_id("user-a");
+    identity.set_conversation_id("reflection-conv");
+    identity.set_run_id("reflection-run");
+    te::v1::ShadowOptions shadow;
+    shadow.add_target_scopes("skill:video-gen");
+    shadow.set_max_policy_entries(64);
+    shadow.set_max_advice_items(3);
+    shadow.set_max_advice_bytes(4096);
+    shadow.set_max_query_bytes(16384);
+    shadow.set_max_memory_bytes(1048576);
+    shadow.set_max_snapshot_bytes(262144);
+    shadow.set_max_match_terms(128);
+    shadow.set_min_matched_terms(2);
+    shadow.set_require_validated_evidence(true);
+    return te::compile_shadow_policy(memory, identity, shadow);
+  };
+  for (const auto verdict : {ep::SEMANTIC_VERDICT_USEFUL,
+                             ep::SEMANTIC_VERDICT_NECESSARY_RETRY,
+                             ep::SEMANTIC_VERDICT_PREMATURE_STOP,
+                             ep::SEMANTIC_VERDICT_INVALID,
+                             ep::SEMANTIC_VERDICT_UNCERTAIN,
+                             ep::SEMANTIC_VERDICT_UNASSESSED}) {
+    const auto batch = pipeline.synthesize_reports({make(verdict)}).report;
+    expect(batch.candidates_size() == 1 && batch.candidates(0).support_evidence_size() == 1,
+           "scoped reflection fixture must yield one genuinely cited episode");
+    const auto &evidence = batch.candidates(0).support_evidence(0);
+    expect(evidence.verdict() == verdict && evidence.confidence() == 0.73 &&
+               evidence.episode_ids_size() == 1 && evidence.episode_ids(0) == "episode-main" &&
+               evidence.evidence_event_ids_size() == 1 &&
+               evidence.evidence_event_ids(0) == "event-episode-main",
+           "scoped reflection replaced the cited fused episode verdict/confidence or identity");
+    ep::EvolutionMemoryStore memory;
+    trajectory::TrajectoryEvolutionPipeline::merge_memory(batch, &memory);
+    const auto count = compile(memory).experiences_size();
+    const bool validated = verdict == ep::SEMANTIC_VERDICT_USEFUL ||
+                           verdict == ep::SEMANTIC_VERDICT_NECESSARY_RETRY ||
+                           verdict == ep::SEMANTIC_VERDICT_PREMATURE_STOP;
+    expect(count == (validated ? 1 : 0),
+           "native validated-evidence gate was weakened or real assessed support was discarded");
+  }
+
+  auto mixed = make(ep::SEMANTIC_VERDICT_USEFUL);
+  auto *invalid = mixed.add_assessments();
+  invalid->CopyFrom(mixed.assessments(0));
+  invalid->mutable_evidence()->set_episode_id("episode-invalid");
+  invalid->mutable_evidence()->clear_source_event_ids();
+  invalid->mutable_evidence()->add_source_event_ids("event-invalid");
+  invalid->set_final_verdict(ep::SEMANTIC_VERDICT_INVALID);
+  invalid->set_final_confidence(0.91);
+  mixed.mutable_reflection()->add_evidence_event_ids("event-invalid");
+  mixed.mutable_reflection()->add_evidence_event_ids("event-unmatched");
+  mixed.mutable_reflection()->mutable_experience_details(0)->add_evidence_event_ids("event-invalid");
+  mixed.mutable_reflection()->mutable_experience_details(0)->add_evidence_event_ids("event-unmatched");
+  auto *unrelated = mixed.add_assessments();
+  unrelated->CopyFrom(mixed.assessments(0));
+  unrelated->mutable_evidence()->set_episode_id("episode-unrelated");
+  unrelated->mutable_evidence()->clear_source_event_ids();
+  unrelated->mutable_evidence()->add_source_event_ids("event-not-cited");
+  const auto mixed_batch = pipeline.synthesize_reports({mixed}).report;
+  expect(mixed_batch.candidates_size() == 1 && mixed_batch.candidates(0).support_evidence_size() == 3,
+         "mixed and unmatched cited evidence was collapsed into one invented verdict");
+  bool useful_seen = false, invalid_seen = false, unknown_seen = false;
+  for (const auto &evidence : mixed_batch.candidates(0).support_evidence()) {
+    expect(evidence.evidence_event_ids_size() == 1,
+           "reflection support included an unrelated assessment event");
+    const auto &event = evidence.evidence_event_ids(0);
+    useful_seen |= event == "event-episode-main" && evidence.verdict() == ep::SEMANTIC_VERDICT_USEFUL;
+    invalid_seen |= event == "event-invalid" && evidence.verdict() == ep::SEMANTIC_VERDICT_INVALID;
+    unknown_seen |= event == "event-unmatched" && evidence.verdict() == ep::SEMANTIC_VERDICT_UNASSESSED &&
+                    evidence.episode_ids_size() == 0;
+  }
+  expect(useful_seen && invalid_seen && unknown_seen,
+         "actual Useful/Invalid support or unmatched unknown evidence was upgraded or lost");
+
+  const auto unknown = pipeline.synthesize_reports({make(ep::SEMANTIC_VERDICT_UNASSESSED)}).report;
+  const auto assessed = pipeline.synthesize_reports({make(ep::SEMANTIC_VERDICT_USEFUL)}).report;
+  ep::EvolutionMemoryStore repaired;
+  trajectory::TrajectoryEvolutionPipeline::merge_memory(unknown, &repaired);
+  trajectory::TrajectoryEvolutionPipeline::merge_memory(assessed, &repaired);
+  expect(repaired.entries_size() == 1 &&
+             repaired.entries(0).candidate().support_evidence_size() == 1 &&
+             repaired.entries(0).candidate().support_evidence(0).verdict() == ep::SEMANTIC_VERDICT_USEFUL &&
+             compile(repaired).experiences_size() == 1,
+         "same-identity native reassessment did not fill the old unknown support");
+  const auto invalid_batch = pipeline.synthesize_reports({make(ep::SEMANTIC_VERDICT_INVALID)}).report;
+  ep::EvolutionMemoryStore preserved;
+  trajectory::TrajectoryEvolutionPipeline::merge_memory(invalid_batch, &preserved);
+  trajectory::TrajectoryEvolutionPipeline::merge_memory(assessed, &preserved);
+  expect(preserved.entries(0).candidate().support_evidence(0).verdict() == ep::SEMANTIC_VERDICT_INVALID &&
+             compile(preserved).experiences_size() == 0,
+         "already assessed evidence was overwritten by a different same-identity verdict");
+
+  const auto old_support = unknown.candidates(0).support_evidence(0);
+  auto cached = make(ep::SEMANTIC_VERDICT_USEFUL);
+  cached.mutable_assessments(0)->mutable_model()->set_status(ep::MODEL_CALL_STATUS_SUCCEEDED);
+  auto refreshed = old_support;
+  expect(trajectory::refresh_scoped_experience_evidence(cached, "skill:video-gen", &refreshed) &&
+             refreshed.verdict() == ep::SEMANTIC_VERDICT_USEFUL && refreshed.confidence() == 0.73 &&
+             refreshed.evidence_id() == old_support.evidence_id() &&
+             refreshed.source_fingerprint() == old_support.source_fingerprint() &&
+             refreshed.episode_ids(0) == old_support.episode_ids(0) &&
+             refreshed.evidence_event_ids(0) == old_support.evidence_event_ids(0),
+         "zero-model refresh lost identity or did not use the retained actual assessment");
+  cached.mutable_assessments(0)->set_final_verdict(ep::SEMANTIC_VERDICT_INVALID);
+  auto negative = old_support;
+  expect(trajectory::refresh_scoped_experience_evidence(cached, "skill:video-gen", &negative) &&
+             negative.verdict() == ep::SEMANTIC_VERDICT_INVALID,
+         "refresh silently promoted genuinely invalid retained evidence");
+  const auto known_before = negative.SerializeAsString();
+  cached.mutable_assessments(0)->set_final_verdict(ep::SEMANTIC_VERDICT_USEFUL);
+  expect(!trajectory::refresh_scoped_experience_evidence(cached, "skill:video-gen", &negative) &&
+             negative.SerializeAsString() == known_before,
+         "refresh rewrote an already assessed source");
+  for (const auto problem : {"scope", "source", "fingerprint", "unknown-event", "no-model"}) {
+    auto invalid_report = cached;
+    auto unchanged = old_support;
+    std::string scope = "skill:video-gen";
+    if (std::string(problem) == "scope") scope = "coordinator";
+    if (std::string(problem) == "source") invalid_report.mutable_source()->set_user_id("user-b");
+    if (std::string(problem) == "fingerprint") invalid_report.set_source_fingerprint("other-source");
+    if (std::string(problem) == "unknown-event") unchanged.add_evidence_event_ids("event-not-covered");
+    if (std::string(problem) == "no-model")
+      invalid_report.mutable_assessments(0)->mutable_model()->set_status(ep::MODEL_CALL_STATUS_NOT_REQUESTED);
+    const auto before = unchanged.SerializeAsString();
+    expect(!trajectory::refresh_scoped_experience_evidence(invalid_report, scope, &unchanged) &&
+               unchanged.SerializeAsString() == before,
+           std::string("refresh accepted unrelated or unevaluated support: ") + problem);
+  }
+  auto heterogeneous = cached;
+  auto *other = heterogeneous.add_assessments();
+  other->CopyFrom(heterogeneous.assessments(0));
+  other->mutable_evidence()->set_episode_id("episode-invalid");
+  other->mutable_evidence()->clear_source_event_ids();
+  other->mutable_evidence()->add_source_event_ids("event-invalid");
+  other->set_final_verdict(ep::SEMANTIC_VERDICT_INVALID);
+  auto mixed_old_support = old_support;
+  mixed_old_support.add_episode_ids("episode-invalid");
+  mixed_old_support.add_evidence_event_ids("event-invalid");
+  const auto mixed_before = mixed_old_support.SerializeAsString();
+  expect(!trajectory::refresh_scoped_experience_evidence(heterogeneous, "skill:video-gen", &mixed_old_support) &&
+             mixed_old_support.SerializeAsString() == mixed_before,
+         "refresh invented one verdict for mixed retained episode conclusions");
 }
 
 // 回归用例：test_memory_merge_is_idempotent_and_versioned。
@@ -1885,12 +2054,73 @@ void test_typed_support_contracts_preserve_semantic_merging() {
          "curator rejected true same-action support solely because wording differed");
 }
 
+void test_privacy_memo_repeated_normal() {
+  google::protobuf::Value repeated;
+  for (int index = 0; index < 8192; ++index)
+    repeated.mutable_list_value()->add_values()->set_string_value(
+        "https://example.invalid/image.png?sig=<redacted:credential_field>");
+  trajectory::ensure_safe_evolution_data(repeated);
+}
+
+void test_privacy_memo_repeated_sensitive() {
+  google::protobuf::Value repeated;
+  repeated.mutable_list_value()->add_values()->set_string_value(
+      "https://example.invalid/image.png?sig=<redacted:credential_field>&token=private-signature");
+  for (int index = 0; index < 8192; ++index)
+    repeated.mutable_list_value()->add_values()->set_string_value(
+        "https://example.invalid/image.png?sig=<redacted:credential_field>");
+  bool rejected = false;
+  try {
+    trajectory::ensure_safe_evolution_data(repeated);
+  } catch (const trajectory::EvaluationError &) {
+    rejected = true;
+  }
+  expect(rejected, "repeated safe text masked adjacent sensitive text");
+}
+
+void test_privacy_memo_rechecks_new_context() {
+#if defined(__unix__) || defined(__APPLE__)
+  const char *name = "AGENTFLOW_PRIVACY_MEMO_TEST_TOKEN";
+  const char *prior = std::getenv(name);
+  const bool existed = prior != nullptr;
+  const std::string original = prior ? prior : "";
+  struct Restore {
+    const char *name;
+    bool existed;
+    std::string original;
+    ~Restore() {
+      if (existed)
+        ::setenv(name, original.c_str(), 1);
+      else
+        ::unsetenv(name);
+    }
+  } restore{name, existed, original};
+  ::unsetenv(name);
+  const std::string ordinary = "ordinary-example-value-for-memo-context";
+  google::protobuf::Value repeated;
+  for (int index = 0; index < 1024; ++index)
+    repeated.mutable_list_value()->add_values()->set_string_value(ordinary);
+  trajectory::ensure_safe_evolution_data(repeated);
+  ::setenv(name, ordinary.c_str(), 1);
+  bool rejected = false;
+  try {
+    trajectory::ensure_safe_evolution_data(repeated);
+  } catch (const trajectory::EvaluationError &) {
+    rejected = true;
+  }
+  expect(rejected, "privacy memo survived a changed secret context");
+#endif
+}
+
 } // 结束当前匿名命名空间。
 
 // 回归用例：main。
 // 重点核验字段或诊断：output_token_limit_reached、invalid_api_response；异常路径不能被当成成功。
 int main() {
   try {
+    test_privacy_memo_repeated_normal();
+    test_privacy_memo_repeated_sensitive();
+    test_privacy_memo_rechecks_new_context();
     test_typed_support_contracts_preserve_semantic_merging();
     test_persistent_memory_review_cache();
     test_memory_review_retry_is_item_scoped();
@@ -1901,14 +2131,14 @@ int main() {
     test_memory_review_commit_recovery_applies_cached_decisions();
     google::protobuf::Value safe_url;
     safe_url.set_string_value("https://example.invalid/image.png?sig=<redacted:credential_field>");
-    trajectory::ensure_safe_evolution_data(safe_url);
+    agentflow::trajectory::ensure_safe_evolution_data(safe_url);
     for (
         const auto &value :
         {"https://example.invalid/"
          "image.png?sig=<redacted:credential_field>\n\n如需进一步调整，请告诉我。",
          R"({"output":"https://example.invalid/image.png?sig=<redacted:credential_field>\n\n如需进一步调整，请告诉我。"})"}) {
       safe_url.set_string_value(value);
-      trajectory::ensure_safe_evolution_data(safe_url);
+      agentflow::trajectory::ensure_safe_evolution_data(safe_url);
     }
     for (const auto &value :
          {"https://example.invalid/?sig=<redacted:credential_field>actual-private-signature",
@@ -1918,8 +2148,8 @@ int main() {
       safe_url.set_string_value(value);
       bool rejected = false;
       try {
-        trajectory::ensure_safe_evolution_data(safe_url);
-      } catch (const trajectory::EvaluationError &) {
+        agentflow::trajectory::ensure_safe_evolution_data(safe_url);
+      } catch (const agentflow::trajectory::EvaluationError &) {
         rejected = true;
       }
       expect(rejected, "credential hidden beside a redaction placeholder was accepted");
@@ -1936,6 +2166,7 @@ int main() {
     test_meta_format_repair_is_bounded();
     test_meta_reflection_isolates_compatibility_groups();
     test_scoped_and_legacy_experiences_remain_separate();
+    test_scoped_reflection_preserves_cited_episode_verdicts();
     test_batch_identity_includes_meta_reflection_result();
     test_memory_merge_is_idempotent_and_versioned();
     test_gepa_feedback_survives_training_curation();

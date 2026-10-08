@@ -19,6 +19,7 @@
 #include "evaluation_entry.h"
 #include "turn_contract.h"
 #include "learning_evidence.h"
+#include "code_projection.h"
 #include "gepa_feedback.h"
 #include "gepa_search.h"
 
@@ -36,6 +37,7 @@
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <google/protobuf/util/message_differencer.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -330,6 +332,10 @@ struct IntegrationService::Impl {
   std::size_t next_batch_ms = 0, storage_retry_ms = 0;
   bool evaluating = false;
   std::map<std::string, Json> runs;
+  // One immutable policy interpreter per active run, just as LocalRuntime.
+  // Access is covered by the existing service mutex; no second lock or
+  // persistent ledger duplicates the authoritative run events.
+  std::map<std::string, std::unique_ptr<PolicyRuntime>> runtime_policies;
   std::map<std::string, std::string> evaluation_outcomes;
   std::size_t stored_count = 0;
   std::set<std::string> archivable;
@@ -407,6 +413,7 @@ struct IntegrationService::Impl {
                   "instrumentation",
                   "run_lease_ms",
                   "http_persistence",
+                  "preserve_runtime_policy_state",
                   "control_learning",
                   "evaluation_levels"});
     // 管理端显式恢复指定评测时，先关闭“从当前记忆生成新候选”的自动入口。
@@ -414,6 +421,8 @@ struct IntegrationService::Impl {
     // 只消除服务启动与 retry 请求之间抢先创建空壳作业的竞态。
     if (!enable_auto_evaluation)
       config["auto_evaluate"] = false;
+    if (config.has("preserve_runtime_policy_state"))
+      (void)config["preserve_runtime_policy_state"].boolean();
     validate_control_learning(config["control_learning"]);
     if (config["control_learning"].flag("enabled", false))
       require(config.has("policy_evaluation_file") || config.has("evaluation_version_file") ||
@@ -814,9 +823,10 @@ struct IntegrationService::Impl {
     if (evaluation_entry.enabled())
       return;
     for (auto it = runs.begin(); it != runs.end();) {
-      if (evictable(it->second))
+      if (evictable(it->second)) {
+        runtime_policies.erase(it->first);
         it = runs.erase(it);
-      else
+      } else
         ++it;
     }
   }
@@ -876,6 +886,7 @@ struct IntegrationService::Impl {
       }
       --stored_count;
       archivable.erase(rid);
+      runtime_policies.erase(rid);
       runs.erase(rid);
       evaluation_outcomes.erase(rid);
     }
@@ -1750,19 +1761,49 @@ struct IntegrationService::Impl {
     emit(run, "custom", fields, step.str("execution_id"));
   }
 
+  // Restore only actual prepared native queries. This retains the original
+  // receipt identity across process restart or a failed persistence attempt;
+  // it neither creates a business action nor edits its result.
+  const PolicyRuntime *runtime_policy(const Json &run) {
+    if (!config.flag("preserve_runtime_policy_state", false) ||
+        run.num("level", 0) == 0 || !run["policy"].object())
+      return nullptr;
+    const auto rid = run["identity"].str("run_id");
+    auto policy = proto<v1::RuntimePolicy>(run["policy"]);
+    auto found = runtime_policies.find(rid);
+    if (found != runtime_policies.end() &&
+        google::protobuf::util::MessageDifferencer::Equals(found->second->policy(), policy))
+      return found->second.get();
+    auto runtime = std::make_unique<PolicyRuntime>(std::move(policy));
+    for (const auto &event : run["events"].items()) {
+      const auto &decision = event["attributes"]["decision"];
+      if (event.str("kind") == "custom" &&
+          event["attributes"].str("type") == "policy.query" &&
+          decision.str("policy_id") == runtime->policy().policy_id() &&
+          decision["query"].str("boundary") == "llm")
+        runtime->decide(proto<v1::RuntimeQuery>(decision["query"]));
+    }
+    auto *result = runtime.get();
+    runtime_policies[rid] = std::move(runtime);
+    return result;
+  }
+
   // 构造或解析标准回执，使宿主可以区分建议、应用、降级和业务结果。
-  void receipt(Json &run, const Json &step, const Json &stored_query,
+  Json receipt(Json &run, const Json &step, const Json &stored_query,
                const v1::RuntimeObservation &observation) {
     if (stored_query.null())
-      return;
+      return Json::Object{};
     PolicyRuntime runtime(proto<v1::RuntimePolicy>(run["policy"]));
     const auto result = runtime.verify(proto<v1::RuntimeQuery>(stored_query), observation);
     auto fields = context(step);
     fields["application"] = json(result.application());
     fields["attributes"] = Json{{"receipt", json(result)}};
-    emit(run, "advice.applied", fields, step.str("execution_id"));
+    const auto event_id = emit(run, "advice.applied", fields, step.str("execution_id"));
     run["receipt_counts"][result.application().status()] =
         run["receipt_counts"].num(result.application().status(), 0) + 1;
+    auto summary = json(result);
+    summary["event_id"] = event_id;
+    return summary;
   }
 
   // 检查当前上下文是否仍有待结束工作，父节点据此决定能否收尾。
@@ -1919,10 +1960,9 @@ struct IntegrationService::Impl {
       else if (step.str("decision") == "stop")
         receipt(run, step, step["loop_query"], v1::RuntimeObservation{});
     }
-    if (step.str("decision") == "replan" && !step.flag("replan_observed", false)) {
-      receipt(run, step, step["loop_query"], v1::RuntimeObservation{});
-      step["replan_observed"] = true;
-    }
+    // Replan is applied only when the following model activity sends the
+    // proposed recovery context.  Ending a step must not manufacture an L3
+    // success receipt from the decision alone.
     auto fields = context(step);
     fields["status"] = status;
     fields["output"] = std::move(output);
@@ -2680,8 +2720,15 @@ struct IntegrationService::Impl {
       run = found->second;
       if (run.str("profile") == "evolution.boundary.v1" && op != "capture.gap" &&
           op != "evaluation.retry") {
-        response = referenced ? dispatch_referenced_point(run, request, config)
-                              : dispatch_boundary(run, request, config);
+        try {
+          const auto *policy = runtime_policy(run);
+          response = referenced ? dispatch_referenced_point(run, request, config, policy)
+                                : dispatch_boundary(run, request, config, policy);
+        } catch (...) {
+          // A rejected/uncommitted request cannot consume a future injection.
+          runtime_policies.erase(run_id);
+          throw;
+        }
         if (run.flag("closed", false)) {
           if (!run.flag("incomplete", false))
             require(validate_trace(proto<v1::TraceRun>(trace(run))).report.trace_valid(),
@@ -2691,18 +2738,25 @@ struct IntegrationService::Impl {
       } else
         response = dispatch(run, request);
     }
-    safe_data(response);
-    if (run.flag("buffered_capture", false) && !run.flag("capture_durable", false))
-      response["persisted"] = false;
-    if (!run.flag("closed", false))
-      run["last_activity_ms"] = millis();
-    run["requests"][key] = Json{{"fingerprint", fingerprint}, {"response", response}};
-    save(run);
+    try {
+      safe_data(response);
+      if (run.flag("buffered_capture", false) && !run.flag("capture_durable", false))
+        response["persisted"] = false;
+      if (!run.flag("closed", false))
+        run["last_activity_ms"] = millis();
+      run["requests"][key] = Json{{"fingerprint", fingerprint}, {"response", response}};
+      save(run);
+    } catch (...) {
+      runtime_policies.erase(run_id);
+      throw;
+    }
     if (beginning)
       ++stored_count;
     if (beginning && evaluation_entry.enabled())
       evaluation_entry.run_id = run_id;
     runs[run_id] = std::move(run);
+    if (runs[run_id].flag("closed", false))
+      runtime_policies.erase(run_id);
     return response;
   }
 };
@@ -3100,6 +3154,95 @@ void IntegrationService::refresh_agent_evaluations() {
   }
 }
 
+// 显式本地后处理：权威已成功分析可以补齐旧版本遗留的未判证据。
+// 不发模型请求，不重写原报告，不创建训练来源或把未知证据升级为有效。
+IntegrationResponse IntegrationService::refresh_evidence() {
+  try {
+    std::lock_guard<std::mutex> guard(impl_->mutex);
+    require(impl_->memory_source_root.empty(), "evidence_refresh_requires_private_store", 409);
+    require(!impl_->evaluating, "evidence_refresh_learning_busy", 409);
+    std::set<std::string> users;
+    for (const auto &principal : impl_->principals) users.insert(principal.second);
+    std::size_t updated = 0, unchanged = 0, rejected = 0, scanned = 0, changed_users = 0;
+    for (const auto &user : users) {
+      const auto memory_path = impl_->memory_path(user);
+      if (!fs::exists(memory_path)) continue;
+      std::map<std::string, ep::HybridEvaluationReport> reports;
+      const auto evaluation_dir = impl_->user_dir(user) / "evaluation";
+      if (fs::exists(evaluation_dir)) {
+        for (const auto &entry : fs::recursive_directory_iterator(evaluation_dir)) {
+          if (entry.is_symlink() || !entry.is_regular_file()) continue;
+          const auto filename = entry.path().filename().string();
+          const std::string suffix = ".evaluation.json";
+          if (filename.size() <= suffix.size() ||
+              filename.compare(filename.size() - suffix.size(), suffix.size(), suffix) != 0) continue;
+          try {
+            const auto id = filename.substr(0, filename.size() - suffix.size());
+            auto run = impl_->read_run(id);
+            const auto bytes = read_file(entry.path(), impl_->run_limit);
+            const auto report = proto<ep::HybridEvaluationReport>(Json::parse(bytes));
+            const auto &state = run["learning"];
+            require(state.str("analysis_state") == "completed" &&
+                        state.str("report_fingerprint") == digest(bytes), "evidence_refresh_cache_mismatch");
+            require(run["identity"].str("user_id") == user &&
+                        report.source().user_id() == user &&
+                        report.source().conversation_id() == run["identity"].str("conversation_id") &&
+                        report.source().dialogue_id() == run.str("import_source_id", id),
+                    "evidence_refresh_identity_mismatch");
+            const auto raw = read_file(impl_->trace_path(run), impl_->run_limit);
+            require(run.flag("imported", false) ? digest(raw) == run.str("import_content_fingerprint")
+                                                : raw == impl_->trace(run).dump(),
+                    "evidence_refresh_trace_changed");
+            require(report.source_fingerprint() ==
+                        (run.flag("imported", false) ? run.str("import_evidence_fingerprint")
+                         : digest(trace_content_jsonl(proto<v1::TraceRun>(impl_->trace(run))))),
+                    "evidence_refresh_source_mismatch");
+            require(report.source_trace_integrity_valid() &&
+                        report.dialogue_assessment().status() == ep::MODEL_CALL_STATUS_SUCCEEDED,
+                    "evidence_refresh_analysis_unassessed");
+            legacy::ensure_safe_evolution_data(report);
+            const auto key = report.source().conversation_id() + '\0' + report.source().dialogue_id();
+            require(reports.emplace(key, report).second, "evidence_refresh_duplicate_source");
+          } catch (...) {
+            // Unavailable/failed/mismatched caches remain unassessed. They
+            // cannot supply a positive verdict or trigger semantic reanalysis.
+          }
+        }
+      }
+      const bool changed = legacy::TrajectoryEvolutionPipeline::transform_memory_file(
+          memory_path, memory_path.parent_path() / "evolution-memory.json",
+          [&](ep::EvolutionMemoryStore &memory) {
+            for (auto &entry : *memory.mutable_entries()) {
+              for (auto &evidence : *entry.mutable_candidate()->mutable_support_evidence()) {
+                if (evidence.kind() != ep::CANDIDATE_EVIDENCE_KIND_DIALOGUE_REFLECTION ||
+                    evidence.verdict() != ep::SEMANTIC_VERDICT_UNASSESSED) continue;
+                ++scanned;
+                const auto key = evidence.source().conversation_id() + '\0' + evidence.source().dialogue_id();
+                const auto found = reports.find(key);
+                if (evidence.source().user_id() != user || found == reports.end()) { ++rejected; continue; }
+                if (legacy::refresh_scoped_experience_evidence(found->second,
+                        entry.candidate().target_scope(), &evidence)) ++updated;
+                else ++unchanged;
+              }
+            }
+          }, impl_->run_limit);
+      if (changed) {
+        ++changed_users;
+        auto &version = impl_->memory_versions[user];
+        version = std::max<std::uint64_t>(version, 1) + 1;
+        impl_->notify_work();
+      }
+    }
+    return {200, Json{{"status", "completed"}, {"model_calls", 0}, {"scanned_evidence", scanned},
+                      {"refreshed_evidence", updated}, {"unchanged_evidence", unchanged},
+                      {"rejected_evidence", rejected}, {"changed_users", changed_users}}.dump()};
+  } catch (const Error &error) {
+    return {error.status, Json{{"status", "error"}, {"reason", error.what()}, {"model_calls", 0}}.dump()};
+  } catch (...) {
+    return {500, Json{{"status", "error"}, {"reason", "evidence_refresh_failed"}, {"model_calls", 0}}.dump()};
+  }
+}
+
 // 通过可信本地入口导入指定轨迹，先校验来源和幂等身份。
 IntegrationResponse IntegrationService::import_file(const fs::path &path) {
   return import_source(path, "", "");
@@ -3169,7 +3312,7 @@ IntegrationResponse IntegrationService::import_source(const fs::path &path,
                                .substr(0, 40);
     const auto manifest = impl_->run_file(rid);
     if (fs::exists(manifest)) {
-      const auto old = impl_->read_run(rid);
+      auto old = impl_->read_run(rid);
       require(old.flag("closed", false) && old["identity"].str("user_id") == user &&
                   old["identity"].str("conversation_id") == conversation,
               "import_identity_conflict", 409);
@@ -3190,8 +3333,94 @@ IntegrationResponse IntegrationService::import_source(const fs::path &path,
                 source.str("source_evidence_fingerprint");
       }
       // 补充离线验收上下文不能重新导入已经处理的报告。
-      // 旧导入保持不可变，包括其缓存分析。
       require(expected == evidence_hash || same_training_source, "import_content_conflict", 409);
+      // 同一份官方训练轨迹在语义模型传输或建作业失败时不能被幂等去重
+      // 永久卡住。只恢复明确失败的评审，或尚未保留任何模型调用的授权作业。
+      // 原始 trace、训练分数和旧评审证据都保留，成功重试后不会再次触发。
+      // Some historical stores lack the optional training_source fields or
+      // serialized them with a different field order. The immutable trace
+      // fingerprint is the stronger identity check for a retry request.
+      const bool retry_training_source = !training_source.empty() &&
+                                          (same_training_source || expected == evidence_hash);
+      if (retry_training_source) {
+        const auto evaluation = impl_->user_dir(user) / "evaluation" /
+                                path_component(conversation) / (rid + ".evaluation.json");
+        bool retryable = false;
+        try {
+          if (fs::exists(evaluation)) {
+            const auto cached = Json::parse(read_file(evaluation, impl_->run_limit));
+            // Protobuf-JSON emits counters as strings in some historical
+            // reports and as numbers in newer ones; accept both encodings.
+            std::size_t failed = 0;
+            if (std::holds_alternative<std::string>(cached["model_failed_count"].value)) {
+              const auto encoded = cached.str("model_failed_count");
+              require(!encoded.empty() &&
+                          std::all_of(encoded.begin(), encoded.end(), [](unsigned char c) {
+                            return c >= '0' && c <= '9';
+                          }),
+                      "model_failed_count_invalid");
+              failed = static_cast<std::size_t>(std::stoull(encoded));
+            } else {
+              failed = cached.num("model_failed_count", 0);
+            }
+            retryable = failed > 0;
+            const auto &dialogue = cached["dialogue_assessment"];
+            retryable |= dialogue.str("status") == "MODEL_CALL_STATUS_SKIPPED" &&
+                         dialogue.str("error_code") == "model_request_too_large";
+          } else if (old.str("evaluation_status") == "failed" &&
+                     old["learning"].str("analysis_state") == "retry_authorized" &&
+                     !old["learning"].str("job_id").empty()) {
+            const auto previous = impl_->read_job(old["learning"].str("job_id"));
+            const auto &ids = previous["runs"].items();
+            static const std::set<std::string> setup_failures{
+                "evaluation_configuration_failed", "analysis_job_setup_failed",
+                "learning_job_already_exists", "evaluation_api_key_missing"};
+            std::size_t reserved = previous.num("synthesis_model_calls", 0);
+            for (const auto &id : ids)
+              reserved += previous["analysis_model_calls"].num(id.text(), 0);
+            retryable = previous.str("state") == "failed" &&
+                        previous.str("phase") == "analysis" &&
+                        previous.str("user") == user &&
+                        std::any_of(ids.begin(), ids.end(), [&](const auto &id) {
+                          return id.text() == rid;
+                        }) && impl_->owns_run(previous, old) &&
+                        setup_failures.count(previous.str("error")) && reserved == 0;
+          }
+        } catch (...) {
+          // 损坏的旧缓存交给常规完整性校验，不把它误判为可重试。
+        }
+        if (retryable) {
+          if (fs::exists(evaluation)) {
+            const auto history = impl_->user_dir(user) / "evaluation-retry-history" /
+                                 path_component(conversation);
+            fs::create_directories(history);
+            const auto tag = digest(read_file(evaluation, impl_->run_limit)).substr(0, 16);
+            fs::copy_file(evaluation, history / (rid + "." + tag + ".evaluation.json"),
+                          fs::copy_options::overwrite_existing);
+            const auto protobuf = evaluation.parent_path() / (rid + ".evaluation.pb");
+            if (fs::exists(protobuf))
+              fs::copy_file(protobuf, history / (rid + "." + tag + ".evaluation.pb"),
+                            fs::copy_options::overwrite_existing);
+            fs::remove(evaluation);
+            if (fs::exists(protobuf)) fs::remove(protobuf);
+          }
+          old["learning"]["retry_count"] = old["learning"].num("retry_count", 0) + 1;
+          old["learning"].fields().erase("report_fingerprint");
+          old["learning"].fields().erase("job_id");
+          old["learning"]["analysis_state"] = "retry_authorized";
+          old["learning"]["phase"] = "analysis_retry_wait";
+          old["evaluation_status"] = "pending";
+          old["evaluation_error"] = "";
+          impl_->save_closed(old);
+          return {200, Json{{"ok", true},
+                            {"result", Json{{"run_id", rid},
+                                             {"reused", false},
+                                             {"review_retry", true},
+                                             {"evaluation_status", "pending"}}}}
+                           .dump()};
+        }
+      }
+      // 无失败评审缓存时保持原有幂等语义。
       return {200, Json{{"ok", true},
                         {"result", Json{{"run_id", rid},
                                         {"reused", true},
@@ -3334,6 +3563,7 @@ IntegrationResponse IntegrationService::import_training_report(const fs::path &d
       std::set<std::string> trial_run_ids;
       try {
         require(evidence.has("trace") != evidence.has("traces"), "training_trace_required");
+        const auto code_projection = validated_code_projection(evidence);
         const auto traces =
             evidence.has("traces") ? evidence["traces"] : Json(Json::Array{evidence["trace"]});
         require(traces.array() && !traces.items().empty() && traces.items().size() <= 1024,
@@ -3398,6 +3628,10 @@ IntegrationResponse IntegrationService::import_training_report(const fs::path &d
                    {"verdict", trial["verdict"]},
                    {"checks", trial["checks"]},
                    {"run_ids", trial_runs}};
+          const auto run_projection = code_projection_for_run(code_projection, identity.run_id());
+          if (!run_projection.null())
+            enriched["attributes"]["training_evaluation"]["evidence_projection"] =
+                run_projection;
           if (ungraded_training)
             enriched["attributes"]["training_evaluation"]["task_assessment_status"] = "not_requested";
           if (errored_training_with_trace) {
@@ -3992,6 +4226,7 @@ void IntegrationService::process_evaluations(bool flush) {
     }
     {
       std::lock_guard<std::mutex> guard(impl_->mutex);
+      stage = "analysis_job_setup";
       auto first = impl_->read_run(selected.front());
       if (!first["learning"].str("job_id").empty())
         job = impl_->read_job(first["learning"].str("job_id"));
@@ -4007,15 +4242,17 @@ void IntegrationService::process_evaluations(bool flush) {
           retries[id] = run["learning"].num("retry_count", 0);
           material += '\0' + id + ':' + std::to_string(run["learning"].num("retry_count", 0));
         }
+        const auto job_id = digest(material);
+        // A collision must not overwrite the existing failed job and its evidence.
+        require(!fs::exists(impl_->job_path(job_id)), "learning_job_already_exists");
         job = Json{{"schema_version", 1},
-                   {"id", digest(material)},
+                   {"id", job_id},
                    {"user", first["identity"]["user_id"]},
                    {"runs", ids},
                    {"retry_counts", retries},
                    {"errors", Json::Object{}},
                    {"phase", "analysis"},
                    {"state", "pending"}};
-        require(!fs::exists(impl_->job_path(job.str("id"))), "learning_job_already_exists");
       }
       job["state"] = "running";
       impl_->save_job(job);
@@ -4292,6 +4529,20 @@ void IntegrationService::process_evaluations(bool flush) {
       impl_->evaluating = false;
     }
   } catch (...) {
+    std::string code = stage + "_failed";
+    try {
+      throw;
+    } catch (const Error &error) {
+      // Only static codes cross this boundary; never persist exception/provider text.
+      static const std::set<std::string> allowed{
+          "evaluation_api_key_missing", "learning_job_already_exists",
+          "learning_job_identity_mismatch", "learning_job_invalid",
+          "learning_job_duplicate_run"};
+      if (allowed.count(error.what())) code = error.what();
+    } catch (const legacy::EvaluationError &error) {
+      if (stage == "trace_evaluation") code = evaluation_error_code(error);
+    } catch (...) {
+    }
     std::lock_guard<std::mutex> guard(impl_->mutex);
     impl_->evaluating = false;
     impl_->storage_retry_ms = Impl::millis() + impl_->schedule.num("retry_backoff_ms", 60000);
@@ -4299,7 +4550,7 @@ void IntegrationService::process_evaluations(bool flush) {
     try {
       if (!job.null()) {
         job["state"] = "failed";
-        job["error"] = stage + "_failed";
+        job["error"] = code;
         impl_->save_job(job);
         impl_->finish_job(job);
       }
@@ -4307,7 +4558,7 @@ void IntegrationService::process_evaluations(bool flush) {
                    Json{{"schema_version", 1},
                         {"next_batch_ms", impl_->next_batch_ms},
                         {"retry_after_ms", impl_->storage_retry_ms},
-                        {"last_error", stage + "_failed"}}
+                        {"last_error", code}}
                        .dump());
     } catch (...) {
       for (auto &pair : impl_->learning_queue)

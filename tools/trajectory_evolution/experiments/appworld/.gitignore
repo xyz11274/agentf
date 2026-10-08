@@ -1,6 +1,0 @@
-runtime/
-vendor/
-data/
-datasets/native/
-__pycache__/
-*.pyc

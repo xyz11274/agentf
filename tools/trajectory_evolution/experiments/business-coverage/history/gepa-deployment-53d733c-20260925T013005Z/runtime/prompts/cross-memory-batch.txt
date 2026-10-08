@@ -1,2 +1,0 @@
-当输入包含 pairs 数组时，独立判断每一项的 private 和 public，适用前述全部关系定义与隐私约束。不得用一项的结论推导其他项，不漏项、不重复 ID。
-返回 {"relations":[{"id":"原样返回该项 id","relation":"duplicate|related|conflict|independent|uncertain","confidence":0.95}]}，不输出解释或原文。无法确认的单项明确返回 uncertain，其他项继续判断。

@@ -467,6 +467,41 @@ def _aggregate(trials: list[dict[str, Any]], planned: int | None = None,
                summary: dict[str, Any] | None = None) -> dict[str, Any]:
     qualities = [v for v in (_quality(t) for t in trials) if v is not None]
     loops = [v for v in (_invalid_loops(t) for t in trials) if v is not None]
+    # Keep paired, task-keyed loop evidence alongside the scalar mean.  A
+    # scalar alone cannot prove a same-task reduction and must never be used
+    # by a downstream gate as a synthetic one-row comparison.
+    loop_by_task: dict[str, float] = {}
+    loop_bases: set[str] = set()
+    loop_rows_complete = bool(trials)
+    for trial in trials:
+        task_id = trial.get("task_id")
+        review = (trial.get("evidence") or {}).get("loop_review")
+        status = str(review.get("status") or "").strip().lower() if isinstance(review, dict) else ""
+        value = _invalid_loops(trial)
+        if (not isinstance(task_id, str) or not task_id or task_id in loop_by_task
+                or value is None or status not in {"complete", "completed", "measured", "valid", "accepted"}):
+            loop_rows_complete = False
+            continue
+        loop_by_task[task_id] = value
+        # Native reports keep the formal loop basis in the compact output
+        # projection, not always on the top-level trial row.  Never infer
+        # model_review from a missing field: doing so would turn host-side
+        # diagnostics (for example ``host repeated submitted code``) into
+        # evidence accepted by the common gate.
+        output = (trial.get("evidence") or {}).get("output")
+        review_basis = review.get("method") if isinstance(review, dict) else None
+        basis = trial.get("invalid_loop_basis")
+        if not isinstance(basis, str) or not basis.strip():
+            basis = output.get("invalid_loop_basis") if isinstance(output, dict) else None
+        if not isinstance(basis, str) or not basis.strip():
+            # Older business reports put the formal basis on the review
+            # object (`method`) rather than in the compact output projection.
+            # This is still explicit evidence; a wholly missing basis remains
+            # unverifiable below.
+            basis = review_basis
+        loop_bases.add(str(basis).strip() if isinstance(basis, str) and basis.strip() else "")
+    if len(loop_by_task) != len(trials) or len(loop_bases) != 1 or next(iter(loop_bases), None) != "model_review":
+        loop_rows_complete = False
     latency = [v for v in (_number(t.get("duration_ms")) for t in trials) if v is not None]
     tokens = [v for v in (_metric(t, "tokens") for t in trials) if v is not None]
     calls = [v for v in (_metric(t, "llm_calls") for t in trials) if v is not None]
@@ -538,6 +573,9 @@ def _aggregate(trials: list[dict[str, Any]], planned: int | None = None,
         "judged": len(verdicts),
         "strict_passed": strict,
         "invalid_loop": _mean(loops),
+        "loop_by_task": loop_by_task if loop_rows_complete else {},
+        "loop_basis": "model_review" if loop_rows_complete else None,
+        "loop_review_coverage": len(loop_by_task),
         "latency_ms": _mean(latency),
         "tokens": _mean(tokens),
         "llm_calls": _mean(calls),
@@ -1336,3 +1374,175 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def compact_metrics(items, planned=None):
+    """Aggregate compact paired rows with the business comparison contract.
+
+    The native row metrics above remain the source of truth.  This projection
+    is the only compact aggregator used by AppWorld comparison and stage-gate
+    code, so a partial judge or retry cannot silently change denominators.
+    """
+    from collections import Counter
+    raw_rows = [row for row in items if isinstance(row, dict)]
+    rows = []
+    for original in raw_rows:
+        row = dict(original)
+        nested = row.get('metrics') if isinstance(row.get('metrics'), dict) else {}
+        aliases = {
+            'quality': ('quality',),
+            'reward': ('reward', 'appworld_reward'),
+            'official_quality': ('official_quality', 'quality_score', 'auxiliary_test_fraction'),
+            'avg_invalid_loop': ('avg_invalid_loop', 'invalid_loop', 'invalid_loop_count'),
+            'invalid_loop_basis': ('invalid_loop_basis', 'loop_basis'),
+            'tokens': ('tokens', 'known_tokens', 'agent_tokens'),
+            'model_calls': ('model_calls', 'model_call_count', 'calls', 'llm_calls'),
+            'latency_ms': ('duration_ms', 'latency_ms', 'latency'),
+        }
+        if row.get('duration_ms') is not None:
+            row['latency_ms'] = row['duration_ms']
+        for target, names in aliases.items():
+            if target in row and row[target] is not None:
+                continue
+            for name in names:
+                if name in row and row[name] is not None:
+                    row[target] = row[name]
+                    break
+                if name in nested and nested[name] is not None:
+                    row[target] = nested[name]
+                    break
+        if row.get('error_code') in (None, ''):
+            derived_error = _trial_error_code(row)
+            if derived_error is not None:
+                row['error_code'] = derived_error
+        if 'official_scored' not in row and row.get('reward') in (0, 1):
+            row['official_scored'] = True
+        nested_levels = nested.get('levels') if isinstance(nested.get('levels'), dict) else {}
+        for level in ('L1', 'L2', 'L2_action', 'L2_schedule', 'L3'):
+            key = level.lower() + '_applied'
+            if key not in row and level in nested_levels:
+                row[key] = nested_levels[level]
+        rows.append(row)
+    planned = len(rows) if planned is None else int(planned)
+    number = _number
+    mean = lambda values: sum(values) / len(values) if values else None
+    numeric = lambda key, source: [value for row in source
+                                   if (value := number(row.get(key))) is not None]
+    valid = [row for row in rows if not row.get('error_code')]
+    quality = numeric('quality', valid)
+    loop_rows = [row for row in valid
+                 if row.get('invalid_loop_basis') == 'model_review'
+                 and number(row.get('avg_invalid_loop')) is not None]
+    loops = numeric('avg_invalid_loop', loop_rows)
+    observed_iterations = numeric('loop_observed_iterations', loop_rows)
+    errors = Counter(str(row['error_code']) for row in rows if row.get('error_code'))
+    verdicts = [row.get('verdict') for row in valid
+                if number(row.get('quality')) is not None
+                if row.get('verdict') in {'passed', 'failed', 'rejected'}]
+    strict = sum(verdict == 'passed' for verdict in verdicts) if verdicts else None
+    complete = bool(rows) and len(rows) >= planned
+    quality_complete = complete and not errors and len(quality) == len(rows)
+    loop_complete = complete and not errors and len(loops) == len(rows)
+    tokens, calls, latency = (numeric(key, rows)
+                              for key in ('tokens', 'model_calls', 'latency_ms'))
+    levels = ('L1', 'L2', 'L2_action', 'L2_schedule', 'L3')
+    level_covered = sum(all(number(row.get(level.lower() + '_applied')) is not None
+                            for level in levels) for row in rows)
+    levels_complete = bool(rows) and level_covered == len(rows)
+    level_values = {level: sum(numeric(level.lower() + '_applied', rows))
+                    if levels_complete else None for level in levels}
+    intents = [row['intent_counts'] for row in valid
+               if isinstance(row.get('intent_counts'), list)
+               and len(row['intent_counts']) == 3
+               and all(number(value) is not None and value >= 0
+                       for value in row['intent_counts'])]
+    tp, fp, fn = ((sum(value[index] for value in intents) for index in range(3))
+                  if intents else (0, 0, 0))
+    intent_turn_keys = sorted({key for row in valid for key in row.get('intent_turn_keys', [])})
+    intent_measured = sum(int(row.get('intent_measured') or 0) for row in valid)
+    if not intent_measured:
+        intent_measured = len(intent_turn_keys)
+    official = [row for row in rows if row.get('official_scored') is True
+                and row.get('reward') in (0, 1) and not row.get('execution_error_code')]
+    official_quality = numeric('official_quality', official)
+    groups = {}
+    for row in official:
+        group = row.get('group_id') or str(row.get('task_id', '')).rsplit('_', 1)[0]
+        groups.setdefault(group, []).append(row['reward'])
+    complete_groups = [values for values in groups.values() if len(values) == 3]
+    loop_by_task = {str(row.get('task_id')): number(row.get('avg_invalid_loop'))
+                    for row in loop_rows if row.get('task_id')}
+    metric_coverage = {
+        'quality': len(quality), 'latency_ms': len(latency), 'tokens': len(tokens),
+        'model_calls': len(calls), 'official_quality': len(official_quality),
+        'avg_invalid_loop': len(loops),
+        **{level: sum(number(row.get(level.lower() + '_applied')) is not None for row in rows)
+           for level in levels},
+    }
+    invalid_rows = []
+    for row in rows:
+        missing = [key for key in ('latency_ms', 'tokens', 'model_calls')
+                   if number(row.get(key)) is None]
+        if not row.get('error_code') and number(row.get('quality')) is None:
+            missing.append('quality')
+        if row.get('tokens_complete') is not True:
+            missing.append('tokens_complete')
+        if row.get('execution_costs_complete') is False:
+            missing.append('execution_costs_complete')
+        if row.get('verdict') not in {'passed', 'failed', 'rejected'}:
+            missing.append('verdict')
+        if row.get('error_code') or missing:
+            invalid_rows.append({'task_id': row.get('task_id'),
+                                 'error': row.get('error_code'),
+                                 'missing': sorted(set(missing)),
+                                 'reward': row.get('reward'),
+                                 'verdict': row.get('verdict')})
+    return {
+        'planned': planned, 'completed': len(rows), 'scored': len(quality),
+        'errored': sum(errors.values()), 'unscored': len(rows) - len(quality),
+        'missing': max(0, planned - len(rows)), 'judged': len(verdicts),
+        'strict_passed': strict,
+        'strict_pass_rate': strict / len(verdicts) if verdicts else None,
+        'quality': mean(quality), 'quality_coverage': len(quality),
+        'quality_complete': quality_complete,
+        'quality_status': 'complete' if quality_complete else ('partial' if quality else 'unavailable'),
+        'official_scored': len(official),
+        'official_strict_passed': sum(row['reward'] == 1 for row in official),
+        'official_reward_coverage': sum(row.get('reward') in (0, 1) for row in rows),
+        'task_success_rate': mean([row['reward'] for row in official]),
+        'scenario_success_rate_complete_groups': mean([float(all(values)) for values in complete_groups]),
+        'complete_scenario_groups': len(complete_groups),
+        'official_quality': mean(official_quality),
+        'auxiliary_test_fraction': mean(official_quality),
+        'judge_errors': sum(bool(row.get('judge_error_code')) for row in rows),
+        'execution_errors': sum(bool(row.get('execution_error_code')) for row in rows),
+        'error_counts': dict(sorted(errors.items())), 'invalid_rows': invalid_rows[:20],
+        'invalid_loop': mean(loops), 'avg_invalid_loop': mean(loops),
+        'invalid_loop_coverage': len(loops),
+        'invalid_loop_status': 'complete' if loop_complete else ('partial' if loops else 'unavailable'),
+        'loop_basis': 'model_review' if loops else 'model_review_unavailable',
+        'loop_by_task': loop_by_task, 'loop_review_coverage': len(loop_by_task),
+        'loop_observed_iterations': (sum(observed_iterations)
+                                     if loop_rows and len(observed_iterations) == len(loop_rows) else None),
+        'loop_observed_coverage': len(observed_iterations),
+        'latency_ms': mean(latency), 'latency_covered_trials': len(latency),
+        'tokens': mean(tokens), 'known_tokens': sum(numeric('known_agent_tokens', rows)),
+        'total_tokens': sum(tokens) if tokens else None,
+        'tokens_complete': (complete and len(tokens) == len(rows)
+                            and all(row.get('tokens_complete') is True for row in rows)),
+        'token_covered_trials': len(tokens),
+        'model_calls': mean(calls), 'llm_calls': mean(calls),
+        'total_model_calls': sum(calls) if calls else None,
+        'model_call_covered_trials': len(calls),
+        'execution_costs_complete': complete and all(
+            row.get('execution_costs_complete') is not False for row in rows),
+        'extra_execution_attempts': sum(max(0, row.get('execution_attempts', 1) - 1) for row in rows),
+        'retry_loop_complete': all(row.get('retry_loop_complete') is not False for row in rows),
+        'intent_f1': 2 * tp / (2 * tp + fp + fn) if intents and 2 * tp + fp + fn else None,
+        'intent_counts': [tp, fp, fn] if intents else None,
+        'intent_measured': intent_measured, 'intent_task_measured': len(intents),
+        'intent_turn_keys': intent_turn_keys,
+        'level_count_basis': 'trace advice.applied by boundary' if levels_complete else 'unavailable',
+        'level_covered_trials': level_covered, 'levels': level_values,
+        'level_counts': level_values, 'metric_coverage': metric_coverage,
+    }

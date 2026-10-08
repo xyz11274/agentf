@@ -12,12 +12,14 @@ import shutil
 ROOT = Path(__file__).resolve().parents[4]
 OUTPUT = ROOT / "trace_output/business-simulator"
 DATASETS = Path(__file__).resolve().parent / "datasets"
+PACK = DATASETS / "pack"
 TRAINING = OUTPUT / "training"
 GEPA = OUTPUT / "gepa"
 PUBLISHED = OUTPUT / "published"
-SOURCE_DATASET = DATASETS / "source"
-TRAINING_DATASET = DATASETS / "training-reviewed"
-GEPA_VIEW = DATASETS / "gepa-view.json"
+SOURCE_DATASET = PACK
+# Native dataset build artifacts are ephemeral; the checked-in pack stays JSONL-only.
+TRAINING_DATASET = Path(os.environ.get("BUSINESS_DATASET_RUNTIME", "/tmp/business-simulator-dataset"))
+GEPA_VIEW = PACK / "gepa-view.json"
 
 
 def _move_without_alias(source: Path, target: Path, legacy_target: Path | None = None) -> None:

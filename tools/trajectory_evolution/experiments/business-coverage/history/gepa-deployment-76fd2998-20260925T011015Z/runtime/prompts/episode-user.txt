@@ -1,4 +1,0 @@
-请评估以下单个循环步骤。只能依据证据包，不得推测未记录内容。
-证据包（结构化且已去敏）：
-{{evidence_json}}
-请只返回一个 JSON 对象，字段为：verdict、confidence、concise_reason、evidence_event_ids。concise_reason 用一两句中文对比必要进展与实际结果，不复述整个步骤；不另写 expected_state_change 或 observed_state_change。

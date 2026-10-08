@@ -19,6 +19,11 @@ namespace agentflow::trajectory {
 // 在新增输出边界复用既有持久化数据凭据检查。
 void ensure_safe_evolution_data(const google::protobuf::Message &message);
 
+// 从同一份成功的原生分析补齐已有反思证据的真实结论，保留身份及原始引用。
+bool refresh_scoped_experience_evidence(
+    const evaluation_proto::HybridEvaluationReport &report, const std::string &target_scope,
+    evaluation_proto::CandidateEvidence *evidence);
+
 struct EvolutionOptions {
   std::size_t max_input_files = 100000;
   std::size_t max_candidates = 10000;

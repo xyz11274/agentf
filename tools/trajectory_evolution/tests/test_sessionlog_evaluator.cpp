@@ -6,6 +6,7 @@
 #include "trajectory_evolution/evolution.h"
 #include "agentflow/trajectory/experience.h"
 #include "../src/model/model_input.h"
+#include "../src/evaluation/code_projection.h"
 
 #include <algorithm>
 #include <chrono>
@@ -101,6 +102,100 @@ void test_model_input_preserves_application_data() {
              episodes[1]["evidence"]["previous_same_owner"]["terminal_status"] == "unknown" &&
              episodes[2]["evidence"]["next_same_owner"].HasMember("step_index"),
          "projection hid inconsistent or unavailable evidence");
+}
+
+// Growing model histories must not crowd short execution facts out of the
+// bounded sharing index. Reference expansion remains exactly lossless.
+void test_growing_dialogue_history_is_lossless() {
+  rapidjson::Document payload;
+  payload.Parse(R"({"episodes":[],"selected_episode_ids":[],"content_events":[]})");
+  auto &allocator = payload.GetAllocator();
+  const std::string failure = "Exception: Response status code is 401: " + std::string(180, 'e');
+  for (unsigned round = 0; round < 30; ++round) {
+    payload["selected_episode_ids"].PushBack(
+        rapidjson::Value(("episode-" + std::to_string(round)).c_str(), allocator), allocator);
+    for (unsigned copy = 0; copy < 3; ++copy) {
+      rapidjson::Value event(rapidjson::kObjectType), data(rapidjson::kObjectType);
+      rapidjson::Value input(rapidjson::kObjectType), history(rapidjson::kArrayType);
+      for (unsigned previous = 0; previous <= round; ++previous) {
+        const auto text = "Unique public context " + std::to_string(previous) + ":" +
+                          std::string(30000, char('a' + previous % 26));
+        history.PushBack(rapidjson::Value(text.c_str(), allocator), allocator);
+      }
+      const char *code = round % 2 ? "apis.phone.show_alarms(access_token=token)"
+                                  : "apis.phone.show_alarms(token=token)";
+      input.AddMember("history", history, allocator);
+      input.AddMember("code", rapidjson::Value(code, allocator), allocator);
+      data.AddMember("input", input, allocator);
+      data.AddMember("observation", rapidjson::Value(failure.c_str(), allocator), allocator);
+      rapidjson::Value literal(rapidjson::kObjectType);
+      literal.AddMember("$content_ref", "/untrusted-application-value", allocator);
+      data.AddMember("literal", literal, allocator);
+      const auto id = "event-" + std::to_string(round * 3 + copy);
+      event.AddMember("event_id", rapidjson::Value(id.c_str(), allocator), allocator);
+      event.AddMember("data", data, allocator);
+      payload["content_events"].PushBack(event, allocator);
+    }
+  }
+  rapidjson::Document original;
+  original.CopyFrom(payload, original.GetAllocator());
+  expect(trajectory::model_input::bytes(original).size() > 2U * 1024U * 1024U,
+         "growing-history fixture does not reach the real dialogue limit");
+  trajectory::model_input::dialogue_view(payload, false);
+  expect(trajectory::model_input::bytes(payload).size() < 2U * 1024U * 1024U,
+         "growing histories still exceed the bounded dialogue limit");
+  expect(payload["selected_episode_ids"] == original["selected_episode_ids"],
+         "compression changed the selected episode contract");
+  expect(failure.size() >= 128 && failure.size() < 256 &&
+             payload["content_events"][1]["data"]["observation"].IsObject() &&
+             payload["content_events"][1]["data"]["observation"].HasMember("$content_ref"),
+         "short repeated execution evidence still crowds out the bounded dialogue packet");
+  std::map<std::string, std::string> aliases;
+  for (const auto &item : payload["content_value_refs"].GetArray())
+    for (const auto &path : item["paths"].GetArray())
+      expect(aliases.emplace(path.GetString(), item["source"].GetString()).second,
+             "growing history has duplicate reference paths");
+  rapidjson::Document restored;
+  std::set<std::string> active;
+  auto restore = [&](auto &&self, const rapidjson::Value &value,
+                     const std::string &path) -> rapidjson::Value {
+    const auto found = aliases.find(path);
+    if (found != aliases.end()) {
+      expect(active.insert(path).second, "growing history has a reference cycle");
+      expect(value.IsObject() && value.HasMember("$content_ref") &&
+                 value["$content_ref"] == found->second.c_str(), "reference wrapper changed");
+      const auto *source = rapidjson::Pointer(found->second.c_str()).Get(payload);
+      expect(source != nullptr, "growing history lost a reference source");
+      auto result = self(self, *source, found->second);
+      active.erase(path);
+      return result;
+    }
+    rapidjson::Value result;
+    auto &target = restored.GetAllocator();
+    if (value.IsArray()) {
+      result.SetArray();
+      for (rapidjson::SizeType i = 0; i < value.Size(); ++i)
+        result.PushBack(self(self, value[i], path + '/' + std::to_string(i)), target);
+    } else if (value.IsObject()) {
+      result.SetObject();
+      for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it) {
+        rapidjson::Value name;
+        name.CopyFrom(it->name, target);
+        result.AddMember(name, self(self, it->value, path + '/' + it->name.GetString()), target);
+      }
+    } else
+      result.CopyFrom(value, target);
+    return result;
+  };
+  auto content = restore(restore, payload["content_events"], "/content_events");
+  expect(content == original["content_events"],
+         "compression changed an independent context, code, observation or event");
+  rapidjson::Document defaults;
+  defaults.Parse(("[\"" + failure + "\",\"" + failure + "\"]").c_str());
+  trajectory::model_input::Sharing ordinary(defaults.GetAllocator(), "$ordinary", false);
+  ordinary.collect(defaults, "", false);
+  expect(ordinary.references().Empty() && defaults[0].IsString() && defaults[1].IsString(),
+         "dialogue tuning changed default Sharing behavior");
 }
 
 // 测试辅助函数：event。
@@ -861,7 +956,7 @@ void test_single_json_envelope_without_extra_calls() {
   trajectory::EvaluatorOptions options;
   options.model_selection = trajectory::ModelSelection::all;
   options.strict_model = true;
-  for (const std::string prefix : {"```json\n", "```\n", "```json\r\n", "```\r\n"}) {
+  for (const std::string prefix : {"```json\n", "```\n", "```json\r\n", "```\r\n", "```JSON\n", "``` Json \n"}) {
     auto adapter = std::make_shared<CapturingAdapter>();
     adapter->response_prefix = " \n\t" + prefix;
     adapter->response_suffix = "\r\n``` \r\n";
@@ -1082,10 +1177,63 @@ void test_typed_control_advice() {
 } // 结束当前匿名命名空间。
 
 // 运行本机固定响应回归，不调用真实业务模型。
+void test_standard_trace_code_projection_preserves_source() {
+  namespace view = ::trajectory::evolution::integration;
+  std::ifstream input(std::filesystem::path(__FILE__).parent_path().parent_path() /
+                      "examples/standard-agent/one.trace.json");
+  std::ostringstream text;
+  text << input.rdbuf();
+  auto trace = view::Json::parse(text.str());
+  const auto run = trace["identity"].str("run_id");
+  for (auto &event : trace["events"].items())
+    if (event.str("event_id") == "a1" || event.str("event_id") == "b1")
+      event["input"]["code"] = "print('original projected code')";
+  view::Json projection{{"status", "complete"}, {"recovered_events", 1},
+      {"code_patches", view::Json::Array{view::Json{{"run_id", run}, {"event_id", "b1"},
+                                                 {"code", "phone_token = (apis.phone.login())"}}}},
+      {"sources", view::Json::Array{view::Json{{"run_id", run}, {"event_id", "b1"},
+          {"source", view::Json{{"path", "/public/logs/environment_io.md"}, {"input_index", 0}}}}}}};
+  trace["attributes"]["training_evaluation"]["evidence_projection"] = projection;
+  const auto original = trace.dump();
+  auto prompts = std::make_shared<agentflow::trajectory::PromptTemplates>(*agentflow::trajectory::load_default_prompt_templates());
+  prompts->standard_dialogue_system = "Assess the actual standard trace execution evidence.";
+  agentflow::trajectory::EvaluatorOptions options;
+  options.model_selection = agentflow::trajectory::ModelSelection::all;
+  options.prompts = prompts;
+  auto adapter = std::make_shared<CapturingAdapter>();
+  const auto projected = agentflow::trajectory::HybridTrajectoryEvaluator(options, adapter).evaluate_trace_json(original);
+  expect(adapter->requests.size() == 1 &&
+             adapter->requests[0].user_prompt.find("apis.phone.login") != std::string::npos &&
+             adapter->requests[0].user_prompt.find("code_patches") == std::string::npos &&
+             trace.dump() == original,
+         "learning model lost repaired code, exposed private mappings or changed raw source");
+  options.model_selection = agentflow::trajectory::ModelSelection::none;
+  const auto deterministic = agentflow::trajectory::HybridTrajectoryEvaluator(options).evaluate_trace_json(original);
+  expect(projected.report.source_fingerprint() == deterministic.report.source_fingerprint() &&
+             projected.report.assessments(0).evidence().input_fingerprint() ==
+                 deterministic.report.assessments(0).evidence().input_fingerprint(),
+         "learning model view changed source or deterministic evidence fingerprint");
+  options.model_selection = agentflow::trajectory::ModelSelection::all;
+  for (const auto *mode : {"run", "event", "credential"}) {
+    auto changed = trace;
+    auto &patch = changed["attributes"]["training_evaluation"]["evidence_projection"]["code_patches"].items()[0];
+    if (std::string(mode) == "run") patch["run_id"] = "other-run";
+    if (std::string(mode) == "event") patch["event_id"] = "other-event";
+    if (std::string(mode) == "credential") patch["code"] = "password='opaque-private-credential-123456789'";
+    auto denied = std::make_shared<CapturingAdapter>();
+    bool rejected = false;
+    try { (void)agentflow::trajectory::HybridTrajectoryEvaluator(options, denied).evaluate_trace_json(changed.dump()); }
+    catch (const std::exception &) { rejected = true; }
+    expect(rejected && denied->requests.empty(), "bad learning projection reached model");
+  }
+}
+
 int main() {
   try {
+    test_standard_trace_code_projection_preserves_source();
     test_typed_control_advice();
     test_model_input_preserves_application_data();
+    test_growing_dialogue_history_is_lossless();
     test_compact_assessments_and_credential_slice();
     test_content_aware_single_call_and_redaction();
     test_clean_suspicious_mode_still_assesses_dialogue();
