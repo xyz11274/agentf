@@ -5468,7 +5468,7 @@ def _development_observations(controller, evidence, rows, authority, anchor_curr
             reason = terminal.get('termination_reason')
             reason = reason if reason in ('max_steps', 'max_iterations', 'bounded_recovery_exhausted',
                 'task_timeout', 'completed', 'task_completed', 'normal', 'budget_exhausted') else 'other'
-            examples.append({'_strict_success': bool(passed), '_reviewed_loops': compact['avg_invalid_loop'],
+            examples.append({'_task_id': task, '_strict_success': bool(passed), '_reviewed_loops': compact['avg_invalid_loop'],
                 '_repeat_requested_steps': repeated_steps,
                 '_anchor_success': bool(not passed and anchor_current is not None and
                 anchor_current[task]['strict_passed'] == 1),
@@ -5583,19 +5583,32 @@ def _development_public_feedback(local, policy, training_support):
     cards = {card['memory_id']: card for card in policy['snapshot'].get('experiences', [])}
     approved = {ref['memory_id'] for ref in policy['options'].get('approved_experiences', [])}
     support = {row['memory_id']: row for row in training_support}
-    ranked_examples = sorted(deepcopy(local['failure_examples']), key=lambda row: (row.get('_anchor_success', False) and not row['was_l0_success'],
-                      row.get('_anchor_success', False), row['was_l0_success'],
-                      row['termination_reason'] in ('max_steps', 'bounded_recovery_exhausted')), reverse=True)
+    ranked_examples = sorted(deepcopy(local['failure_examples']), key=lambda row: (
+        -int(row.get('_anchor_success', False) and not row['was_l0_success']),
+        -int(row.get('_anchor_success', False)), -int(row['was_l0_success']),
+        -row.get('_reviewed_loops', 0),
+        -int(row['termination_reason'] in ('max_steps', 'bounded_recovery_exhausted')),
+        row.get('_task_id', '')))
     examples = ranked_examples[:4]
     loop_only = [row for row in ranked_examples if row.get('_strict_success') and row.get('_reviewed_loops', 0) > 0]
+    protected = []
     if loop_only:
-        representative = max(loop_only, key=lambda row: row['_reviewed_loops'])
-        if representative not in examples:
-            examples = examples[:3] + [representative]
+        representative = sorted(loop_only, key=lambda row: (-row['_reviewed_loops'], row.get('_task_id', '')))[0]
+        protected.append(representative)
+    failed_loops = [row for row in ranked_examples if not row.get('_strict_success', False)
+                    and row.get('_reviewed_loops', 0) > 0]
+    if failed_loops:
+        protected.append(sorted(failed_loops, key=lambda row: (-row['_reviewed_loops'], row.get('_task_id', '')))[0])
+    for representative_case in protected:
+        if representative_case not in examples:
+            replace = next((index for index in range(len(examples) - 1, -1, -1)
+                            if examples[index] not in protected), None)
+            if replace is not None:
+                examples[replace] = representative_case
     protected_steps = [2 if example is representative and example.get('_repeat_requested_steps') == 2 else 1
                        for example in examples] if loop_only else [1 for example in examples]
     for example in examples:
-        for key in ('_anchor_success', '_strict_success', '_reviewed_loops', '_repeat_requested_steps'):
+        for key in ('_task_id', '_anchor_success', '_strict_success', '_reviewed_loops', '_repeat_requested_steps'):
             example.pop(key, None)  # Local ranking only; the public contract is unchanged.
     counts = {pair[0]: value for pair, value in local['source_counts'].items() if pair[0] in approved}
     related, observed_context = set(counts), set()
@@ -5792,6 +5805,24 @@ def _save_development_ablation(controller, target, label, local, artifact, pair,
     controller.save(target.with_name('manifest.json'), manifest)
     controller.save(controller.TRAINING / 'seed-compile-status.json', diagnostic)
     return artifact
+
+
+def _final_saved_result_diagnostic(artifact, diagnostic):
+    """Stage qualification is not proof that the final candidate retained a source."""
+    status = diagnostic.get('saved_result_learning')
+    if not isinstance(status, dict) or not isinstance(status.get('qualified_sources'), list):
+        return
+    options = artifact['policy']['options']
+    refs = (artifact.get('agent', {}).get('appworld_options') or {}).get('l1_saved_result_experiences') or []
+    approved = options.get('approved_experiences') or []
+    disabled = options.get('disabled_injections') or []
+    retained = {ref['memory_id'] for ref in refs if isinstance(ref, dict)
+                and ref in approved and ref not in disabled}
+    before = set(status['qualified_sources'])
+    status['qualified_sources'] = sorted(before & retained)
+    status['removed_sources'] = sorted(set(status.get('removed_sources') or []) | (before - retained))
+    status['status'] = ('retained_in_final_artifact' if status['qualified_sources']
+                        else 'not_retained_in_final_artifact')
 
 
 def freeze_seed(controller, *, label='seed0', memory_path=None):
@@ -6001,6 +6032,7 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
             if artifact == development['anchor']['artifact'] else 'single_source_bound_control_or_l1_condition')
         diagnostic['compiled_rules'] = {name: len(policy['options'].get(name, []))
             for name in ('action_rules', 'loop_rules', 'schedule_rules')}
+    _final_saved_result_diagnostic(artifact, diagnostic)
     if target.exists() and controller.read(target) != artifact:
         raise RuntimeError('frozen_seed_cannot_be_overwritten')
     controller.save(target, artifact)

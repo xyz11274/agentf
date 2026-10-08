@@ -7152,3 +7152,65 @@ def test_paid_incremental_batches_reject_source_withdrawal_or_changed_receipt(tm
         learning.generate_english_triggers(c,policy,set(),{'english_trigger_learning':previous})
     specific.assert_not_called();paid.assert_not_called()
     assert previous['model_calls']==3
+
+
+def test_development_representatives_keep_failed_max_loop_and_successful_repeat(tmp_path,monkeypatch):
+    import learning
+    c,authority,target,search,path,native,mid,latest=_development100_fixture(tmp_path,monkeypatch)
+    local=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    failed=max((x for x in local['failure_examples'] if not x['_strict_success']),key=lambda x:x['_reviewed_loops'])
+    assert failed['_reviewed_loops']==5 and failed['_task_id']=='validation-0'
+    successful=max((x for x in local['failure_examples'] if x['_strict_success']),key=lambda x:x['_reviewed_loops'])
+    failed['steps']=[{'requested_api':'apis.gmail.show_category_sizes','parameter_names':[],
+        'status':'code_block_failed','evidence_basis':'requested_code','error_code':'appworld_auth_401','applied_before':[]}]
+    successful['steps']=[{'requested_api':'apis.api_docs.show_api_doc','parameter_names':['api_name'],
+        'status':'code_block_completed','evidence_basis':'requested_code','error_code':None,'applied_before':[]}]*2
+    successful['_repeat_requested_steps']=2
+    packet=learning._development_public_feedback(local,latest['policy'],[])
+    selected=[x['steps'][0]['requested_api'] for x in packet['failure_examples']]
+    assert 'apis.gmail.show_category_sizes' in selected and 'apis.api_docs.show_api_doc' in selected
+    assert len(packet['failure_examples'])==4 and len(json.dumps(packet).encode())<=4096
+    assert packet['tasks']==100 and not any(key in json.dumps(packet) for key in ('_task_id','validation-'))
+
+
+def test_development_regression_formal_loop_ties_sort_by_private_task_id():
+    import learning
+    def example(task,loops,method):
+        return {'_task_id':task,'_strict_success':False,'_reviewed_loops':loops,'_repeat_requested_steps':0,
+            '_anchor_success':True,'was_l0_success':True,'goal_completed':False,'termination_reason':'other',
+            'applied_source_ids':[],'steps':[{'requested_api':method,'parameter_names':[],
+            'status':'code_block_failed','evidence_basis':'requested_code','error_code':'appworld_auth_401','applied_before':[]}]}
+    rows=[example('z',0,'apis.gmail.show_profile'),example('b',3,'apis.gmail.show_category_sizes'),
+        example('a',3,'apis.gmail.show_inbox_threads'),example('y',1,'apis.gmail.show_outbox_threads'),
+        example('x',5,'apis.gmail.show_account')]
+    local={'latest':{'tasks':32},'failure_examples':rows,'source_counts':{}}
+    policy={'snapshot':{'experiences':[]},'options':{'approved_experiences':[]}}
+    first=learning._development_public_feedback(local,policy,[])
+    local['failure_examples']=list(reversed(rows))
+    second=learning._development_public_feedback(local,policy,[])
+    assert first==second
+    assert [row['steps'][0]['requested_api'] for row in first['failure_examples']]==[
+        'apis.gmail.show_account','apis.gmail.show_inbox_threads','apis.gmail.show_category_sizes','apis.gmail.show_outbox_threads']
+    assert '_task_id' not in json.dumps(first)
+
+
+@pytest.mark.parametrize('final_state',['retained','anchor_removed','withdrawn','disabled','wrong_revision'])
+def test_saved_result_diagnostic_tracks_only_final_artifact_retention(final_state):
+    import learning
+    ref={'memory_id':'saved-source','content_revision':'r1'}
+    artifact={'agent':{'appworld_options':{'l1_saved_result_experiences':[copy.deepcopy(ref)]}},
+        'policy':{'options':{'approved_experiences':[ref],'disabled_injections':[]}}}
+    diagnostic={'saved_result_learning':{'status':'source_train_host_replayed','model_calls':0,
+        'qualified_sources':['saved-source'],'removed_sources':['previously-rejected'],
+        'evidence_kind':'native_host_matching_replay_not_historical_application_or_quality'}}
+    if final_state=='anchor_removed':artifact['agent']['appworld_options']={}
+    elif final_state=='withdrawn':artifact['policy']['options']['approved_experiences']=[]
+    elif final_state=='disabled':artifact['policy']['options']['disabled_injections']=[ref]
+    elif final_state=='wrong_revision':artifact['agent']['appworld_options']['l1_saved_result_experiences'][0]['content_revision']='r2'
+    original=copy.deepcopy(artifact)
+    learning._final_saved_result_diagnostic(artifact,diagnostic)
+    status=diagnostic['saved_result_learning'];retained=final_state=='retained'
+    assert status['qualified_sources']==(['saved-source'] if retained else [])
+    assert status['removed_sources']==(['previously-rejected'] if retained else ['previously-rejected','saved-source'])
+    assert status['status']==('retained_in_final_artifact' if retained else 'not_retained_in_final_artifact')
+    assert status['model_calls']==0 and artifact==original
