@@ -5737,7 +5737,8 @@ def _development_anchor_candidate(controller, artifact, local):
     for override in proposed_options.get('experience_overrides', []):
         ref = override.get('source_experience') or {}
         mid, pair = ref.get('memory_id'), (ref.get('memory_id'), ref.get('content_revision'))
-        if (pair not in approved or mid not in local.get('observed_context_sources', set())
+        saved_result = override.get('trigger_pattern') == 'saved_public_collection_result undisplayed_api_assignment'
+        if (pair not in approved or (mid not in local.get('observed_context_sources', set()) and not saved_result)
                 or any(row.get('source_experience') == ref and row == override
                        for row in base_options.get('experience_overrides', []))):
             continue
@@ -5763,12 +5764,29 @@ def _development_anchor_candidate(controller, artifact, local):
         if compiled.get('options') != options or compiled.get('snapshot') != artifact['policy']['snapshot']:
             raise RuntimeError('appworld_development_feedback_anchor_invalid')
         candidate = deepcopy(anchor); candidate['policy'] = compiled
+        # A dedicated saved-result trigger needs its exact Host window as well
+        # as its native override. Preserve the elite's other execution options.
+        if saved_result:
+            supplied = ((artifact.get('agent') or {}).get('appworld_options') or {}).get('l1_saved_result_experiences') or []
+            if (ref not in supplied or set(ref) != {'memory_id', 'content_revision'}
+                    or ref in proposed_options.get('disabled_injections', [])):
+                continue
+            agent_options = candidate.setdefault('agent', {}).setdefault('appworld_options', {})
+            retained = deepcopy(agent_options.get('l1_saved_result_experiences') or [])
+            if ref not in retained:
+                if len(retained) >= 4:
+                    continue
+                retained.append(deepcopy(ref))
+            agent_options['l1_saved_result_experiences'] = retained
         training = getattr(controller, '_seed_development_training_feedback', None)
         if training is None:
             continue
         sources = _english_trigger_sources(controller, compiled, training,
             candidate_artifact=candidate, prevention_compilation=True)
         if mid not in sources:
+            continue
+        if saved_result and not (sources[mid].get('saved_result_training_support')
+                                 and sources[mid].get('saved_result_qualification')):
             continue
         try:
             verified = _compile_english_triggers(controller, compiled,
@@ -5779,6 +5797,12 @@ def _development_anchor_candidate(controller, artifact, local):
             continue
         if verified['options'] != compiled['options'] or verified['snapshot'] != compiled['snapshot']:
             raise RuntimeError('appworld_development_feedback_anchor_invalid')
+        if saved_result:
+            # Replay the whole final competitor/once/advice-budget configuration;
+            # a phase qualified in the fresh proposal alone is insufficient.
+            checked = _compile_seed_saved_result_sources(controller, candidate, {})
+            if checked != candidate:
+                continue
         if controller.version(candidate) not in local['seen_versions']:
             return candidate
     return deepcopy(anchor)  # Effective abstention; existing duplicate handling preserves paid receipts.

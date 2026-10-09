@@ -7214,3 +7214,109 @@ def test_saved_result_diagnostic_tracks_only_final_artifact_retention(final_stat
     assert status['removed_sources']==(['previously-rejected'] if retained else ['previously-rejected','saved-source'])
     assert status['status']==('retained_in_final_artifact' if retained else 'not_retained_in_final_artifact')
     assert status['model_calls']==0 and artifact==original
+
+def _development_saved_result_anchor_fixture(tmp_path, monkeypatch):
+    learning, c, policy, query, _ = _native_experience_rendering_fixture(tmp_path,
+        content='保存已返回的结果变量，随后print变量及type(...).__name__，不要再次调用API；无stdout不等于失败。',
+        trigger='需要展示已保存的API返回结果时')
+    c.SCOPE=policy['snapshot']['experiences'][0]['target_scope']; c.TRAINING=tmp_path/'training';c.OWNER='fixture-user'
+    c.read=lambda path:json.loads(Path(path).read_text());c.WORLD=ROOT/'examples/agent/business-simulator/appworld/runtime/world'
+    c.version=lambda artifact:c.native(c.BINARY,c.ROOT,['artifact-version'],artifact)
+    card=policy['snapshot']['experiences'][0];mid=card['memory_id'];ref={k:card[k] for k in ('memory_id','content_revision')}
+    memory=json.loads((tmp_path/'memory.json').read_text())
+    memory['entries'][0]['candidate']['support_evidence'][0]['source']['conversation_id']='fixture-conversation'
+    canonical=c.TRAINING/'evolution/by-user'/c.OWNER/'memory/evolution-memory.json';save(canonical,memory)
+    _, _, _, trace = _saved_result_training_case(tmp_path)
+    trace['identity']=copy.deepcopy(query['advice_query']['identity'])
+    anchor={'schema_version':1,'user_id':'fixture-user','level':'L3','policy':copy.deepcopy(policy),'agent':{'name':'fixture-agent','revision':'fixture-v1','appworld_options':{'l1_window_mode':'observed_phase_v3','existing_setting':'kept'}}}
+    options=copy.deepcopy(policy['options']);options['experience_overrides']=[{'source_experience':ref,
+        'content':card['content'],'trigger_pattern':'saved_public_collection_result undisplayed_api_assignment'}]
+    fresh=copy.deepcopy(anchor);fresh['policy']=json.loads(c.native(c.BINARY,c.ROOT,['runtime','recompile'],{'policy':policy,'options':options}))
+    fresh['agent']['appworld_options']['l1_saved_result_experiences']=[copy.deepcopy(ref)]
+    fresh['agent']['appworld_options']['unrelated_fresh_setting']='must_not_replace_elite'
+    feedback={'local_source_evidence':{'fixture-run':{'identity':trace['identity']}}}
+    c._seed_development_training_feedback=feedback;c._seed_saved_result_feedback=feedback
+    captured=[]
+    def sources_for_candidate(controller,current,feedback,*,candidate_artifact,prevention_compilation=False):
+        replay_options=learning._candidate_l1_replay_options(c,current,candidate_artifact)
+        task='Inspect the saved Amazon wish list.'
+        causal={'system':'Generate Python code for the task.','turn':1,'messages':[
+            {'role':'assistant','content':'token = prepared_token'},
+            {'role':'user','content':'Execution successful.'},
+            {'role':'assistant','content':'saved = apis.amazon.show_wish_list(access_token=token)'},
+            {'role':'user','content':'Execution successful.'}]}
+        execution='fixture-world-model:1'; packet=learning._candidate_l1_replay_packet(c,replay_options,causal,task,execution,
+            'fixture-run','L3',messages=causal['messages'])
+        sources=learning._EnglishTriggerSources();sources.candidate_replay_options=replay_options
+        sources.runtime_runs={'fixture-run':[]};sources.runtime_source_evidence=copy.deepcopy(feedback['local_source_evidence'])
+        if packet and packet.get('apply_policy'):
+            state=learning._l1_bound(learning._l1_bound(packet['state'],{}),{})
+            refs=packet['extensions'].get('runtime_experience_allowlist')
+            if refs is not None:state=json.dumps({'retrieval_state':state,'runtime_experience_allowlist':refs})
+            point=copy.deepcopy(query);point['execution_id']=execution
+            point['advice_query'].update(query_id='after-save',decision_id='after-save',task=task,state=state)
+            sources.runtime_runs['fixture-run'].append(point)
+            sources.runtime_replay_inputs[('fixture-run','after-save')]={'causal':causal,'instruction':task,
+                'execution_id':execution,'level':'L3','messages':causal['messages'],'completed_model':True}
+            sources[mid]={'experience':card,'evidence':[{'run_id':'fixture-run','query_id':'after-save','state':state,
+                'task':task,'pre_action_eligible':True}],
+                'saved_result_training_support':learning._saved_result_training_support(c,card,trace,{'saved','displayed'}),
+                'saved_result_qualification':ref in (replay_options.get('appworld_saved_result_experiences') or {}).get('refs',[])}
+        captured.append((copy.deepcopy(candidate_artifact),sources));return sources
+    monkeypatch.setattr(learning,'_english_trigger_sources',sources_for_candidate)
+    local={'anchor':{'artifact':anchor},'observed_context_sources':set(),'seen_versions':{c.version(anchor)}}
+    return learning,c,anchor,fresh,local,card,ref,captured
+
+
+def test_development_saved_result_anchor_retains_exact_phase_and_native_application(tmp_path, monkeypatch):
+    learning,c,anchor,fresh,local,card,ref,captured=_development_saved_result_anchor_fixture(tmp_path,monkeypatch)
+    originals=(copy.deepcopy(anchor),copy.deepcopy(fresh))
+    result=learning._development_anchor_candidate(c,fresh,local)
+    assert result!=anchor and c.version(result) not in local['seen_versions']
+    assert result['agent']['appworld_options']=={**anchor['agent']['appworld_options'],'l1_saved_result_experiences':[ref]}
+    assert result['policy']['snapshot']==fresh['policy']['snapshot']
+    assert result['policy']['options']==fresh['policy']['options']
+    assert captured[-1][0]==result and len(captured)>=2
+    profile=learning._native_l1_profile(c,result['policy'],captured[-1][1])
+    assert profile[('fixture-run','after-save')]=={card['memory_id']}
+    assert any(row['count_after']>row['count_before'] for row in captured[-1][1].runtime_replay_profile['fixture-run'])
+    assert (anchor,fresh)==originals
+
+
+@pytest.mark.parametrize('fault',['wrong_revision','unqualified_phase','unapproved','disabled','uncited_training','final_competitor_rejects'])
+def test_development_saved_result_anchor_rejects_unbound_or_final_unapplied_phase(tmp_path,monkeypatch,fault):
+    learning,c,anchor,fresh,local,card,ref,captured=_development_saved_result_anchor_fixture(tmp_path,monkeypatch)
+    if fault=='wrong_revision':fresh['agent']['appworld_options']['l1_saved_result_experiences'][0]['content_revision']='other-revision'
+    elif fault=='unqualified_phase':fresh['agent']['appworld_options'].pop('l1_saved_result_experiences')
+    elif fault=='unapproved':fresh['policy']['options']['approved_experiences']=[]
+    elif fault=='disabled':
+        options=copy.deepcopy(fresh['policy']['options']);options['disabled_injections']=[ref]
+        fresh['policy']=json.loads(c.native(c.BINARY,c.ROOT,['runtime','recompile'],{'policy':fresh['policy'],'options':options}))
+    elif fault=='uncited_training':monkeypatch.setattr(learning,'_saved_result_training_support',lambda *args:False)
+    else:
+        compile_final=learning._compile_seed_saved_result_sources
+        def rejects(controller,candidate,diagnostic):
+            # Exercise the real final Host replay on a changed contrast, not a fabricated passed profile.
+            source_factory=learning._english_trigger_sources
+            def contrast(*args,**kwargs):
+                sources=source_factory(*args,**kwargs)
+                for queries in sources.runtime_runs.values():
+                    for point in queries:point['advice_query']['state']='No saved collection result in this contrast.'
+                return sources
+            with monkeypatch.context() as nested:
+                nested.setattr(learning,'_english_trigger_sources',contrast)
+                return compile_final(controller,candidate,diagnostic)
+        monkeypatch.setattr(learning,'_compile_seed_saved_result_sources',rejects)
+    original=copy.deepcopy(anchor)
+    result=learning._development_anchor_candidate(c,fresh,local)
+    assert result==anchor==original
+    assert 'l1_saved_result_experiences' not in result['agent']['appworld_options']
+
+
+def test_development_saved_result_anchor_preserves_other_options_and_deduplicates(tmp_path,monkeypatch):
+    learning,c,anchor,fresh,local,card,ref,captured=_development_saved_result_anchor_fixture(tmp_path,monkeypatch)
+    result=learning._development_anchor_candidate(c,fresh,local)
+    local['seen_versions'].add(c.version(result))
+    assert learning._development_anchor_candidate(c,fresh,local)==anchor
+    assert anchor['policy']['options'].get('loop_rules',[])==result['policy']['options'].get('loop_rules',[])
+    assert anchor['policy']['options'].get('action_rules',[])==result['policy']['options'].get('action_rules',[])

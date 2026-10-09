@@ -8,6 +8,8 @@
 
 北京时间08:21：最窄Host修复已安装，生产定向11项PASS（含官方原107编码复现、健康日志不变、未知错误不吞、真实LocalEvolution failed action后run.closed/capture_complete）。仅日志副本对Ellipsis用类型标记；真实参数、DB、正常失败观察和费用原样保留，未知World异常补failed action.after后原异常继续抛。业务路径未安装此适配，评分冻结。未来GEPA命令文件字节身份按原保护，不绕已有job来源。当前A16正常生成不打断。算法另已确证anchor仅替policy会丢所选来源的TRAIN-qualified saved-result启用配置，正在最窄修复，尚未安装/宣称收益。
 
+北京时间08:33：算法最窄修复已安装，生产8新项＋1付费pending恢复项共9PASS；真实4b5 TRAIN cited69/115的单支持run复放中，最终同artifact Host/native命中event86，0模型/Agent，不冒称重放134或性能收益。泛化saved-result来源不再错误要求正文硬含具体API名；仍须exact fresh批准引用、revision、非disabled、TRAIN支持及Host阶段资格，只合入该引用，父其它执行选项保持。最终组合重新核全部相关run中的竞争、once/cache和3advice预算。A16旧控制进程正常冻结为与A13-2同版，自动不重复评测；A16-2新增生成0模型，仅禁用f7ea的L1，目前16路32正常评测。一次更新加载保护检查因阶段已变化拒绝，未发送信号、未中断Agent；旧控制进程尚未加载新算法，等健康评测闭合后的safe seed边界。
+
 ## 当前修复状态（北京时间 2026-10-09 08:04）
 
 交付目标：一条命令自动完成训练、经验入库、seed的32/100题验证、GEPA迭代、500题对照及发布；正常网络、模型和裁判临时故障由程序自动恢复，不采用连续五次失败停机规则。任何永久权限、来源或契约错误须明确报告，不能伪造成功或无限管理空转。单元测试通过不等于长期运行已经证明。
