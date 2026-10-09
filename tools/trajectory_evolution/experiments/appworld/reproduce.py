@@ -2678,7 +2678,15 @@ def _run_all_with_seed_search(seed: Path, label: str, **budget_arguments) -> dic
                 try:
                     for key in keys:
                         os.environ.pop(key, None)
-                    os.environ['APPWORLD_REGENERATE_CONTROLS'] = '1'
+                    reuse = (generation.get('generation_feedback') or {}).get('control_source_reuse')
+                    if reuse is not None:
+                        source = _spent_control_reuse_source(generation, search)
+                        if source is None:
+                            raise RuntimeError('appworld_spent_control_reuse_source_invalid')
+                        os.environ['APPWORLD_ENGLISH_TRIGGERS'] = '1'
+                        os.environ['APPWORLD_ENGLISH_TRIGGERS_FROM'] = source.parent.name
+                    else:
+                        os.environ['APPWORLD_REGENERATE_CONTROLS'] = '1'
                     _run_common_all(seed, label, stop_at='seed', **budget_arguments)
                 finally:
                     for key, value in previous.items():
@@ -2717,6 +2725,11 @@ def _run_all_with_seed_search(seed: Path, label: str, **budget_arguments) -> dic
                           'seed': str(next_seed), 'seed_label': next_label,
                           'source_seed': str(seed.resolve()), 'source_attempt': failed['attempt'],
                           'method': 'approved_training_native_seed'}
+            prior = (search.get('automatic_seed_generation') or {}).get('generation_feedback') or {}
+            if prior.get('control_source_reuse') is not None:
+                if _spent_control_reuse_source(search['automatic_seed_generation'], search) is None:
+                    raise RuntimeError('appworld_spent_control_reuse_source_invalid')
+                generation['generation_feedback'] = {'control_source_reuse': prior['control_source_reuse']}
             search.update(current_seed=str(next_seed), automatic_seed_generation=generation)
             _save_search(search)
             seed, label = next_seed, next_label
@@ -3114,8 +3127,125 @@ def _reserve_after_duplicate_generation() -> tuple[Path, str]:
         'method': 'approved_training_native_seed',
         'duplicate_feedback': {'candidate': generation['seed'],
                                'duplicate_of': generation.get('duplicate_of')}})
+    reuse = (generation.get('generation_feedback') or {}).get('control_source_reuse')
+    if reuse is not None:
+        if _spent_control_reuse_source(generation, search) is None:
+            raise RuntimeError('appworld_spent_control_reuse_source_invalid')
+        search['automatic_seed_generation']['generation_feedback'] = {'control_source_reuse': reuse}
     _save_search(search)
     return candidate, label
+
+
+def _qualified_spent_control_source(source: Path, diagnostic: dict) -> bool:
+    """Prove the existing frozen controls against current TRAIN, without a model."""
+    from learning import _readiness
+    try:
+        artifact = _read(source)
+        policy = artifact.get('policy') or {}
+        snapshot = policy.get('snapshot') or {}
+        options = policy.get('options') or {}
+        manifest = _read(source.with_name('manifest.json'))
+        identity = snapshot.get('identity') or {}
+        shadow = snapshot.get('options') or {}
+        if (artifact.get('schema_version') != 1 or artifact.get('level') != 'L3'
+                or artifact.get('user_id') != _APPWORLD_LAYOUT.OWNER
+                or (artifact.get('agent') or {}).get('name') != _APPWORLD_LAYOUT.AGENT
+                or identity.get('user_id') != _APPWORLD_LAYOUT.OWNER
+                or identity.get('agent_id') != _APPWORLD_LAYOUT.AGENT
+                or shadow.get('require_validated_evidence') is not True
+                or shadow.get('target_scopes') != [_APPWORLD_LAYOUT.SCOPE]
+                or manifest.get('validated_evidence_required') is not True
+                or not isinstance(manifest.get('version'), str)
+                or _APPWORLD_LAYOUT.version(artifact) != manifest['version']
+                or diagnostic.get('scope') != _APPWORLD_LAYOUT.SCOPE
+                or diagnostic.get('published') is not False
+                or (diagnostic.get('evidence_refresh') or {}).get('status') != 'completed'
+                or (diagnostic.get('evidence_refresh') or {}).get('model_calls') != 0):
+            return False
+        memory = _readiness(_APPWORLD_LAYOUT).resolve()
+        if (not memory.is_file() or diagnostic.get('canonical_memory_source') != str(memory)
+                or diagnostic.get('memory_source') != str(memory)):
+            return False
+        approved = {(row['memory_id'], row['content_revision']) for row in options.get('approved_experiences', [])}
+        cards = {(row['memory_id'], row['content_revision']): row for row in snapshot.get('experiences', [])}
+        learned = [rule for name in ('action_rules', 'loop_rules', 'schedule_rules')
+                   for rule in options.get(name, []) if rule.get('source_experience')]
+        if (not approved or not learned or not approved.issubset(cards)
+                or any((rule['source_experience'].get('memory_id'),
+                        rule['source_experience'].get('content_revision')) not in approved for rule in learned)):
+            return False
+        current = json.loads(_APPWORLD_LAYOUT.native(_APPWORLD_LAYOUT.BINARY, _APPWORLD_LAYOUT.ROOT,
+            ['runtime', 'compile'], {'memory_path': str(memory), 'identity': identity,
+                                    'shadow_options': shadow, 'options': options}))
+        actual = {(row['memory_id'], row['content_revision']): row
+                  for row in current.get('snapshot', {}).get('experiences', [])}
+        return (current.get('options') == options and all(actual.get(ref) == cards[ref] for ref in approved))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        return False
+
+
+def _spent_control_model_calls(control: dict) -> int | None:
+    """A fixed local rejection can spend three replies, or two empty replies."""
+    if not isinstance(control, dict):
+        return None
+    calls, attempts = control.get('model_calls'), control.get('attempts')
+    if (type(calls) is not int or calls not in (2, 3)
+            or control.get('validated_model_draft') is not None
+            or control.get('status') not in {'format_repair_exhausted', 'pending', 'no_controls'}
+            or not isinstance(attempts, list)
+            or any(not isinstance(row, dict) or row.get('status') not in
+                   {'format_invalid', 'native_contract_rejected', 'no_controls'} for row in attempts)
+            or control.get('evidence_fallback') != {
+                'status': 'insufficient_evidence',
+                'reason': 'appworld_evidence_recovery_no_cited_failure_pair', 'model_calls': 0}):
+        return None
+    if calls == 2:
+        if (control.get('status') != 'no_controls' or len(attempts) != 2
+                or any(row.get('status') != 'no_controls' for row in attempts)):
+            return None
+    elif len(attempts) < 3:
+        return None
+    return calls
+
+
+def _spent_control_reuse_source(generation: dict, search: dict) -> Path | None:
+    """An archived rejection grants only reuse of its still-authorized controls."""
+    reuse = (generation.get('generation_feedback') or {}).get('control_source_reuse')
+    if not isinstance(reuse, dict) or set(reuse) != {'candidate', 'source_seed'}:
+        return None
+    source = generation.get('source_seed')
+    records = [row for row in search.get('generation_history', [])
+               if row.get('seed') == reuse.get('candidate')]
+    if (not isinstance(source, str) or not isinstance(reuse.get('source_seed'), str) or len(records) != 1):
+        return None
+    original = records[0]
+    diagnostic = original.get('seed_generation_diagnostic') or {}
+    control = diagnostic.get('control_learning') or {}
+    calls = _spent_control_model_calls(control)
+    if (original.get('status') != 'unsupported' or original.get('source_seed') != reuse['source_seed']
+            or original.get('reason') not in {'appworld_seed_control_format_repair_exhausted',
+                                             'appworld_evidence_recovery_no_cited_failure_pair'}
+            or diagnostic.get('seed_label') != Path(reuse['candidate']).parent.name
+            or calls is None
+            or calls == 2 and original.get('reason') != 'appworld_evidence_recovery_no_cited_failure_pair'
+            or not _qualified_spent_control_source(Path(source).resolve(), diagnostic)):
+        return None
+    current = Path(source).resolve()
+    from learning import validate_seed_label
+    try:
+        validate_seed_label(current.parent.name)
+    except ValueError:
+        return None
+    if current != (OUTPUT / 'published' / current.parent.name / 'strategy.json').resolve():
+        return None
+    # A formally failed English candidate still owns the same legal control
+    # bottom layer. Scores do not invalidate its source or grant new controls.
+    before = (_read(Path(reuse['source_seed'])).get('policy') or {}).get('options') or {}
+    after = (_read(current).get('policy') or {}).get('options') or {}
+    if any(before.get(name, []) != after.get(name, [])
+           for name in ('action_rules', 'loop_rules', 'schedule_rules')):
+        return None
+    return Path(source).resolve()
 
 
 def _unavailable_seed_generation_checkpoint(error: Exception, state: dict) -> dict | None:
@@ -3127,8 +3257,11 @@ def _unavailable_seed_generation_checkpoint(error: Exception, state: dict) -> di
     saved_reason = str(saved.get('reason', ''))
     if saved_reason.startswith('RuntimeError:'):
         saved_reason = saved_reason[len('RuntimeError:'):]
-    if (reason != 'appworld_english_trigger_no_evidence_supported_fallback'
-            or state.get('phase') != 'seed' or saved.get('status') != 'failed'
+    if (reason not in {'appworld_english_trigger_no_evidence_supported_fallback',
+                      'appworld_seed_control_format_repair_exhausted',
+                      'appworld_evidence_recovery_no_cited_failure_pair'}
+            or state.get('phase') != 'seed' or state.get('cancel_requested')
+            or state.get('status') == 'cancelled' or saved.get('status') != 'failed'
             or saved_reason != reason):
         return None
     # The inner seed-search loop can advance several labels before failing;
@@ -3158,8 +3291,23 @@ def _unavailable_seed_generation_checkpoint(error: Exception, state: dict) -> di
     english = diagnostic.get('english_trigger_learning') or {}
     fallback = english.get('evidence_fallback') or {}
     if (diagnostic.get('seed_label') != label
-            or diagnostic.get('validated_evidence_required') is not True
-            or type(english.get('model_calls')) is not int or english['model_calls'] != 3
+            or diagnostic.get('validated_evidence_required') is not True):
+        return None
+    import re
+    spent_control = reason != 'appworld_english_trigger_no_evidence_supported_fallback'
+    if spent_control:
+        last_error = state.get('last_error')
+        stop = state.get('stop_reason')
+        if (last_error not in (None, reason, 'RuntimeError:' + reason)
+                or stop not in (None, 'appworld_stage_failed', reason, 'RuntimeError:' + reason)
+                and not re.fullmatch(r'stage_gate_not_passed:(?:pilot32|validation100)', str(stop))):
+            return None
+        control = diagnostic.get('control_learning') or {}
+        calls = _spent_control_model_calls(control)
+        if (calls is None or calls == 2
+                and reason != 'appworld_evidence_recovery_no_cited_failure_pair'):
+            return None
+    elif (type(english.get('model_calls')) is not int or english['model_calls'] != 3
             or fallback.get('status') != 'no_native_valid_trigger'
             or fallback.get('model_calls') != 0):
         return None
@@ -3174,8 +3322,11 @@ def _unavailable_seed_generation_checkpoint(error: Exception, state: dict) -> di
     if (source == seed or source != (OUTPUT / 'published' / source.parent.name / 'strategy.json').resolve()
             or not _read(source)):
         return None
+    if spent_control and not _qualified_spent_control_source(source, diagnostic):
+        return None
     return {'seed': str(seed), 'source_seed': str(source), 'generation': generation,
-            'search': search, 'reason': reason}
+            'search': search, 'reason': reason, 'spent_control': spent_control,
+            'model_calls': calls if spent_control else english['model_calls']}
 
 
 def _continue_unavailable_seed_generation(seed: Path, error: Exception, state: dict) -> tuple[Path, str] | None:
@@ -3204,7 +3355,11 @@ def _continue_unavailable_seed_generation(seed: Path, error: Exception, state: d
         'seed_label': next_label, 'source_seed': str(source),
         'source_attempt': generation.get('source_attempt'), 'method': 'approved_training_native_seed',
         'generation_feedback': {'candidate': str(seed), 'reason': reason,
-                                'model_calls': 3}})
+                                'model_calls': checkpoint['model_calls']}})
+    reuse = ({'candidate': str(seed), 'source_seed': str(source)} if checkpoint['spent_control']
+             else (generation.get('generation_feedback') or {}).get('control_source_reuse'))
+    if reuse is not None:
+        search['automatic_seed_generation']['generation_feedback']['control_source_reuse'] = reuse
     _save_search(search)
     return candidate, next_label
 

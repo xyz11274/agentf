@@ -5530,13 +5530,48 @@ def _development_seed_feedback(controller, target, label, snapshot):
             anchor = value
     authority = {(card['memory_id'], card['content_revision']): card for card in snapshot.get('experiences', [])}
     reports = {}
+    latest_rows = _development_trial_rows(controller, latest, reports)
     latest_counts, examples = _development_observations(controller, latest,
-        _development_trial_rows(controller, latest, reports), authority, anchor['current'])
+        latest_rows, authority, anchor['current'])
     anchor_counts, _ = _development_observations(controller, anchor,
         _development_trial_rows(controller, anchor, reports), authority)
     local = {'latest': latest, 'anchor': anchor, 'anchor_counts': anchor_counts,
         'source_counts': latest_counts, 'failure_examples': examples,
-        'seen_versions': set()}
+        'seen_versions': set(), 'priority_evidence': [
+            {'scope': 'latest', 'evidence': latest, 'rows': latest_rows}]}
+    if count == 32:
+        # A later 32 gate does not erase an earlier complete 100 gate. Keep
+        # its source and formal outcomes separate, solely for proposal order.
+        historical = []
+        latest_report = controller.read(latest['comparison'])
+        for previous in search.get('attempts') or []:
+            if previous.get('round', 1) != search.get('round', 1):
+                continue
+            reference = previous.get('validation_comparison')
+            if (not isinstance(reference, str) or not Path(reference).resolve().is_relative_to(controller.GEPA.resolve())
+                    or not Path(reference).is_file()):
+                continue
+            if controller.read(Path(reference)).get('status') != 'complete':
+                continue
+            try:
+                value = _verified_development_seed(controller, previous, count=100)
+                report = controller.read(value['comparison'])
+                if (report.get('host_version') != latest_report.get('host_version')
+                        or report.get('judge_projection') != latest_report.get('judge_projection')):
+                    continue
+                prior_cards = {(card['memory_id'], card['content_revision']): card
+                    for card in value['artifact']['policy']['snapshot'].get('experiences', [])}
+                prior_refs = value['artifact']['policy']['options'].get('approved_experiences') or []
+                if not prior_refs or any(pair not in authority or prior_cards.get(pair) != authority[pair]
+                        for pair in ((ref['memory_id'], ref['content_revision']) for ref in prior_refs)):
+                    continue
+                historical.append(value)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                continue  # Invalid historical evidence never supplies an opportunity.
+        if historical:
+            preserved = max(historical, key=lambda value: (value['rank'], str(value['comparison'])))
+            local['priority_evidence'].append({'scope': 'complete100', 'evidence': preserved,
+                'rows': _development_trial_rows(controller, preserved, reports)})
     for row in search.get('attempts') or []:
         recorded_path = row.get('pilot_comparison')
         recorded = (controller.read(Path(recorded_path).with_name('progress.json')).get('artifact')
@@ -5695,6 +5730,75 @@ def _compile_development_l1_candidate(controller, local, current_snapshot):
     return None
 
 
+def _development_l1_priority(controller, artifact, local):
+    """Counterfactual Host/native opportunity orders proposals, never grades them.
+
+    Each development source stays independent. Replay whole captured model
+    chronology and the existing competing/once/cache/advice budget; an API
+    name association alone cannot establish a source-specific Host phase.
+    """
+    evidence = local.get('priority_evidence') or []
+    if not evidence:
+        return {}
+    policy = artifact['policy']
+    options = _candidate_l1_replay_options(controller, policy, artifact)
+    config = policy['snapshot'].get('options') or {}
+    result = {}
+    for source in evidence:
+        scope, view = source['scope'], source['evidence']
+        sources = _EnglishTriggerSources()
+        sources.candidate_replay_options = options
+        owners = {}
+        for task, row in source['rows'].items():
+            formal = view['current'][task]
+            if formal['strict_passed'] == 1 and formal['avg_invalid_loop'] <= 0:
+                continue
+            traces = (row.get('evidence') or {}).get('traces') or [(row.get('evidence') or {}).get('trace') or {}]
+            for trace in traces:
+                run = (trace.get('identity') or {}).get('run_id')
+                if not isinstance(run, str) or not run:
+                    continue  # Missing historical context is unknown, not positive.
+                if run in owners:
+                    raise RuntimeError('appworld_development_feedback_native_binding_invalid')
+                owners[run] = task
+                try:
+                    queries = _l1_runtime_queries(controller, policy, trace, config,
+                        candidate_options=options, candidate_level=artifact['level'],
+                        replay_inputs=sources.runtime_replay_inputs)
+                except RuntimeError as exc:
+                    if str(exc) not in ('appworld_english_trigger_model_binding_unknown',
+                                        'appworld_english_trigger_runtime_messages_missing'):
+                        raise
+                    continue
+                if queries:
+                    sources.runtime_runs[run] = queries
+        profile = _native_l1_profile(controller, policy, sources)
+        matched = {}
+        for (run, _), refs in profile.items():
+            for mid in refs:
+                matched.setdefault(mid, set()).add(owners[run])
+        for mid, tasks in matched.items():
+            # Do not add 32 and 100 counts or loop values. These fields are
+            # local proposal ranking only, never the formal feedback ledger.
+            values = [view['current'][task] for task in tasks]
+            result.setdefault(mid, {})[scope] = {
+                'tasks': view['tasks'],
+                'failed_tasks': sum(row['strict_passed'] == 0 for row in values),
+                'failed_loops': sum(row['avg_invalid_loop'] for row in values if row['strict_passed'] == 0),
+                'passed_loops': sum(row['avg_invalid_loop'] for row in values if row['strict_passed'] == 1)}
+    return result
+
+
+def _development_l1_priority_key(override, priority):
+    ref = override.get('source_experience') or {}
+    scopes = priority.get(ref.get('memory_id'), {})
+    latest, historical = scopes.get('latest', {}), scopes.get('complete100', {})
+    values = [latest.get(key, 0) for key in ('failed_tasks', 'failed_loops', 'passed_loops')]
+    values += [historical.get(key, 0) for key in ('failed_tasks', 'failed_loops', 'passed_loops')]
+    return (-int(any(values)), *(-value for value in values),
+            ref.get('memory_id', ''), ref.get('content_revision', ''))
+
+
 def _development_anchor_candidate(controller, artifact, local):
     """Protect the best same-task strategy; test at most one new TRAIN control."""
     anchor = local['anchor']['artifact']
@@ -5734,7 +5838,9 @@ def _development_anchor_candidate(controller, artifact, local):
                 raise RuntimeError('appworld_development_feedback_anchor_invalid')
             if controller.version(candidate) not in local['seen_versions']:
                 return candidate
-    for override in proposed_options.get('experience_overrides', []):
+    priority = _development_l1_priority(controller, artifact, local)
+    for override in sorted(proposed_options.get('experience_overrides', []),
+                           key=lambda row: _development_l1_priority_key(row, priority)):
         ref = override.get('source_experience') or {}
         mid, pair = ref.get('memory_id'), (ref.get('memory_id'), ref.get('content_revision'))
         saved_result = override.get('trigger_pattern') == 'saved_public_collection_result undisplayed_api_assignment'
@@ -5957,7 +6063,11 @@ def freeze_seed(controller, *, label='seed0', memory_path=None):
                 'anchor_seed': str(development['anchor']['seed']),
                 'anchor_comparison': str(development['anchor']['comparison']),
                 'scope': f"development{development['latest'].get('tasks', 32)}_proposal_guidance_only",
-                'authority': 'canonical_training_only', 'model_calls': 0}
+                'authority': 'canonical_training_only', 'model_calls': 0,
+                'proposal_priority_sources': [{'scope': item['scope'],
+                    'tasks': item['evidence']['tasks'], 'seed': str(item['evidence']['seed']),
+                    'comparison': str(item['evidence']['comparison'])}
+                    for item in development.get('priority_evidence', [])]}
             if not retained_paid:
                 ablation = _compile_development_l1_candidate(controller, development, snapshot)
                 if ablation is not None:

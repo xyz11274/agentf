@@ -7320,3 +7320,97 @@ def test_development_saved_result_anchor_preserves_other_options_and_deduplicate
     assert learning._development_anchor_candidate(c,fresh,local)==anchor
     assert anchor['policy']['options'].get('loop_rules',[])==result['policy']['options'].get('loop_rules',[])
     assert anchor['policy']['options'].get('action_rules',[])==result['policy']['options'].get('action_rules',[])
+
+
+def _development_priority_trace(identity, *, silent=True, contextual=True, api='amazon.show_wish_list'):
+    messages=[{'role':'assistant','content':'token = prepared_token'},
+        {'role':'user','content':'Execution successful.'},
+        {'role':'assistant','content':'saved = apis.'+api+'(access_token=token)'},
+        {'role':'user','content':'Execution successful.' if silent else '[already displayed result]'}]
+    causal={'system':'Generate Python code for the task.','turn':1,'messages':messages}
+    events=[{'kind':'run.start','event_id':'run-start','timestamp_us':1,'input':{'instruction':'Inspect the saved collection.'}}]
+    if contextual:
+        events.append({'kind':'step.start','event_id':'outer','step_id':'outer-step','timestamp_us':2,'input':causal})
+    events.extend([{'kind':'action.start','event_id':'model-start','action_id':'model','step_id':'model-step',
+        'execution_id':'fixture-world-model:1','actor_id':'skill_executor','kind':'action.start','timestamp_us':3,
+        'caused_by':['outer'] if contextual else [],'attributes':{'semantic':'model',
+        'request_binding':{'mode':'system_message','pointer':'/messages'}},'input':{'messages':messages}},
+        {'kind':'action.end','event_id':'model-end','action_id':'model','step_id':'model-step',
+        'execution_id':'fixture-world-model:1','timestamp_us':4,'status':'completed','attributes':{'semantic':'model'}}])
+    return {'identity':copy.deepcopy(identity),'events':events}
+
+
+@pytest.mark.parametrize('fault',[None,'already_displayed','missing_context','documentation_api'])
+def test_development_priority_requires_actual_host_saved_phase_not_api_leaf(tmp_path,monkeypatch,fault):
+    learning,c,anchor,fresh,local,card,ref,captured=_development_saved_result_anchor_fixture(tmp_path,monkeypatch)
+    identity=copy.deepcopy(fresh['policy']['snapshot']['identity']);identity['run_id']='dev-priority-run'
+    trace=_development_priority_trace(identity,silent=fault!='already_displayed',contextual=fault!='missing_context',
+        api='api_docs.show_api_doc' if fault=='documentation_api' else 'amazon.show_wish_list')
+    row={'evidence':{'trace':trace}}
+    local['priority_evidence']=[{'scope':'latest','evidence':{'tasks':32,'current':{'dev':{'strict_passed':0,'avg_invalid_loop':5}}},'rows':{'dev':row}}]
+    originals=copy.deepcopy((fresh,local));commands=[];native=c.native
+    def local_only(binary,root,args,payload):
+        commands.append(args);assert args==['runtime','query-batch'];return native(binary,root,args,payload)
+    c.native=local_only
+    priority=learning._development_l1_priority(c,fresh,local)
+    assert (fresh,local)==originals
+    if fault is None:
+        assert priority=={card['memory_id']:{'latest':{'tasks':32,'failed_tasks':1,'failed_loops':5,'passed_loops':0}}}
+        assert commands
+    else:
+        assert priority=={}
+    # The API leaf occurs in all four contrasts, but only the real Host phase qualifies.
+    assert 'show_wish_list' in json.dumps(trace) or fault=='documentation_api'
+
+
+@pytest.mark.parametrize('scope',['latest','complete100'])
+def test_development_priority_soft_order_is_stable_and_keeps_zero_opportunity_exploration(scope):
+    import learning
+    a={'source_experience':{'memory_id':'a-zero','content_revision':'r'}}
+    b={'source_experience':{'memory_id':'z-hotspot','content_revision':'r'}}
+    priority={'z-hotspot':{scope:{'tasks':32 if scope=='latest' else 100,'failed_tasks':1,'failed_loops':3,'passed_loops':0}}}
+    for rows in ([a,b],[b,a]):
+        assert sorted(rows,key=lambda row:learning._development_l1_priority_key(row,priority))==[b,a]
+    assert sorted([b,a],key=lambda row:learning._development_l1_priority_key(row,{}))==[a,b]
+
+
+@pytest.mark.parametrize('fault',[None,'partial','foreign','withdrawn','wrong_judge','scope500'])
+def test_latest32_preserves_only_independent_complete100_priority_source(tmp_path,monkeypatch,fault):
+    import learning
+    c,authority,target,search,comparison,native,mid,latest=_development100_fixture(tmp_path,monkeypatch)
+    source=search['attempts'][0]
+    search['automatic_seed_generation'].update(source_seed=source['seed'],source_attempt=source['attempt'])
+    save(c.GEPA/'status.json',{'seed_search':search})
+    if fault=='partial':
+        value=c.read(comparison);value['status']='pending';save(comparison,value)
+    elif fault=='foreign':
+        value=c.read(comparison);foreign=tmp_path/'outside/comparison.json';save(foreign,value)
+        search['attempts'][-1]['validation_comparison']=str(foreign);save(c.GEPA/'status.json',{'seed_search':search})
+    elif fault=='withdrawn':
+        value=c.read(Path(search['attempts'][-1]['seed']));value['policy']['options']['approved_experiences'][0]['content_revision']='withdrawn'
+        save(Path(search['attempts'][-1]['seed']),value)
+    elif fault=='wrong_judge':
+        value=c.read(comparison);value['judge_projection']={'model':'different'};save(comparison,value)
+    elif fault=='scope500':
+        value=c.read(comparison);value['items']*=5;save(comparison,value)
+    protected={p:p.read_bytes() for p in (comparison,native,c.GEPA/'status.json')}
+    if fault=='withdrawn':
+        with pytest.raises(RuntimeError,match='native_artifact-version_failed'):
+            learning._development_seed_feedback(c,target,'candidate-next',authority)
+        for path,before in protected.items():assert path.read_bytes()==before
+        return
+    feedback=learning._development_seed_feedback(c,target,'candidate-next',authority)
+    assert feedback['latest']['tasks']==32 and len(feedback['latest']['current'])==32
+    assert feedback['anchor']['tasks']==32
+    independent=[item for item in feedback['priority_evidence'] if item['scope']=='complete100']
+    if fault is None:
+        assert len(independent)==1 and independent[0]['evidence']['tasks']==100
+        assert len(independent[0]['rows'])==100
+        assert independent[0]['evidence']['current']['validation-99']['avg_invalid_loop']==9
+        assert feedback['latest']['current'].keys()!=independent[0]['evidence']['current'].keys()
+    else:
+        assert independent==[]
+    packet=learning._development_public_feedback(feedback,latest['policy'],[])
+    assert packet['tasks']==32 and packet['scope']=='development32_proposal_guidance_only'
+    assert 'validation-' not in json.dumps(packet) and len(json.dumps(packet).encode())<=4096
+    for path,before in protected.items():assert path.read_bytes()==before

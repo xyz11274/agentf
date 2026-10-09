@@ -5694,3 +5694,310 @@ class CompletedFinalGoalContinuationTests(unittest.TestCase):
                 self.assertEqual(reproduce._run_all_autonomously(seed,'strategy')['status'],'published')
             self.assertEqual(len(calls),2)
             self.assertEqual(len(reproduce.seed_search()['native_job_history']),1)
+
+
+class SpentControlDraftContinuationTests(unittest.TestCase):
+    @contextmanager
+    def spent_control_fixture(self, directory):
+        import copy
+        layout = reproduce._APPWORLD_LAYOUT
+        root = Path(directory)
+        binary = ROOT / 'tools/trajectory_evolution/build-v4/trajectory_evolution'
+        if not binary.is_file():
+            self.skipTest('native CLI unavailable')
+        def native(operation, value):
+            result = subprocess.run([str(binary), *operation], input=json.dumps(value),
+                capture_output=True, text=True, cwd=ROOT, timeout=20)
+            if result.returncode:
+                raise RuntimeError('fixture native rejected: ' + result.stdout + result.stderr)
+            return json.loads(result.stdout) if operation != ['artifact-version'] else result.stdout.strip()
+        scope, owner, agent = layout.SCOPE, layout.OWNER, layout.AGENT
+        memory = root / 'training/evolution/by-user' / owner / 'memory/evolution-memory.json'
+        entry = {'memory_id': 'experience-spent-source', 'status': 'EVOLUTION_MEMORY_STATUS_CANDIDATE',
+            'candidate': {'schema_version': 1, 'candidate_id': 'candidate-spent-source',
+                'generator_version': 'scoped-experience-generator-v1',
+                'target_type': 'CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION',
+                'target_scope': scope, 'status': 'EVOLUTION_CANDIDATE_STATUS_PROPOSED',
+                'trigger_pattern': 'invalid parameters recovery', 'observed_problem': 'Repeated request failure.',
+                'proposed_change': 'Correct request arguments within the existing recovery budget.',
+                'support_user_count': 1, 'support_evidence': [{'evidence_id': 'evidence-spent-source',
+                    'source': {'user_id': owner, 'dialogue_id': 'source-spent-source'},
+                    'verdict': 'SEMANTIC_VERDICT_USEFUL'}]}}
+        memory_value = {'schema_version': 1, 'store_kind': 'trajectory_evolution_memory',
+            'store_version': 'evolution-memory-store-v1', 'revision': 1, 'entries': [entry]}
+        _GEPA_REAL_SAVE(memory, memory_value)
+        identity = {'user_id': owner, 'agent_id': agent, 'conversation_id': 'evaluation-version', 'run_id': 'evaluation-version'}
+        shadow = {'target_scopes': [scope], 'max_policy_entries': 64, 'max_advice_items': 1,
+            'max_advice_bytes': 2048, 'max_query_bytes': 32768, 'max_memory_bytes': 16777216,
+            'max_snapshot_bytes': 262144, 'max_match_terms': 128, 'min_matched_terms': 2,
+            'require_validated_evidence': True}
+        snapshot = native(['shadow', 'compile'], {'memory_path': str(memory), 'identity': identity, 'options': shadow})
+        self.assertEqual(len(snapshot['experiences']), 1)
+        reference = {key: snapshot['experiences'][0][key] for key in ('memory_id', 'content_revision')}
+        base = {'rule_id': 'base-budget', 'target_scope': scope, 'max_iterations': 30,
+            'max_no_progress': 3, 'no_progress_decision': 'replan', 'max_replans': 1,
+            'replan_context': 'Correct the observed request within the existing budget.',
+            'error_codes': ['appworld_auth_401'], 'reason': 'The original bounded recovery budget.'}
+        learned = dict(base, rule_id='approved-source-recovery', max_no_progress=2,
+            source_experience=reference, match_mode='predicate', replan_on_failure=True)
+        options = {'requested_level': 'L3', 'host_capabilities': ['context.request', 'action.filter', 'loop.decide'],
+            'fallback': 'strict', 'allowed_users': [owner], 'approved_experiences': [reference],
+            'experience_template': '{{experience}}', 'max_context_bytes': 2048,
+            'loop_rules': [base]}
+        policy = native(['runtime', 'compile'], {'memory_path': str(memory), 'identity': identity,
+            'shadow_options': shadow, 'options': options})
+        policy = native(['runtime', 'control-compile'], {'policy': policy,
+            'control_learning': {'enabled': True, 'prompt_file': 'approved-control-fixture.txt', 'max_rules': 16, 'actions': {'appworld.execute': ['code']}},
+            'draft': {'action_rules': [], 'schedule_rules': [], 'loop_rules': [{
+                'memory_id': reference['memory_id'], 'max_iterations': 30, 'max_no_progress': 2,
+                'max_replans': 1, 'error_codes': ['appworld_auth_401'],
+                'replan_on_failure': True, 'reason': 'Use the approved source within the original recovery budget.'}]}})
+        source = root / 'published/strategy/strategy.json'
+        artifact = {'schema_version': 1, 'level': 'L3', 'user_id': owner,
+            'agent': {'name': agent, 'revision': 'spent-source-fixture-v1'}, 'policy': policy}
+        _GEPA_REAL_SAVE(source, artifact)
+        _GEPA_REAL_SAVE(source.with_name('manifest.json'), {'version': native(['artifact-version'], artifact),
+            'validated_evidence_required': True})
+        _GEPA_REAL_SAVE(root / 'training/runtime/runtime.json', {'prompts': {}})
+        _GEPA_REAL_SAVE(root / 'training/runtime/training-service.json', {
+            'application_id': agent, 'principals': [{'user_id': owner}],
+            'data_dir': str(root / 'training/evolution'),
+            'runtime_config': str(root / 'training/runtime/runtime.json')})
+        seed = root / 'published/seed-auto-r1-a2/strategy.json'
+        reason = 'appworld_seed_control_format_repair_exhausted'
+        state = {'status': 'blocked', 'phase': 'seed', 'stop_reason': 'appworld_stage_failed',
+            'candidate': {'seed_artifact': str(seed)}, 'stage_results': {
+                'prepare': {'status': 'complete'}, 'train': {'status': 'complete'},
+                'seed': {'status': 'failed', 'reason': 'RuntimeError:' + reason}}}
+        search = {'round': 1, 'status': 'searching', 'attempts': [], 'current_seed': str(seed),
+            'automatic_seed_generation': {'round': 1, 'status': 'pending', 'seed': str(seed),
+                'seed_label': seed.parent.name, 'source_seed': str(source), 'source_attempt': 1,
+                'method': 'approved_training_native_seed'}}
+        diagnostic = {'seed_label': seed.parent.name, 'scope': scope, 'published': False,
+            'validated_evidence_required': True, 'memory_source': str(memory),
+            'canonical_memory_source': str(memory), 'evidence_refresh': {'status': 'completed', 'model_calls': 0},
+            'control_learning': {'model_calls': 3, 'model_attempts': 3, 'status': 'format_repair_exhausted',
+                'attempts': [{'attempt': index, 'status': 'format_invalid', 'usage': {'total_tokens': index * 7}}
+                             for index in (1, 2, 3)],
+                'evidence_fallback': {'status': 'insufficient_evidence',
+                    'reason': 'appworld_evidence_recovery_no_cited_failure_pair', 'model_calls': 0}}}
+        with _isolated_gepa_outputs(root), patch.object(layout, 'TRAINING', root / 'training'), \
+             patch.object(layout, 'RUNTIME', root / 'training/runtime'), \
+             patch.object(layout, 'TRAINING_SERVICE', root / 'training/runtime/training-service.json'), \
+             patch.object(reproduce, '_CANDIDATE_STATE_LABEL', None):
+            reproduce._save_search(search)
+            _GEPA_REAL_SAVE(root / 'gepa/lifecycle.json', state)
+            _GEPA_REAL_SAVE(root / 'training/seed-compile-status.json', diagnostic)
+            protected = {source: source.read_bytes(), source.with_name('manifest.json'): source.with_name('manifest.json').read_bytes()}
+            yield root, seed, source, state, diagnostic, memory, native
+            for path, value in protected.items():
+                self.assertEqual(path.read_bytes(), value)
+
+    def test_spent_control_worker_blocked_receipt_resumes_and_preserves_paid_native_source(self):
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            before = {path: path.read_bytes() for path in root.rglob('*.json')}
+            with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(), 75)
+                with patch.object(sys, 'argv', ['reproduce.py', '--worker-resume-check']):
+                    self.assertEqual(reproduce.main(), 75)
+            with patch.object(reproduce, '_active_output_processes', return_value=[123]):
+                self.assertEqual(reproduce._worker_resume_check(), 76)
+            for path, data in before.items():
+                self.assertEqual(path.read_bytes(), data)
+            result = reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state)
+            self.assertIsNotNone(result)
+            next_seed, label = result
+            self.assertNotEqual(next_seed, seed)
+            search = reproduce.seed_search()
+            old = search['generation_history'][0]
+            self.assertEqual(old['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(old['status'], 'unsupported')
+            self.assertEqual(reproduce._spent_control_reuse_source(search['automatic_seed_generation'], search), source)
+            self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state))
+            self.assertEqual(len(reproduce.seed_search()['generation_history']), 1)
+
+    def test_spent_control_real_outer_reserves_distinct_candidate_and_uses_existing_english_entry(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            events = []
+            def common(actual, label, stop_at=None, **kwargs):
+                if actual == seed:
+                    raise RuntimeError('appworld_seed_control_format_repair_exhausted')
+                events.append((actual, stop_at))
+                if stop_at == 'seed':
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS'), '1')
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS_FROM'), source.parent.name)
+                    self.assertNotIn('APPWORLD_REGENERATE_CONTROLS', os.environ)
+                    artifact = reproduce._read(source)
+                    artifact['agent']['revision'] = 'distinct-english-fixture'
+                    reproduce._APPWORLD_LAYOUT.save(actual, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(actual.with_name('manifest.json'), {'version': native(['artifact-version'], artifact)})
+                    return {'status': 'complete', 'phase': 'seed'}
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_common_all', side_effect=common), \
+                 patch.object(reproduce, '_active_output_processes', return_value=[]), \
+                 patch.object(sys, 'argv', ['reproduce.py', '--all', '--worker-checkpoint-resume']), \
+                 patch.object(reproduce, '_experiment_status'), patch.object(reproduce.time, 'sleep') as wait, \
+                 redirect_stdout(io.StringIO()):
+                result = reproduce.main()
+            self.assertEqual(result, 0)
+            self.assertEqual([row[1] for row in events], ['seed', None])
+            self.assertEqual(reproduce.seed_search()['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(reproduce._read(root / 'training/seed-compile-status.json'), diagnostic)
+            self.assertTrue(all(call.args and call.args[0] <= .01 for call in wait.call_args_list))
+
+    def test_spent_control_duplicate_continuation_retains_original_three_call_archive(self):
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            next_seed, label = reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state)
+            search = reproduce.seed_search()
+            search['automatic_seed_generation'].update(status='duplicate', duplicate_of=str(source))
+            reproduce._APPWORLD_LAYOUT.save(next_seed, reproduce._read(source))
+            reproduce._APPWORLD_LAYOUT.save(next_seed.with_name('manifest.json'), reproduce._read(source.with_name('manifest.json')))
+            reproduce._save_search(search)
+            third, label = reproduce._reserve_after_duplicate_generation()
+            latest = reproduce.seed_search()
+            self.assertNotEqual(third, next_seed)
+            self.assertEqual(reproduce._spent_control_reuse_source(latest['automatic_seed_generation'], latest), source)
+            self.assertEqual(latest['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(latest['automatic_seed_generation']['generation_feedback']['control_source_reuse']['candidate'], str(seed))
+
+    def test_spent_control_requires_exact_budget_authority_and_no_cited_fallback(self):
+        mutations = ('paid-two', 'paid-bool', 'valid-draft', 'no-attempts', 'unknown-fallback',
+                     'wrong-label', 'wrong-memory', 'unrefreshed', 'revoked', 'revision', 'missing-control', 'cancelled', 'source-error', 'unknown-stop', 'other-error')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+                original_source = source.read_bytes()
+                error = RuntimeError('appworld_seed_control_format_repair_exhausted')
+                control = diagnostic['control_learning']
+                if mutation == 'paid-two': control['model_calls'] = 2
+                elif mutation == 'paid-bool': control['model_calls'] = True
+                elif mutation == 'valid-draft': control['validated_model_draft'] = {'loop_rules': []}
+                elif mutation == 'no-attempts': control['attempts'] = []
+                elif mutation == 'unknown-fallback': control['evidence_fallback']['reason'] = 'native_source_revoked'
+                elif mutation == 'wrong-label': diagnostic['seed_label'] = 'wrong'
+                elif mutation == 'wrong-memory': diagnostic['memory_source'] = str(root / 'other-memory.json')
+                elif mutation == 'unrefreshed': diagnostic['evidence_refresh']['status'] = 'failed'
+                elif mutation in ('revoked', 'revision'):
+                    value = reproduce._read(memory)
+                    if mutation == 'revoked': value['entries'][0]['candidate']['support_evidence'][0]['verdict'] = 'SEMANTIC_VERDICT_UNASSESSED'
+                    else: value['entries'][0]['candidate']['proposed_change'] += ' changed'
+                    reproduce._APPWORLD_LAYOUT.save(memory, value)
+                elif mutation == 'missing-control':
+                    value = reproduce._read(source); value['policy']['options']['loop_rules'] = value['policy']['options']['loop_rules'][:1]
+                    reproduce._APPWORLD_LAYOUT.save(source, value)
+                elif mutation == 'cancelled': state['cancel_requested'] = True
+                elif mutation == 'source-error': state['last_error'] = 'source_authority_revoked'
+                elif mutation == 'unknown-stop': state['stop_reason'] = 'credential_missing'
+                else: error = RuntimeError('native_runtime_control-compile_failed')
+                reproduce._APPWORLD_LAYOUT.save(root / 'training/seed-compile-status.json', diagnostic)
+                self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, error, state))
+                source.write_bytes(original_source)
+
+
+    def test_spent_control_formal_gate_failure_retains_reuse_for_next_candidate(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            first, label = reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state)
+            frozen = []
+            def common(actual, label, stop_at=None, **kwargs):
+                if stop_at == 'seed':
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS'), '1')
+                    self.assertNotIn('APPWORLD_REGENERATE_CONTROLS', os.environ)
+                    expected_source = source if not frozen else frozen[-1]
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS_FROM'), expected_source.parent.name)
+                    artifact = reproduce._read(expected_source)
+                    artifact['agent']['revision'] = 'different-english-fixture-' + str(len(frozen))
+                    reproduce._APPWORLD_LAYOUT.save(actual, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(actual.with_name('manifest.json'), {
+                        'version': native(['artifact-version'], artifact), 'validated_evidence_required': True})
+                    frozen.append(actual)
+                    return {'status': 'complete', 'phase': 'seed'}
+                if len(frozen) == 1:
+                    raise RuntimeError('stage_gate_not_passed:pilot32')
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_common_all', side_effect=common), \
+                 patch.object(reproduce, '_formal_seed_failure', return_value={'attempt': 2}), \
+                 patch.object(reproduce, '_experiment_status'):
+                result = reproduce._run_all_with_seed_search(first, label)
+            self.assertEqual(result['status'], 'published')
+            self.assertEqual(len(frozen), 2)
+            self.assertNotEqual(frozen[0], frozen[1])
+            current = reproduce.seed_search()
+            self.assertEqual(current['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(current['automatic_seed_generation']['generation_feedback']['control_source_reuse']['candidate'], str(seed))
+            self.assertEqual(reproduce._spent_control_reuse_source(current['automatic_seed_generation'], current), frozen[0])
+            # The most recent formally failed English source, rather than only
+            # the original archive source, must retain current native authority.
+            current_source = frozen[0]
+            original_artifact = current_source.read_bytes()
+            original_manifest = current_source.with_name('manifest.json').read_bytes()
+            for mutation in ('manifest-version', 'scope', 'identity', 'approval'):
+                with self.subTest(current_source_mutation=mutation):
+                    artifact = json.loads(original_artifact)
+                    manifest = json.loads(original_manifest)
+                    if mutation == 'manifest-version':
+                        manifest['version'] = 'foreign-version'
+                    else:
+                        if mutation == 'scope':
+                            artifact['policy']['snapshot']['options']['target_scopes'] = ['foreign-scope']
+                        elif mutation == 'identity':
+                            artifact['policy']['snapshot']['identity']['agent_id'] = 'foreign-agent'
+                        else:
+                            artifact['policy']['options']['approved_experiences'] = []
+                    reproduce._APPWORLD_LAYOUT.save(current_source, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(current_source.with_name('manifest.json'), manifest)
+                    try:
+                        self.assertIsNone(reproduce._spent_control_reuse_source(
+                            current['automatic_seed_generation'], current))
+                    finally:
+                        current_source.write_bytes(original_artifact)
+                        current_source.with_name('manifest.json').write_bytes(original_manifest)
+
+
+    def test_spent_control_two_empty_replies_reuse_legal_source_without_fabricating_third_call(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            reason = 'appworld_evidence_recovery_no_cited_failure_pair'
+            state['stage_results']['seed']['reason'] = 'RuntimeError:' + reason
+            control = diagnostic['control_learning']
+            control.update(model_calls=2, model_attempts=2, status='no_controls')
+            control['attempts'] = [dict(row, status='no_controls') for row in control['attempts'][:2]]
+            reproduce._APPWORLD_LAYOUT.save(root / 'gepa/lifecycle.json', state)
+            empty_attempts = control['attempts']
+            for mutation in ('mixed-format', 'one-empty'):
+                with self.subTest(two_reply_mutation=mutation):
+                    control['attempts'] = ([dict(empty_attempts[0], status='format_invalid'), empty_attempts[1]]
+                                           if mutation == 'mixed-format' else empty_attempts[:1])
+                    reproduce._APPWORLD_LAYOUT.save(root / 'training/seed-compile-status.json', diagnostic)
+                    self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, RuntimeError(reason), state))
+                    with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                        self.assertEqual(reproduce._worker_resume_check(), 0)
+            control['attempts'] = empty_attempts
+            reproduce._APPWORLD_LAYOUT.save(root / 'training/seed-compile-status.json', diagnostic)
+            with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(), 75)
+            next_seed, label = reproduce._continue_unavailable_seed_generation(seed, RuntimeError(reason), state)
+            search = reproduce.seed_search()
+            self.assertEqual(search['automatic_seed_generation']['generation_feedback']['model_calls'], 2)
+            self.assertEqual(search['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(reproduce._spent_control_reuse_source(search['automatic_seed_generation'], search), source)
+            observed = []
+            def common(actual, label, stop_at=None, **kwargs):
+                if stop_at == 'seed':
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS'), '1')
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS_FROM'), source.parent.name)
+                    self.assertNotIn('APPWORLD_REGENERATE_CONTROLS', os.environ)
+                    artifact = reproduce._read(source)
+                    artifact['agent']['revision'] = 'english-from-two-empty'
+                    reproduce._APPWORLD_LAYOUT.save(actual, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(actual.with_name('manifest.json'), {
+                        'version': native(['artifact-version'], artifact), 'validated_evidence_required': True})
+                    observed.append(actual)
+                    return {'status': 'complete', 'phase': 'seed'}
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_common_all', side_effect=common), \
+                 patch.object(reproduce, '_experiment_status'):
+                self.assertEqual(reproduce._run_all_with_seed_search(next_seed, label)['status'], 'published')
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(reproduce.seed_search()['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, RuntimeError(reason), state))
