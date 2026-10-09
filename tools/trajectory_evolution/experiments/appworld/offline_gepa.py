@@ -87,6 +87,271 @@ def _recorded_job(artifact: dict) -> str | None:
     return job_id if read(frozen_seed) == artifact else None
 
 
+def initial_review_recovery(artifact: dict, job_id: str) -> bool:
+    """Authorize only a frozen initial VAL's closed, known judge-only checkpoint.
+
+    Native retry atomically checks the current execution/grader identities;
+    this local proof never authorizes migration of a historical checkpoint.
+    """
+    import re
+    import compare
+    try:
+        if _recorded_job(artifact) != job_id or read(PLAN).get('seed') is None:
+            return False
+        rejection = read(STATUS).get('retry_error') if STATUS.is_file() else None
+        if rejection is not None:
+            if not isinstance(rejection, dict) or not isinstance(rejection.get('job_id'), str):
+                return False
+            if rejection['job_id'] == job_id:
+                # A prior native refusal is not permission to retry the old
+                # report again, even when its judge checkpoint remains valid.
+                return False
+        if read(Path(read(PLAN)['seed'])) != artifact:
+            return False
+        job = (read(WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {}).get(job_id) or {}
+        root = WORKSPACE / 'agent-evaluation' / job_id
+        search = root / 'search'
+        tree = read(search / 'tree.json')
+        code = job.get('error')
+        target = {'gepa_baseline_evaluation_inconclusive': 'baseline.json',
+                  'gepa_seed_evaluation_inconclusive': 'seed.json'}.get(code)
+        if (not target or job.get('status') != 'error' or tree.get('status') != 'error'
+                or tree.get('error') != code or job.get('cancel_requested')
+                or job.get('published') or job.get('final_holdout_replay')
+                or tree.get('holdout_started') or tree.get('final_holdout')
+                or tree.get('rounds', 0) != 0 or tree.get('active') is not None
+                or tree.get('batch') is not None or len(tree.get('nodes') or []) != 1):
+            return False
+        for field in ('evaluation_context', 'candidate_evaluation_context'):
+            if not tree.get(field) or tree[field] != job.get(field):
+                return False
+        dataset = read(DATASET / 'manifest.json')
+        if (dataset.get('metadata') or {}).get('dataset_version') != tree.get('dataset_version'):
+            return False
+        if compare._native_gepa_evaluation_context(CONFIG / 'evaluation.json', tree['dataset_version']) != tree['evaluation_context']:
+            return False
+        version = controller.version(read(root / target))
+        if target == 'baseline.json' and version != tree.get('baseline_version'):
+            return False
+        if controller.version(artifact) != tree.get('seed_version') or job.get('seed_version') != tree['seed_version']:
+            return False
+        tasks = [json.loads(line) for line in (DATASET / 'val.jsonl').read_text().splitlines() if line.strip()]
+        revisions = {row['task_id']: row['task_version'] for row in tasks}
+        if not revisions or len(revisions) != len(tasks):
+            return False
+        entries = [(key, entry) for key, entry in (tree.get('evaluations') or {}).items()
+                   if entry.get('version') == version and entry.get('split') == 'val']
+        if len(entries) != 1:
+            return False
+        key, entry = entries[0]
+        attempt = entry.get('attempt')
+        if (type(attempt) not in (int, float) or not 1 <= attempt < 1000000 or int(attempt) != attempt or entry.get('status') != 'inconclusive'
+                or set(entry.get('task_ids') or []) != set(revisions)
+                or len(entry.get('task_ids') or []) != len(revisions)
+                or any(entry.get(field) != tree[field] for field in ('evaluation_context', 'candidate_evaluation_context'))):
+            return False
+        relative = Path('evaluations') / key / f'attempt-{int(attempt)}' / 'report.json'
+        path = (search / relative).resolve()
+        if entry.get('report') != str(relative) or not path.is_relative_to(search.resolve()):
+            return False
+        payload = path.read_bytes()
+        # Verify the original native digest, without minting or storing one.
+        digest = entry.get('report_hash')
+        manifest = read(path.with_name('manifest.json'))
+        report = json.loads(payload)
+        cfg = report.get('configuration') or {}
+        if (not digest or hashlib.sha256(payload).hexdigest() != digest
+                or (manifest.get('files') or {}).get('report.json') != digest
+                or manifest.get('complete') is not True or report.get('complete') is not True
+                or report.get('report_kind') != 'task_evaluation.v1'
+                or not report.get('run_id') or manifest.get('run_id') != report['run_id']
+                or report.get('dataset_version') != tree['dataset_version']
+                or manifest.get('dataset_version') != tree['dataset_version']
+                or cfg.get('splits') != ['val'] or cfg.get('repetitions') != 1
+                or cfg.get('model_enabled') is not True or cfg.get('allow_unreviewed') is not False
+                or not cfg.get('judge_fingerprint')
+                or cfg.get('variants') != [{'id': 'candidate', 'version': version}]):
+            return False
+        settings = read(CONFIG / 'gepa.json')
+        authority = read(CONFIG / 'agent-evaluation.json')
+        needs_tokens = (not (authority.get('gate') or {}).get('resources_report_only', False)
+                        and (settings.get('objective') or {}).get('token_weight', 0.05)
+                        and settings.get('unknown_token_policy', 'reject') != 'worst_case')
+        rows, seen, failed = report.get('trials') or [], set(), False
+        if len(rows) != len(revisions):
+            return False
+        for row in rows:
+            task = row.get('task_id')
+            evidence = row.get('evidence') or {}
+            if (task not in revisions or task in seen or row.get('task_version') != revisions[task]
+                    or row.get('split') != 'val' or row.get('variant_id') != 'candidate'
+                    or row.get('repetition') != 1 or not row.get('trial_id')
+                    or row.get('execution_status') != 'completed'
+                    or evidence.get('loaded_version') != version
+                    or not controller.framework_capture_complete(row)
+                    or controller._execution_error_code(row)):
+                return False
+            seen.add(task)
+            traces = evidence.get('traces') if isinstance(evidence.get('traces'), list) else [evidence.get('trace')]
+            if not traces or any(not isinstance(trace, dict)
+                    or not any(event.get('kind') == 'run.start' for event in trace.get('events') or [])
+                    or not any(event.get('kind') == 'run.end' for event in trace.get('events') or []) for trace in traces):
+                return False
+            judge = controller._judge_error_code(row)
+            if judge is not None:
+                errors = [check.get('reason') for check in row.get('checks') or []
+                          if check.get('check_id') == 'model' and check.get('status') == 'error']
+                if len(errors) != 1 or row.get('error_code') not in ('evaluation_judge_failed', errors[0]):
+                    return False
+                judge = errors[0]
+            if judge is not None:
+                if not re.fullmatch(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|500|502|503|504)|transport_(?:6|7|18|28|52|55|56|exhausted))', judge):
+                    return False
+                failed = True
+            elif (row.get('verdict') not in {'passed', 'failed'}
+                    or controller.assessed_quality(row) is None or not controller._has_complete_loop_review(row)):
+                return False
+            # Incomplete execution telemetry would cause native task replay;
+            # pure review recovery must retain every actual execution instead.
+            if needs_tokens and (row.get('metrics') or {}).get('tokens') is None:
+                return False
+        return failed
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        return False
+
+
+def final_holdout_review_recovery(artifact: dict, job_id: str) -> bool:
+    """A frozen final campaign needs no more reflection calls; only regrade closed work."""
+    import re
+    import compare
+    try:
+        if _recorded_job(artifact) != job_id or read(Path(read(PLAN)['seed'])) != artifact:
+            return False
+        refusal = read(STATUS).get('retry_error')
+        if refusal is not None and (not isinstance(refusal, dict) or refusal.get('job_id') == job_id):
+            return False
+        job = (read(WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {}).get(job_id) or {}
+        root = WORKSPACE / 'agent-evaluation' / job_id
+        search = root / 'search'; tree = read(search / 'tree.json'); final = tree.get('final_holdout') or {}
+        if (job.get('status') != 'inconclusive' or job.get('error') or not job.get('gepa')
+                or job.get('published') or job.get('cancel_requested') or job.get('final_holdout_replay')
+                or tree.get('status') != 'inconclusive' or tree.get('error') or tree.get('cancel_requested')
+                or tree.get('holdout_started') is not True or tree.get('active') is not None
+                or tree.get('batch') is not None or final.get('status') != 'inconclusive'
+                or final.get('protocol') != 'top-k-v1' or not final.get('campaign_id')
+                or (job.get('search') or {}).get('final_holdout') != final):
+            return False
+        if any(not tree.get(k) or tree[k] != job.get(k)
+               for k in ('evaluation_context', 'candidate_evaluation_context')):
+            return False
+        if controller.version(artifact) != tree.get('seed_version') or job.get('seed_version') != tree['seed_version']:
+            return False
+        manifest = read(DATASET / 'manifest.json')
+        if ((manifest.get('metadata') or {}).get('dataset_version') != tree.get('dataset_version')
+                or compare._native_gepa_evaluation_context(CONFIG / 'evaluation.json', tree['dataset_version']) != tree['evaluation_context']):
+            return False
+        tasks = [json.loads(line) for line in (DATASET / 'holdout.jsonl').read_text().splitlines() if line.strip()]
+        revisions = {row['task_id']: row['task_version'] for row in tasks}
+        if (not revisions or len(revisions) != len(tasks)
+                or (read(PLAN).get('split_counts') or {}).get('holdout') != len(tasks)
+                or (manifest.get('summary') or {}).get('splits', {}).get('holdout') != len(tasks)):
+            return False
+        settings = read(CONFIG / 'gepa.json')
+        deadline = tree.get('started_ms', 0) + settings.get('timeout_ms', 0) + tree.get('paused_ms', 0)
+        if time.time() * 1000 >= deadline:  # Never turn an expired final campaign into an empty retry loop.
+            return False
+        authority = read(CONFIG / 'agent-evaluation.json')
+        needs_tokens = (not (authority.get('gate') or {}).get('resources_report_only', False)
+                        and (settings.get('objective') or {}).get('token_weight', 0.05)
+                        and settings.get('unknown_token_policy', 'reject') != 'worst_case')
+        candidates = final.get('candidates') or []; failed = False
+        if not candidates or len({x.get('version') for x in candidates}) != len(candidates):
+            return False
+        for rank, candidate in enumerate(candidates, 1):
+            node = candidate.get('node'); version = candidate.get('version')
+            if (type(node) not in (int, float) or node < 0 or int(node) != node
+                    or candidate.get('rank') != rank or candidate.get('status') not in ('complete', 'inconclusive')
+                    or controller.version(read(search / 'versions' / f'{int(node)}.json')) != version):
+                return False
+            # Cached final evaluation persists both fresh candidate-only and joined
+            # baseline/candidate entries. The frozen plan fixes which report it used.
+            paired = candidate.get('trials') == 2 * len(revisions)
+            if candidate.get('trials') not in (len(revisions), 2 * len(revisions)):
+                return False
+            matches = [(key, entry) for key, entry in (tree.get('evaluations') or {}).items()
+                       if entry.get('split') == 'holdout' and entry.get('version') == version
+                       and (entry.get('baseline_version') == tree.get('baseline_version') if paired
+                            else 'baseline_version' not in entry)]
+            if len(matches) != 1:
+                return False
+            key, entry = matches[0]; attempt = entry.get('attempt')
+            if (type(attempt) not in (int, float) or not 1 <= attempt < 1000000 or int(attempt) != attempt
+                    or entry.get('status') != candidate['status']
+                    or set(entry.get('task_ids') or []) != set(revisions)
+                    or len(entry.get('task_ids') or []) != len(revisions)
+                    or any(entry.get(k) != tree[k] for k in ('evaluation_context', 'candidate_evaluation_context'))):
+                return False
+            relative = Path('evaluations') / key / f'attempt-{int(attempt)}' / 'report.json'
+            path = (search / relative).resolve()
+            if entry.get('report') != str(relative) or not path.is_relative_to(search.resolve()):
+                return False
+            payload = path.read_bytes(); digest = entry.get('report_hash')
+            receipt = read(path.with_name('manifest.json')); report = json.loads(payload); cfg = report.get('configuration') or {}
+            variants = cfg.get('variants') or []
+            versions = {v['id']: v['version'] for v in variants}
+            if (not digest or hashlib.sha256(payload).hexdigest() != digest
+                    or receipt.get('files', {}).get('report.json') != digest or receipt.get('complete') is not True
+                    or report.get('complete') is not True
+                    or report.get('report_kind') not in ('task_evaluation.v1', 'gepa_cached_pair.v1')
+                    or report.get('report_kind') == 'gepa_cached_pair.v1' and not paired
+                    or candidate.get('report_kind') != report['report_kind']
+                    or not report.get('run_id') or receipt.get('run_id') != report['run_id']
+                    or report.get('dataset_version') != tree['dataset_version'] or receipt.get('dataset_version') != tree['dataset_version']
+                    or cfg.get('splits') != ['holdout'] or cfg.get('repetitions') != 1
+                    or cfg.get('model_enabled') is not True or cfg.get('allow_unreviewed') is not False
+                    or not cfg.get('judge_fingerprint') or len(versions) != len(variants)
+                    or versions.get('candidate') != version
+                    or set(versions) != ({'baseline', 'candidate'} if paired else {'candidate'})
+                    or paired and candidate.get('baseline_source') != entry.get('baseline_source')
+                    or 'baseline' in versions and (versions['baseline'] != tree.get('baseline_version')
+                        or controller.version(read(root / 'baseline.json')) != versions['baseline'])):
+                return False
+            rows = report.get('trials') or []; seen = set(); candidate_failed = False
+            if len(rows) != len(revisions) * len(versions) or candidate.get('trials') != len(rows):
+                return False
+            for row in rows:
+                task, variant = row.get('task_id'), row.get('variant_id'); evidence = row.get('evidence') or {}
+                if (task not in revisions or variant not in versions or (task, variant) in seen
+                        or row.get('task_version') != revisions[task] or row.get('split') != 'holdout'
+                        or row.get('repetition') != 1 or not row.get('trial_id') or row.get('execution_status') != 'completed'
+                        or evidence.get('loaded_version') != versions[variant]
+                        or not controller.framework_capture_complete(row) or controller._execution_error_code(row)):
+                    return False
+                seen.add((task, variant))
+                traces = evidence.get('traces') if isinstance(evidence.get('traces'), list) else [evidence.get('trace')]
+                if not traces or any(not isinstance(trace, dict)
+                        or not any(e.get('kind') == 'run.start' for e in trace.get('events') or [])
+                        or not any(e.get('kind') == 'run.end' for e in trace.get('events') or []) for trace in traces):
+                    return False
+                error = controller._judge_error_code(row)
+                if error is not None:
+                    reasons = [c.get('reason') for c in row.get('checks') or [] if c.get('check_id') == 'model' and c.get('status') == 'error']
+                    if (len(reasons) != 1 or row.get('error_code') not in ('evaluation_judge_failed', reasons[0])
+                            or not re.fullmatch(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|500|502|503|504)|transport_(?:6|7|18|28|52|55|56|exhausted))', reasons[0])):
+                        return False
+                    candidate_failed = failed = True
+                elif (row.get('verdict') not in {'passed', 'failed'} or controller.assessed_quality(row) is None
+                        or not controller._has_complete_loop_review(row)):
+                    return False
+                if needs_tokens and row.get('metrics', {}).get('tokens') is None:
+                    return False
+            if candidate_failed != (candidate['status'] == 'inconclusive'):
+                return False
+        return failed
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError, OverflowError):
+        return False
+
+
 def build_dataset(recorded_job: str | None = None) -> dict:
     """Build the canonical disjoint train/validation/comparison view."""
     from dataset import materialize
@@ -267,10 +532,69 @@ def _baseline_evaluation_file(stage: Path) -> Path:
     return stage / "capture.config.json"
 
 
+def _default_seed_artifact() -> Path:
+    published = PUBLISHED / "strategy/strategy.json"
+    return published if published.is_file() else PUBLISHED / "seed0/strategy.json"
+
+
+def _pending_budget_extension(plan: dict, seed: Path, job_id: str | None) -> dict | None:
+    receipt = plan.get('budget_extension')
+    if not receipt:
+        return None
+    if (not isinstance(receipt, dict) or not job_id or receipt.get('job_id') != job_id
+            or receipt.get('seed') != str(seed.resolve())):
+        raise RuntimeError('offline_gepa_budget_extension_identity_invalid')
+    old, new = receipt.get('previous_limits'), receipt.get('requested_limits')
+    caps = {'max_rounds': 256, 'max_model_calls': 1024, 'max_trials': 20000,
+            'timeout_ms': 7 * 24 * 3600000}
+    if (not isinstance(old, dict) or not isinstance(new, dict)
+            or any(type(old.get(key)) is not int or type(new.get(key)) is not int
+                   or not 0 < old[key] <= new[key] <= cap for key, cap in caps.items())):
+        raise RuntimeError('offline_gepa_budget_extension_limits_invalid')
+    key = {'model_budget': 'max_model_calls', 'max_rounds': 'max_rounds',
+           'gepa_search_time_reserved': 'timeout_ms'}.get(receipt.get('stop_reason'))
+    if not key or new[key] <= old[key]:
+        raise RuntimeError('offline_gepa_budget_extension_not_increased')
+    return receipt
+
+
+def _rejected_budget_extension_ready(plan: dict, artifact: dict, job: dict,
+                                     job_id: str) -> bool:
+    receipt = _pending_budget_extension(plan, Path(plan['seed']), job_id)
+    if not receipt:
+        return False
+    tree = read(WORKSPACE / 'agent-evaluation' / job_id / 'search/tree.json')
+    if (job.get('published') is True or job.get('cancel_requested') is True
+            or tree.get('status') != 'validation_rejected'
+            or tree.get('holdout_started') is True or tree.get('final_holdout')
+            or tree.get('active') is not None or tree.get('batch') is not None
+            or tree.get('stop_reason') != receipt['stop_reason']
+            or read(WORKSPACE / 'agent-evaluation' / job_id / 'seed.json') != artifact):
+        raise RuntimeError('offline_gepa_budget_extension_checkpoint_invalid')
+    config = read(CONFIG / 'gepa.json')
+    if any(config.get(key) != value for key, value in receipt['requested_limits'].items()):
+        raise RuntimeError('offline_gepa_budget_extension_config_invalid')
+    return True
+
+
 def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
             max_model_calls: int = 512) -> dict:
-    artifact = require_seed_gates(Path(seed_artifact or PUBLISHED / "seed0/strategy.json"))
+    seed_artifact = Path(seed_artifact or _default_seed_artifact())
+    artifact = require_seed_gates(seed_artifact)
     recorded_job = _recorded_job(artifact)
+    previous_plan = read(PLAN) if PLAN.is_file() else {}
+    extension = (_pending_budget_extension(previous_plan, seed_artifact, recorded_job)
+                 if recorded_job else None)
+    if extension:
+        if max_model_calls != extension['requested_limits']['max_model_calls']:
+            raise RuntimeError('offline_gepa_budget_extension_requested_calls_invalid')
+        max_rounds = extension['requested_limits']['max_rounds']
+    elif recorded_job:
+        # A transport/runtime re-prepare must not reduce an already expanded
+        # job's cumulative limits back to this command's fresh defaults.
+        previous_search = previous_plan.get('search') or {}
+        max_rounds = max(max_rounds, previous_search.get('max_rounds', max_rounds))
+        max_model_calls = max(max_model_calls, previous_search.get('max_model_calls', max_model_calls))
     memory = _training_ready(recorded_job) if recorded_job else _training_ready()
     dataset = build_dataset(recorded_job) if recorded_job else build_dataset()
     _copy_training_configs()
@@ -319,6 +643,8 @@ def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
         "retain_jsonl": False, "retain_report_pb": True,
         "drop_intermediate_pb": True,
     }
+    if extension:
+        evaluation['max_trials'] = extension['requested_limits']['max_trials']
     save(CONFIG / "evaluation.json", evaluation)
 
     agent = artifact.get("agent") or {}
@@ -344,10 +670,18 @@ def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
                 duplication_factor=1, holdout_top_k=3,
                 holdout_max_report_bytes=2147483648,
                 candidate_selection_strategy="pareto", frontier_type="instance")
+    if extension:
+        base.update(extension['requested_limits'])
+    # Only this AppWorld search excludes the already published seed from
+    # automatic final replay. Native callers keep their default true.
+    base["final_holdout_include_seed"] = False
     # A fresh end-to-end run has no external baseline yet: native GEPA then
     # evaluates it normally. An existing capture selects authoritative reuse,
     # including a pending result, and must never fall back to a duplicate run.
     baseline_dataset = TRAINING / "datasets/comparison500"
+    for key in ("holdout_baseline_result_file", "holdout_baseline_dataset",
+                "holdout_baseline_evaluation_file"):
+        base.pop(key, None)
     if baseline_evaluation.is_file() and (baseline_dataset / "manifest.json").is_file():
         base.update(
             holdout_baseline_result_file=str(GEPA / "l0-current-stage500/result.json"),
@@ -361,12 +695,14 @@ def prepare(seed_artifact: Path | None = None, *, max_rounds: int = 30,
         "schema_version": 1, "stage": "train -> seed -> 32/100 gates -> GEPA -> top3 comparison500",
         "dataset": str(DATASET), "dataset_version": dataset.get("metadata", {}).get("dataset_version"),
         "split_counts": dataset.get("summary", {}).get("splits"),
-        "source_memory": str(memory), "seed": str(seed_artifact or PUBLISHED / "seed0/strategy.json"),
+        "source_memory": str(memory), "seed": str(seed_artifact),
         "search": {"pool": "official train", "validation": "canonical val.jsonl",
                    "final_holdout": "frozen comparison500", "max_rounds": max_rounds,
                    "max_model_calls": max_model_calls, "top_k": 3},
         "parallelism": 16, "prepared_at": datetime.now(timezone.utc).isoformat(),
     }
+    if extension:
+        plan['budget_extension'] = extension
     if recorded_job:
         previous_plan = read(PLAN)
         receipt = previous_plan.get('training_readiness')
@@ -405,13 +741,25 @@ def progress(job_id: str | None = None) -> dict:
     else:
         job_id, job = max(jobs, key=lambda pair: pair[1].get("queued_ms", 0))
     result = {"job_id": job_id, "job_status": job.get("status"),
+              "job_error": job.get("error"),
+              "cancel_requested": job.get("cancel_requested", False),
               "gepa": job.get("gepa", False)}
     tree = WORKSPACE / "agent-evaluation" / job_id / "search/tree.json"
     if tree.is_file():
         value = read(tree)
         result.update(nodes=len(value.get("nodes", [])), rounds=value.get("rounds", 0),
                       tree_status=value.get("status"), stop_reason=value.get("stop_reason"),
+                      model_calls=value.get("model_calls"),
                       node_states=dict(Counter(item.get("status") for item in value.get("nodes", []))))
+        settings = read(CONFIG / "gepa.json") if (CONFIG / "gepa.json").is_file() else {}
+        result["max_model_calls"] = settings.get("max_model_calls")
+        started, timeout = value.get("started_ms"), settings.get("timeout_ms")
+        if isinstance(started, (int, float)) and isinstance(timeout, (int, float)):
+            result["deadline_ms"] = started + timeout + value.get("paused_ms", 0)
+            result["holdout_reserve_ms"] = settings.get("holdout_reserve_ms", 0)
+        replay = value.get("final_holdout") or {}
+        if job.get("final_holdout_replay") and replay.get("replay_deadline_ms"):
+            result["deadline_ms"] = replay["replay_deadline_ms"]
     return result
 
 
@@ -438,6 +786,18 @@ def run(seed_artifact: Path | None = None) -> dict:
         if not line.startswith(prefix):
             raise RuntimeError("offline_gepa_management_start_failed")
         port = int(line[len(prefix):])
+        def record_initial_retry_rejection(operation: str, fields: dict, code: str, http_status: int) -> None:
+            if (operation not in {'agent_evaluation.status', 'agent_evaluation.retry'}
+                    or http_status in (408, 429) or http_status >= 500):
+                return
+            bound_job = fields.get('job_id') or recorded_job
+            if not bound_job or not (initial_review_recovery(artifact, bound_job) or final_holdout_review_recovery(artifact, bound_job)):
+                return
+            previous = read(STATUS) if STATUS.is_file() else {}
+            save(STATUS, {**previous, 'job_id': bound_job, 'status': 'retry_rejected',
+                'retry_error': {'job_id': bound_job, 'code': code, 'http_status': http_status},
+                'updated_at': datetime.now(timezone.utc).isoformat()})
+
         def invoke(operation: str, **fields) -> dict:
             request = urllib.request.Request(f"http://127.0.0.1:{port}/v1/invoke",
                 data=json.dumps({"operation": operation,
@@ -460,10 +820,26 @@ def run(seed_artifact: Path | None = None) -> dict:
                         code = candidate
                 except (ValueError, OSError, TypeError, AttributeError):
                     pass
+                record_initial_retry_rejection(operation, fields, code, error.code)
                 raise RuntimeError('offline_gepa_' + operation.rsplit('.', 1)[-1] + '_failed:' + code) from None
-            if response_value.get("ok") is not True:
+            except (ValueError, TypeError, AttributeError):
+                record_initial_retry_rejection(operation, fields, 'management_response_invalid', 200)
+                raise RuntimeError('offline_gepa_' + operation.rsplit('.', 1)[-1] + '_failed') from None
+            if not isinstance(response_value, dict) or response_value.get("ok") is not True:
+                record_initial_retry_rejection(operation, fields, "management_response_invalid", 200)
                 raise RuntimeError("offline_gepa_" + operation.rsplit(".", 1)[-1] + "_failed")
-            return response_value.get("result") or {}
+            result = response_value.get('result')
+            if (not isinstance(result, dict)
+                    or (operation == 'agent_evaluation.retry' and result.get('accepted') is not True)
+                    or (operation == 'agent_evaluation.status' and recorded_job
+                        and (not isinstance(result.get('jobs'), dict)
+                             or not isinstance(result['jobs'].get(recorded_job), dict)
+                             or result['jobs'][recorded_job].get('status') not in {
+                                 'pending', 'running', 'passed', 'rejected', 'error', 'interrupted',
+                                 'inconclusive', 'cancelled', 'superseded'}))):
+                record_initial_retry_rejection(operation, fields, 'management_response_invalid', 200)
+                raise RuntimeError('offline_gepa_' + operation.rsplit('.', 1)[-1] + '_failed')
+            return result
 
         if recorded_job:
             # Native restart already requeues a running checkpoint. Failed
@@ -473,8 +849,18 @@ def run(seed_artifact: Path | None = None) -> dict:
             job = (current.get("jobs") or {}).get(recorded_job)
             if not isinstance(job, dict):
                 raise RuntimeError("offline_gepa_checkpoint_unavailable")
-            if job.get("status") in {"error", "interrupted", "inconclusive", "cancelled", "superseded"}:
-                invoke("agent_evaluation.retry", job_id=recorded_job)
+            if (job.get('error') in {'gepa_baseline_evaluation_inconclusive', 'gepa_seed_evaluation_inconclusive'}
+                    and not initial_review_recovery(artifact, recorded_job)):
+                raise RuntimeError('offline_gepa_initial_review_checkpoint_invalid')
+            if (job.get('status') == 'inconclusive' and (job.get('search') or {}).get('final_holdout')
+                    and not final_holdout_review_recovery(artifact, recorded_job)):
+                raise RuntimeError('offline_gepa_final_review_checkpoint_invalid')
+            extended = (job.get('status') == 'rejected' and
+                        _rejected_budget_extension_ready(plan, artifact, job, recorded_job))
+            if job.get("status") in {"error", "interrupted", "inconclusive", "cancelled", "superseded"} or extended:
+                retried = invoke("agent_evaluation.retry", job_id=recorded_job)
+                if extended and retried.get('accepted') is not True:
+                    raise RuntimeError('offline_gepa_budget_extension_retry_not_accepted')
             job_id = recorded_job
         else:
             submitted = invoke("agent_evaluation.submit", artifact=artifact)
@@ -482,10 +868,49 @@ def run(seed_artifact: Path | None = None) -> dict:
             if not job_id:
                 raise RuntimeError("offline_gepa_submit_failed")
             save(GEPA / "submission.json", submitted)
+        transient_retries = 0
+
+        def retryable_initial_review(current: dict) -> bool:
+            if (current.get("job_status") != "error" or current.get("job_error") not in
+                    {"gepa_baseline_evaluation_inconclusive", "gepa_seed_evaluation_inconclusive"}):
+                return False
+            return initial_review_recovery(artifact, job_id)
+        def retryable_transient(current: dict) -> bool:
+            used, limit = current.get("model_calls"), current.get("max_model_calls")
+            deadline = current.get("deadline_ms")
+            return bool(current.get("job_status") == "error"
+                and (current.get("job_error") == "gepa_model_rate_limited"
+                     or retryable_initial_review(current))
+                and not current.get("cancel_requested") and transient_retries < 3
+                and not (isinstance(used, (int, float)) and isinstance(limit, (int, float))
+                         and used >= limit)
+                and not (isinstance(deadline, (int, float))
+                         and time.time() * 1000 >= deadline - current.get("holdout_reserve_ms", 0)))
+
         while process.poll() is None:
             current = progress(job_id)
             save(STATUS, {"status": "running", **current,
                           "updated_at": datetime.now(timezone.utc).isoformat()})
+            if retryable_transient(current):
+                # The native checkpoint owns the tree, cached healthy trials
+                # and model-call budget. Retry that job only; never submit a
+                # replacement search or reclassify an unrelated terminal error.
+                remaining = (15, 30, 60)[transient_retries]
+                save(STATUS, {"status": "retry_wait", **current,
+                    "transient_retry": transient_retries + 1, "retry_delay_seconds": remaining,
+                    "updated_at": datetime.now(timezone.utc).isoformat()})
+                while remaining and process.poll() is None:
+                    time.sleep(min(5, remaining))
+                    remaining -= min(5, remaining)
+                    current = progress(job_id)
+                    if not retryable_transient(current):
+                        break
+                if process.poll() is None and retryable_transient(current):
+                    retried = invoke("agent_evaluation.retry", job_id=job_id)
+                    if retried.get("accepted") is not True:
+                        raise RuntimeError("offline_gepa_retry_not_accepted")
+                    transient_retries += 1
+                    continue
             if current.get("job_status") in {"passed", "rejected", "error", "interrupted",
                                               "inconclusive", "cancelled"}:
                 break
@@ -612,6 +1037,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         raise RuntimeError('gepa_final_dataset_scope_invalid')
     proofs = []
     baseline_rows = None
+    holdout_task_versions = None
     for finalist in candidates:
         matches = [entry for entry in (tree.get('evaluations') or {}).values()
                    if entry.get('split') == 'holdout' and entry.get('status') == 'complete'
@@ -637,6 +1063,12 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         for rows in (raw_l0, raw_candidate):
             if len(rows) != holdout_count or {row.get('task_id') for row in rows} != canonical_ids:
                 raise RuntimeError('gepa_final_same_task_coverage_invalid')
+        versions = {row['task_id']: row.get('task_version') for row in raw_candidate}
+        if (not all(isinstance(version, str) and version for version in versions.values())
+                or versions != {row['task_id']: row.get('task_version') for row in raw_l0}
+                or (holdout_task_versions is not None and versions != holdout_task_versions)):
+            raise RuntimeError('gepa_final_same_task_versions_invalid')
+        holdout_task_versions = versions
         l0_items = _final_baseline_items(raw_l0, report, compare)
         items = [compare.compact_row(row, f"native-final-{finalist.get('node')}") for row in raw_candidate]
         l0_by_task = {row['task_id']: row for row in l0_items}
@@ -646,6 +1078,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
             baseline_source = (read(historical_baseline)['source_report']
                                if historical_baseline.is_file() else str(source))
             save_proof(proof_root / 'L0.json', {'status': 'complete', 'items': l0_items,
+                                          'host_version': controller.HOST_VERSION,
                                           'source_report': baseline_source,
                                           'judge_projection': projection,
                                           'metrics': compare.summarize(l0_items, holdout_count)})
@@ -664,6 +1097,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         save_proof(progress_path, {'shards': {'0': {'execution_complete': True, 'complete': True,
              'judge_projection': projection, 'source_report': str(source)}}})
         comparison = {'status': 'complete', 'seed': str(artifact_path), 'items': items,
+                      'host_version': controller.HOST_VERSION,
                       'judge_projection': projection, 'progress': str(progress_path),
                       'metrics': {'candidate': compare.summarize(items, holdout_count)},
                       'scope': 'same_task_native_top3_comparison500',
@@ -703,6 +1137,8 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         'proof_artifact': str(Path(best['artifact']).resolve()),
         'strategy': str(target) if not proof_only else None,
         'version': controller.version(artifact),
+        'dataset_version': tree['dataset_version'], 'baseline_version': tree['baseline_version'],
+        'holdout_task_versions': holdout_task_versions,
         'source_job': job_id, 'source_tree': str(tree_path), 'selected_node': best['node'],
         'selection': 'best observed among the complete same-task final candidates',
         'final_holdout_top_k': requested_top_k, 'evaluated_candidate_count': len(candidates),
@@ -722,7 +1158,7 @@ def publish(*, proof_only: bool = False, source_tree: Path | None = None,
         return manifest
     import reproduce
     manifest = reproduce.deliver_best_available(Path(best['artifact']), Path(best['comparison']))
-    save(STATUS, {"status": "published", "publication": manifest,
+    save(STATUS, {"status": manifest.get('publication_status', 'published'), "publication": manifest,
                   "updated_at": datetime.now(timezone.utc).isoformat()})
     return manifest
 

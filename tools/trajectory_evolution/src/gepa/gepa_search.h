@@ -15,6 +15,30 @@
 
 namespace trajectory::evolution::integration {
 
+// 只认本树已持久化的真实旧预算；已留出、缺基线或未扩调用上限都不可重开。
+inline bool gepa_model_budget_extended(const Json &tree, const Json &config) {
+  const auto &history = tree["budget_extensions"];
+  if (tree.str("status") != "validation_rejected" ||
+      tree.str("stop_reason") != "model_budget" || tree.flag("holdout_started", false) ||
+      !tree["active"].null() || !tree["batch"].null() || !history.array() ||
+      history.items().empty())
+    return false;
+  const auto &previous = history.items().back();
+  const auto limit = previous.num("max_model_calls", 0);
+  return previous.object() &&
+         (previous.str("reason") == "initial_budget" ||
+          previous.str("reason") == "budget_extension") &&
+         limit > 0 && tree.num("model_calls", limit + 1) <= limit &&
+         config.num("max_model_calls", 0) > limit;
+}
+
+// 调用方仍须完成 job/user/source 校验；此处仅移除可由扩容解除的派生标志。
+inline bool clear_extended_gepa_reflection_exhaustion(Json &tree, const Json &config) {
+  if (!gepa_model_budget_extended(tree, config)) return false;
+  tree.fields().erase("reflection_exhausted");
+  return true;
+}
+
 // 仅在既有评测工作线程中运行。宿主执行、评分、隐私检查和资源限制
 // 与普通策略评测完全共用。每个最终候选保留其验证排名；调用方按此顺序
 // 应用部署门禁，而不是按留出分数重新挑选最高者。

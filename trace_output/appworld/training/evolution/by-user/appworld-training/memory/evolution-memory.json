@@ -46222,9 +46222,9 @@
  ],
  "new_entries_since_full_curation": "56",
  "gepa_feedback": {
-  "minimum_pairs": 2,
+  "user_id": "appworld-training",
   "records": {},
   "schema_version": 1,
-  "user_id": "appworld-training"
+  "minimum_pairs": 2
  }
 }

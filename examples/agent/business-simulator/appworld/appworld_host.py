@@ -442,7 +442,7 @@ def project_official_code_io(request, *, evidence_root=None):
         if not path.is_relative_to(folder) or not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
             raise ValueError('appworld_projection_sidecar_missing')
         blocks = _official_io_blocks(path.read_text(encoding='utf-8'))
-        seen_ids, ends, dispatches, world_actions = set(), [], [], []
+        seen_ids, ends, dispatches, failed_dispatches, world_actions = set(), [], [], [], []
         for event in events:
             event_id = event.get('event_id')
             sequence = event.get('sequence')
@@ -458,6 +458,15 @@ def project_official_code_io(request, *, evidence_root=None):
                         and extensions.get('source_event_name') == 'skill_executor.tool_result'
                         and isinstance(event.get('output', {}).get('tool_result'), str)):
                     saved = json.loads(event['output']['tool_result'])
+                    # Executing this framework tool can fail before it saves a
+                    # World proposal. Keep that real failure unchanged; only a
+                    # verified saved reply may be projected as executed code.
+                    if (executed is True and event.get('output', {}).get('status') == 'error'
+                            and isinstance(saved, dict) and set(saved) == {'error'}
+                            and isinstance(saved['error'], str) and saved['error']
+                            and 'observation' not in event.get('output', {})):
+                        failed_dispatches.append(event)
+                        continue
                     if (executed is not True or event.get('output', {}).get('status') != 'completed'
                             or not isinstance(saved, dict) or saved.get('status') != 'completed'
                             or saved.get('reply_saved') is not True
@@ -504,6 +513,20 @@ def project_official_code_io(request, *, evidence_root=None):
             if event.get('loop_id') == 'main':
                 key = (latest_decision(event), event['input']['code'])
                 worlds_by_decision_code.setdefault(key, []).append(event)
+        for dispatch in failed_dispatches:
+            starts = [event for event in events if event.get('kind') == 'action.start'
+                      and event.get('action_id') == dispatch.get('action_id')]
+            closes = [event for event in events if event.get('kind') == 'action.end'
+                      and event.get('action_id') == dispatch.get('action_id')]
+            root = latest_decision(dispatch)
+            proposed, _ = normalize_appworld_code(dispatch['input']['code'])
+            if (len(starts) != 1 or len(closes) != 1
+                    or starts[0].get('actor_id') != 'skill_executor'
+                    or starts[0].get('input', {}).get('code') != dispatch['input']['code']
+                    or positions[starts[0]['event_id']] >= positions[dispatch['event_id']]
+                    or root is None or latest_decision(starts[0]) != root
+                    or worlds_by_decision_code.get((root, proposed))):
+                raise ValueError('appworld_projection_dispatch_invalid')
         dispatch_by_action = {}
         for dispatch in dispatches:
             root = latest_decision(dispatch)
@@ -1841,6 +1864,47 @@ def loop_model_policy(policy, loop):
     return "continue", policy
 
 
+def appworld_request_log_ellipsis_compatible(world):
+    """Keep an unsupported Python literal out of JSON logs, not execution data."""
+    tracker = world.requester.request_tracker
+    original_save = tracker.save
+
+    def contains_ellipsis(value, depth=0):
+        if value is Ellipsis:
+            return True
+        if depth >= 32:
+            return False
+        if isinstance(value, dict):
+            return any(contains_ellipsis(item, depth + 1)
+                       for pair in value.items() for item in pair)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return any(contains_ellipsis(item, depth + 1) for item in value)
+        return False
+
+    def save(file_path):
+        try:
+            return original_save(file_path)
+        except ValueError as error:
+            failures = error.args[0] if len(error.args) == 1 else None
+            if (not isinstance(failures, list) or len(failures) != 2 or
+                    not all(isinstance(item, TypeError) for item in failures) or
+                    str(failures[0]) != "'ellipsis' object is not iterable" or
+                    str(failures[1]) != "vars() argument must have __dict__ attribute" or
+                    not contains_ellipsis(tracker.requests)):
+                raise
+            # AppWorld records a request before executing it. Its normal execute
+            # result already contains the original API/code failure, but saving
+            # that request may fail afterwards on Ellipsis. Serialize a separate
+            # log value; the real request, arguments and database remain intact.
+            from fastapi.encoders import jsonable_encoder
+            from appworld.common.utils import write_jsonl
+            requests = [jsonable_encoder(request, custom_encoder={
+                type(Ellipsis): lambda literal: {"_appworld_python_literal": "Ellipsis"}}) for request in tracker.requests]
+            return write_jsonl(requests, file_path, silent=True)
+
+    tracker.save = save
+
+
 class AppWorldCaptureBoundaryError(RuntimeError):
     """Offline native capture cannot proceed without an observed lifecycle."""
 
@@ -1914,7 +1978,41 @@ class Trial:
                         artifact.get('policy', {}).get('options', {}).get('approved_experiences', [])
                         if (ref.get('memory_id'), ref.get('content_revision')) not in excluded]
 
-    def _point_gap(self, fields):
+    def _point_gap(self, fields, error=None):
+        # Persist bounded schema diagnostics before the entry runner terminates.
+        # Never retain packet values, executable code or credential contents.
+        if error is not None and getattr(self, "evidence_dir", None) is not None:
+            try:
+                raw_code = str(error)
+                code = raw_code if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", raw_code) else "observer_unavailable"
+                types = {key: type(fields[key]).__name__ for key in
+                    ("input", "actual_input", "state", "output", "error", "metrics", "context")
+                    if key in fields}
+                error_fields = fields.get("error")
+                error_types = ({key: type(value).__name__ for key, value in error_fields.items()
+                    if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key)}
+                    if isinstance(error_fields, dict) else {})
+                path = Path(self.evidence_dir) / "host-error-diagnostic.json"
+                saved = json.loads(path.read_text()) if path.is_file() else {}
+                points = saved.get("native_points") or []
+                projected = native_view(fields)
+                projected_error = projected.get("error")
+                projected_types = ({key: type(value).__name__ for key, value in projected_error.items()
+                    if isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key)}
+                    if isinstance(projected_error, dict) else {})
+                known_errors = {"appworld_code_error", "appworld_type_error_positional",
+                    "appworld_auth_401", "appworld_validation_422", "appworld_missing_access_token"}
+                points.append({"phase": fields.get("phase"), "kind": fields.get("kind"),
+                    "error_code": code, "field_types": types, "error_field_types": error_types,
+                    "projected_error_field_types": projected_types,
+                    "projected_error_code_known": isinstance(projected_error, dict)
+                        and projected_error.get("code") in known_errors,
+                    "projected_retryability_known": isinstance(projected_error, dict)
+                        and projected_error.get("retryability") in {"unknown", "retryable", "non_retryable"}})
+                saved["native_points"] = points[-8:]
+                path.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+            except (OSError, ValueError, TypeError, RuntimeError, AttributeError):
+                pass
         self.degraded_points += 1
         self.framework_capture["failures"] += 1
         context = getattr(self, "run_context", None)
@@ -1966,7 +2064,13 @@ class Trial:
                     # Native point keeps the end request pending until its
                     # registered children really report. Poll actual status,
                     # with a deadline; never synthesize child completions.
-                    deadline = real_clock() + 10.0
+                    now = real_clock()
+                    limit = now + 60.0
+                    task_deadline = getattr(self, "_task_deadline", None)
+                    if isinstance(task_deadline, (int, float)) and not isinstance(task_deadline, bool):
+                        limit = min(limit, task_deadline)
+                    deadline = min(now + 10.0, limit)
+                    event_count = None
                     closed = False
                     while real_clock() < deadline:
                         remaining = deadline - real_clock()
@@ -1980,8 +2084,19 @@ class Trial:
                                           "capture_complete": status["capture_complete"]}
                                 closed = True
                                 break
-                        except EvolutionError:
-                            pass
+                            observed = status.get("event_count")
+                            if (isinstance(observed, (int, float)) and not isinstance(observed, bool)
+                                    and 0 <= observed < float("inf") and observed == int(observed)):
+                                if event_count is not None and observed > event_count:
+                                    # A registered child is still reporting. Keep
+                                    # its original execution, within the task's
+                                    # remaining budget and a 60-second close cap.
+                                    deadline = min(limit, real_clock() + 10.0)
+                                event_count = max(event_count or 0, observed)
+                        except EvolutionError as error:
+                            if (error.status not in (0, 408, 429) and error.status < 500
+                                    or str(error).endswith("_cancelled")):
+                                raise AppWorldCaptureBoundaryError(str(error)) from None
                         remaining = deadline - real_clock()
                         if remaining > 0:
                             time.sleep(min(0.1, remaining))
@@ -2032,10 +2147,29 @@ class Trial:
             safe = native_view(fields)
             result = native_capture_point(self.evo, safe)
             if result.get("degraded"):
-                self._point_gap(fields)
+                self._point_gap(fields, error=result.get("reason", "point_capture_degraded"))
             return result
+        except Exception as error:
+            return self._point_gap(fields, error=error)
+
+    def execute_world(self, world, code, action):
+        try:
+            observation = world.execute(code)
+            if not isinstance(observation, str):
+                raise RuntimeError("appworld_execute_result_invalid")
+            return observation
         except Exception:
-            return self._point_gap(fields)
+            # The World dispatcher was entered, even if it could not return an
+            # observation. Close this attempted action as failed before the run
+            # error is reported. This does not assert any individual API ran.
+            self.point({"phase": "after", "kind": "action",
+                "context": action.get("context", self.run_context),
+                "executed": True, "status": "failed",
+                "actual_input": {"code": code, "native_view_redacted": True},
+                "output": {"error_code": "appworld_execute_host_error"},
+                "error": {"code": "appworld_execute_host_error",
+                          "retryability": "unknown"}})
+            raise
 
     def account(self, usage):
         calls = int(usage.get("llm_calls", 0) or 0)
@@ -2093,6 +2227,10 @@ class Trial:
 
     def receive(self):
         started = real_clock()
+        timeout = (self.task.get("budget") or {}).get("timeout_ms")
+        if (isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+                and 0 < timeout < float("inf")):
+            self._task_deadline = started + timeout / 1000.0
         synthetic_goal = synthetic_training_spec(self.task)
         raw_id = str((self.task.get("initial_state") or {})["source_task_id"])
         if not re.fullmatch(r"[a-z0-9]+_[0-9]+", raw_id):
@@ -2140,6 +2278,7 @@ class Trial:
                              raise_on_unsafe_syntax=True, null_patch_unsafe_execution=True,
                              timeout_seconds=int(os.environ.get("APPWORLD_CODE_TIMEOUT", "30")),
                              **({'load_ground_truth': False} if synthetic_goal else {}))
+            appworld_request_log_ellipsis_compatible(world)
             synthetic_before = None
             synthetic_execution_outcomes = []
             if synthetic_goal:
@@ -2418,9 +2557,7 @@ class Trial:
                         reason = "bounded_recovery_exhausted"
                         break
                     continue
-                observation = world.execute(code)
-                if not isinstance(observation, str):
-                    raise RuntimeError("appworld_execute_result_invalid")
+                observation = self.execute_world(world, code, action)
                 failed = observation.lstrip().startswith(("Execution failed", "Traceback"))
                 if synthetic_goal and (synthetic_goal.get('reproduce_container_error') or
                                        synthetic_goal['kind'] == 'cross_app_auth_recovery_summary'):

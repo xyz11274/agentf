@@ -12,15 +12,20 @@
 
 namespace trajectory::evolution::integration::gepa {
 
-// 输入是 task_id -> 指标对象。缺失字段按零处理，以免不完整评测被误当成高分。
+// 输入是 task_id -> 指标对象。缺失或无效指标返回不可比较的低值。
 double mean(const Json &scores, const std::string &field);
+// 同一完整评测集合的 quality/strict 保护，不要求 fitness 或 loop 同时改善。
+bool global_core_no_worse(const Json &candidate, const Json &reference);
+// 仅比较完全相同的逐题评测集合。全局质量与 strict 均不退时才允许替换
+// elite；目标达标代理不能抵消它们的下降。这是偏序，不作为 std::sort 比较器。
+bool global_better(const Json &candidate, const Json &incumbent);
 // 循环目标采用逐题约束，而不是只比较均值。这样可避免少数任务的大幅改善
 // 掩盖另一些任务无效循环显著增加的退化。
 bool loops_no_worse(const Json &candidate, const Json &parent);
 // Pareto 接受条件：质量、适应度以及循环三类核心目标均不得倒退。
 bool no_worse(const Json &candidate, const Json &parent);
-// “局部专长”允许节点总体均值不占优，但至少在一个任务上形成超过阈值的改进。
-// 该信号用于保留多样分支，最终能否发布仍由全局验证与留出门禁决定。
+// 调用方传入真实触发的同题子集。至少两题的净 strict/quality 收益，或质量和
+// strict 不退的净无效循环减少，才支持局部探索；资源波动不独立构成收益。
 bool local_gain(const Json &candidate, const Json &parent, double minimum = 0.000001);
 // 统一读取单亲变异和双亲融合节点，调用方无需根据节点类型分支。
 std::vector<std::size_t> parents(const Json &node);

@@ -6,6 +6,7 @@
 #include "control_generation.h"
 #include "local_support.h"
 #include "trajectory_evolution/orchestration.h"
+#include "trajectory_evolution/policy_runtime.h"
 
 #include <algorithm>
 #include <set>
@@ -155,7 +156,10 @@ Json control_generation_input(const v1::ShadowPolicySnapshot &snapshot,
                    "Loop limits apply to each execution in the scope."},
       {"loop_conditions",
        Json{{"error_codes", "Optional exact structured failure codes observed in the same "
-                            "execution; any listed code matches."},
+                            "execution. A single learned rule matches any listed code. "
+                            "For multiple learned rules with the same approved scope and exact "
+                            "actor, every observed query code must belong to one rule; mixed "
+                            "families retain the base decision."},
             {"replan_context", "Optional only for replan_on_failure with exactly one of "
                                "appworld_auth_401 or appworld_missing_access_token and at most "
                                "one authorized replan: copy the "
@@ -169,7 +173,15 @@ Json control_generation_input(const v1::ShadowPolicySnapshot &snapshot,
              "support and a loaded finish template. Required when a cap replaces the reviewed "
              "final answer."},
             {"combination", "All specified conditions must match. Narrowed recovery budgets need "
-                            "the observed condition, not only a reason describing it."}}},
+                            "the observed condition, not only a reason describing it."},
+            {"same_scope_siblings", "Multiple learned rules in the same approved source scope "
+                                    "and exact actor must be source-backed predicate rules with "
+                                    "nonempty pairwise disjoint error_codes, identical iteration/"
+                                    "no-progress budgets and recovery/finalization guards, "
+                                    "replan_on_failure=true and max_replans=1. The execution "
+                                    "shares one replan across the group, not one per rule. Preserve each "
+                                    "exact approved source. Change a shared budget consistently "
+                                    "for the whole group or abstain."}}},
       {"limits", limits},
       {"base_action_rules", raw.has("action_rules") ? raw["action_rules"] : Json(Json::Array{})},
       {"base_loop_rules", raw.has("loop_rules") ? raw["loop_rules"] : Json(Json::Array{})}};
@@ -436,8 +448,7 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot &snapshot,
     require(base.requested_level() >= v1::L3, "control_loop_level_required");
     const auto memory_id = item.str("memory_id");
     const auto &experience = source(snapshot, base, memory_id);
-    require(scopes.emplace(experience.target_scope(), item.str("actor_id")).second,
-            "control_duplicate_loop_scope");
+    const bool duplicate_scope = !scopes.emplace(experience.target_scope(), item.str("actor_id")).second;
     const v1::LoopRule *original = nullptr;
     for (const auto &rule : base.loop_rules())
       if (rule.target_scope() == experience.target_scope() && !rule.has_source_experience() &&
@@ -479,8 +490,10 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot &snapshot,
         "control_loop_relaxes_limit");
     if (iterations == original->max_iterations() && no_progress == original->max_no_progress() &&
         failure_replan == original->replan_on_failure() && replans == original->max_replans() &&
-        (!source_context || experience.content() == original->replan_context()))
+        (!source_context || experience.content() == original->replan_context())) {
+      require(!duplicate_scope, "control_duplicate_loop_scope");
       continue;
+    }
     // 可执行条件仅使用当前分支的观测事实，不把 reason 当作语义条件。
     // 保守模式仅放行有明确 actor 和收尾约束的候选。GEPA 仍须用完整轨迹预检
     // 必要工作、真实命中和质量收益；运行时继续检查 can_finalize 与未完成分支。
@@ -539,6 +552,14 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot &snapshot,
     rule->mutable_source_experience()->set_content_revision(experience.content_revision());
     rule->clear_rule_id();
     rule->set_rule_id(rule_id(json(*rule)));
+    bool compatible_previous = false;
+    for (const auto &previous : result.loop_rules())
+      if (&previous != rule && previous.has_source_experience() &&
+          previous.target_scope() == rule->target_scope() && previous.actor_id() == rule->actor_id()) {
+        require(disjoint_failure_recovery_rules(previous, *rule), "control_duplicate_loop_scope");
+        compatible_previous = true;
+      }
+    require(!duplicate_scope || compatible_previous, "control_duplicate_loop_scope");
   }
   for (const auto &item : schedules.items()) {
     keys(item, {"memory_id", "before_operation", "after_operation", "require_success", "reason",

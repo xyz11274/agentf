@@ -44,6 +44,7 @@ def _isolated_gepa_outputs(output, *, gepa=None, training=None, published=None, 
             stack.enter_context(patch.object(offline_gepa, name, value))
         stack.enter_context(patch.object(offline_gepa.controller, 'GEPA', gepa))
         stack.enter_context(patch.object(offline_gepa.controller, 'OUTPUT', output))
+        stack.enter_context(patch.object(reproduce, 'OUTPUT', output))
         stack.enter_context(patch.object(offline_gepa, 'save', side_effect=save_in_fixture))
         yield paths
 
@@ -123,6 +124,14 @@ def _candidate(path: Path, ids: list[str], *, strict: int = 6,
         "progress": str(progress), "judge_projection": layout.judge_projection(),
         "metrics": {"candidate": {"loop_basis": "model_review"}},
     }), encoding="utf-8")
+
+
+def _candidate_checkpoint(comparison: Path, artifact: dict, items: list) -> dict:
+    # Binding a candidate must preserve the already completed native grading
+    # source produced by _candidate, alongside its exact artifact/task rows.
+    progress = json.loads(comparison.with_name(comparison.stem + '-progress.json').read_text())
+    return dict(progress, artifact=artifact, total_parallelism=16, workers_per_shard=16,
+                items={row['task_id']: row for row in items})
 
 
 class CurrentNativeJudgeProfileTests(unittest.TestCase):
@@ -529,6 +538,12 @@ class StageGateRegressionTest(unittest.TestCase):
             search = {'round': 1, 'status': 'review_required', 'consecutive_failures': 5,
                       'attempts': [{'attempt': i, 'round': 1, 'status': 'failed'}
                                    for i in range(1, 6)]}
+            seed = output / 'published/current/strategy.json'
+            seed.parent.mkdir(parents=True)
+            seed.write_text(json.dumps({'level': 'L3', 'policy': {'candidate': 5}}))
+            search['current_seed'] = str(seed.resolve())
+            for attempt in search['attempts']:
+                attempt['seed'] = str(seed.resolve())
             path = output / 'gepa/status.json'
             path.parent.mkdir()
             path.write_text(json.dumps({'seed_search': search}))
@@ -570,7 +585,7 @@ class StageGateRegressionTest(unittest.TestCase):
             self.assertFalse(result['candidate']['retry_loop_complete'])
             self.assertAlmostEqual(result['candidate']['avg_invalid_loop'], .1)
 
-    def test_five_distinct_failed_seeds_stop_sixth_and_repeat_resume_does_not_count(self) -> None:
+    def test_five_distinct_failed_seeds_retain_count_and_allow_sixth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             seed = root / 'published/current/strategy.json'
@@ -592,8 +607,7 @@ class StageGateRegressionTest(unittest.TestCase):
                     progress = comparison.with_name('progress.json')
                     value.update(seed=str(seed), progress=str(progress))
                     comparison.write_text(json.dumps(value))
-                    progress.write_text(json.dumps({'artifact': artifact, 'total_parallelism': 16, 'workers_per_shard': 16,
-                        'items': {row['task_id']: row for row in value['items']}}))
+                    progress.write_text(json.dumps(_candidate_checkpoint(comparison, artifact, value['items'])))
                     passed, result = gate.verify_stage('32', comparison, baseline, seed)
                     self.assertFalse(passed); self.assertTrue(result['coverage_pass'])
                     reproduce.record_seed_gate(seed, 32, comparison, result)
@@ -606,13 +620,11 @@ class StageGateRegressionTest(unittest.TestCase):
                     self.assertNotIn('unclassified', state['attempts'][-1]['diagnostics']['failed_task_groups'])
                     if index < 4:
                         self.assertEqual(reproduce.begin_seed_attempt(seed)['attempt'], index + 1)
-                self.assertEqual(state['status'], 'review_required')
+                self.assertEqual(state['status'], 'searching')
                 seed.write_text(json.dumps({'level': 'L3', 'policy': {'candidate': 5}}))
-                with self.assertRaisesRegex(RuntimeError, 'five_failed_seeds_review_required'):
-                    reproduce.begin_seed_attempt(seed)
-                with self.assertRaisesRegex(RuntimeError, 'five_failed_seeds_review_required'):
-                    offline_gepa.require_seed_gates(seed)
-                self.assertEqual(len(reproduce.seed_search()['attempts']), 5)
+                self.assertEqual(reproduce.begin_seed_attempt(seed)['attempt'], 6)
+                self.assertEqual(len(reproduce.seed_search()['attempts']), 6)
+                self.assertEqual(reproduce.seed_search()['consecutive_failures'], 5)
                 # There is no touch-file automatic clearing command.
                 self.assertFalse(hasattr(reproduce, 'complete_seed_review'))
 
@@ -636,9 +648,8 @@ class StageGateRegressionTest(unittest.TestCase):
                 value['items'][0].update(tokens=None, model_calls=None, tokens_complete=False,
                                          execution_costs_complete=False, execution_attempts=2)
                 comparison.write_text(json.dumps(value))
-                comparison.with_name('progress.json').write_text(json.dumps({
-                    'artifact': artifact, 'total_parallelism': 16, 'workers_per_shard': 16,
-                    'items': {row['task_id']: row for row in value['items']}}))
+                comparison.with_name('progress.json').write_text(json.dumps(
+                    _candidate_checkpoint(comparison, artifact, value['items'])))
                 passed, result = gate.verify_stage('32', comparison, baseline, seed)
                 self.assertFalse(passed)
                 self.assertTrue(result['coverage_pass'])
@@ -820,8 +831,7 @@ class StageGateRegressionTest(unittest.TestCase):
                     _candidate(comparison, ids, quality=.42 if count == 32 else .4)
                     value = json.loads(comparison.read_text()); progress = comparison.with_name('progress.json')
                     value.update(seed=str(seed), progress=str(progress)); comparison.write_text(json.dumps(value))
-                    progress.write_text(json.dumps({'artifact': artifact, 'total_parallelism': 16, 'workers_per_shard': 16,
-                        'items': {row['task_id']: row for row in value['items']}}))
+                    progress.write_text(json.dumps(_candidate_checkpoint(comparison, artifact, value['items'])))
                     passed, result = gate.verify_stage(str(count), comparison, baseline, seed)
                     self.assertEqual(passed, count == 32)
                     reproduce.record_seed_gate(seed, count, comparison, result)
@@ -842,8 +852,7 @@ class StageGateRegressionTest(unittest.TestCase):
             value = json.loads(comparison.read_text())
             value.update(seed=str(seed), progress=str(progress))
             comparison.write_text(json.dumps(value))
-            checkpoint = {'artifact': artifact,
-                          'items': {row['task_id']: row for row in value['items']}}
+            checkpoint = _candidate_checkpoint(comparison, artifact, value['items'])
             progress.write_text(json.dumps(checkpoint))
             self.assertTrue(gate.verify_stage('32', comparison, baseline, seed)[0])
             replacement = {'level': 'L3', 'policy': {'advice': 'replacement'}}
@@ -1099,14 +1108,15 @@ class StageGateRegressionTest(unittest.TestCase):
         self.assertIsNone(gate.aggregate([])["intent_f1"])
 
     @contextmanager
-    def native_publish_fixture(self, root, count=3):
+    def native_publish_fixture(self, root, count=3, *, job='fixture-job', correct=210, loops=1):
         import compare
         import hashlib
-        gepa, published, dataset = root / 'gepa', root / 'published', root / 'dataset'
-        search = gepa / 'workspace/agent-evaluation/fixture-job/search'
+        gepa, published = root / 'gepa', root / 'published'
+        dataset = root / 'training/datasets/comparison500'
+        search = gepa / 'workspace/agent-evaluation' / job / 'search'
         versions = search / 'versions'
         versions.mkdir(parents=True)
-        dataset.mkdir()
+        dataset.mkdir(parents=True, exist_ok=True)
         dataset_version = 'dataset-v1:fixture'
         (dataset / 'manifest.json').write_text(json.dumps({
             'metadata': {'dataset_version': dataset_version}, 'summary': {'splits': {'holdout': 500}}}))
@@ -1126,27 +1136,29 @@ class StageGateRegressionTest(unittest.TestCase):
         config_path = runtime / 'evaluation.json'
         config_path.write_text(json.dumps(config))
         env = {'OPENAI_BASE_URL': 'fixture-endpoint', 'OPENAI_MODEL': 'fixture-model'}
-        def native_rows(variant):
+        def native_rows(variant, version=None):
             baseline = variant == 'baseline'
-            correct = 200 if baseline else 210
-            tokens, calls, duration, loops = (10, 2, 100, 2) if baseline else (9, 1, 90, 1)
+            passed = 200 if baseline else correct
+            tokens, calls, duration, waste = (10, 2, 100, 2) if baseline else (9, 1, 90, loops)
             return [{'task_id': f'task-{i:03d}', 'trial_id': f'{variant}-{i}',
+                     'task_version': f'fixture-task-version-{i}',
                      'split': 'holdout', 'variant_id': variant, 'execution_status': 'completed',
-                     'duration_ms': duration, 'verdict': 'passed' if i < correct else 'failed',
+                     'duration_ms': duration, 'verdict': 'passed' if i < passed else 'failed',
                      'metrics': {'tokens': tokens, 'llm_calls': calls},
-                     'evidence': {'output': {'final': {
-                         'appworld_reward': int(i < correct), 'strict_passed': i < correct,
-                         'quality_score': int(i < correct), 'tokens_complete': True,
+                     'evidence': {'loaded_version': version or 'baseline-version', 'output': {'final': {
+                         'appworld_reward': int(i < passed), 'strict_passed': i < passed,
+                         'quality_score': int(i < passed), 'tokens_complete': True,
                          'tokens': tokens, 'model_calls': calls, 'latency_ms': 9999,
                          'framework_capture': {'status': 'complete'}}},
-                         'assessment': {'version': 'goal-assessment-v1', 'quality': int(i < correct),
-                                        'quality_upper': int(i < correct), 'coverage': 1, 'critical_failures': 0},
-                         'loop_review': {'status': 'complete', 'count': loops, 'observed_iterations': 3},
+                         'assessment': {'version': 'goal-assessment-v1', 'quality': int(i < passed),
+                                        'quality_upper': int(i < passed), 'coverage': 1, 'critical_failures': 0},
+                         'loop_review': {'status': 'complete', 'count': int(waste) +
+                             int(i < round((waste - int(waste)) * 500)), 'observed_iterations': 3},
                          'trace': {'identity': {'run_id': f'{variant}-{i}'},
                                    'attributes': {'capture_complete': True},
                                    'events': [{'kind': 'run.start'}, {'kind': 'run.end'}]}}} for i in range(500)]
         baseline = native_rows('baseline')
-        baseline_source = gepa / 'l0-current-stage500/capture/report.json'
+        baseline_source = gepa / 'l0-current-stage500/capture' / job / 'report.json'
         baseline_source.parent.mkdir(parents=True)
         baseline_source.parent.joinpath('config.json').write_text(json.dumps(config))
         baseline_source.write_text(json.dumps({'complete': True,
@@ -1158,7 +1170,8 @@ class StageGateRegressionTest(unittest.TestCase):
             'items': [compare.compact_row(row, 'original-L0') for row in baseline]}))
         with _isolated_gepa_outputs(root, gepa=gepa, published=published, dataset=dataset), \
              patch.object(offline_gepa.controller, 'environment', return_value=env), \
-             patch.object(offline_gepa, 'progress', return_value={'job_id': 'fixture-job', 'job_status': 'passed'}), \
+             patch.object(offline_gepa, 'progress', return_value={'job_id': job, 'job_status': 'passed'}), \
+             patch.object(reproduce._APPWORLD_LAYOUT, 'version', side_effect=lambda a: a['agent']['revision']), \
              patch.object(offline_gepa.controller, 'version', side_effect=lambda a: a['agent']['revision']):
             context = compare._native_gepa_evaluation_context(config_path, dataset_version)
             tree = {'status': 'completed', 'dataset_version': dataset_version,
@@ -1168,7 +1181,7 @@ class StageGateRegressionTest(unittest.TestCase):
                                                  'candidates': []}, 'evaluations': {}}
             reports = []
             for node in range(1, count + 1):
-                version = f'version-{node}'
+                version = f'version-{node}' if job == 'fixture-job' else f'{job}-version-{node}'
                 report = search / f'evaluations/eval-{node}/attempt-1/report.json'
                 report.parent.mkdir(parents=True)
                 run_id = f'evaluation-{node}'
@@ -1178,7 +1191,7 @@ class StageGateRegressionTest(unittest.TestCase):
                                       'judge_fingerprint': 'frozen-judge',
                                       'variants': [{'id': 'baseline', 'version': 'baseline-version'},
                                                    {'id': 'candidate', 'version': version}]},
-                    'trials': baseline + native_rows('candidate')}))
+                    'trials': baseline + native_rows('candidate', version)}))
                 report_hash = hashlib.sha256(report.read_bytes()).hexdigest()
                 report.with_name('manifest.json').write_text(json.dumps({'complete': True,
                     'run_id': run_id, 'dataset_version': dataset_version,
@@ -1215,6 +1228,49 @@ class StageGateRegressionTest(unittest.TestCase):
             self.assertEqual(proof['candidate']['levels']['L2_action'], 0)
             self.assertEqual(proof['candidate']['levels']['L2_schedule'], 0)
 
+    def test_deleted_native_history_allows_only_verified_better_new_result(self):
+        import shutil
+        for case in ('better', 'worse', 'scope-missing', 'new-source-invalid'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with self.native_publish_fixture(root, count=1, job='old',
+                        correct=230 if case == 'worse' else 210) as old:
+                    published = offline_gepa.publish()
+                    target = old['published'] / 'strategy'
+                    if case == 'scope-missing':
+                        manifest = json.loads((target / 'manifest.json').read_text())
+                        manifest.pop('dataset_version')
+                        (target / 'manifest.json').write_text(json.dumps(manifest))
+                    original = {path.name: path.read_text() for path in target.iterdir()}
+                shutil.rmtree(root / 'gepa')  # Only this closed synthetic fixture.
+                with self.native_publish_fixture(root, count=1, job='new',
+                        correct=220 if case == 'worse' else 230, loops=1.2) as new:
+                    if case == 'new-source-invalid':
+                        new['reports'][0].write_text('{}')
+                        with self.assertRaisesRegex(RuntimeError, 'native_report_missing'):
+                            offline_gepa.publish()
+                        result = None
+                    else:
+                        result = offline_gepa.publish()
+                    if case == 'better':
+                        self.assertEqual(result['version'], 'new-version-1', result.get('publication_reason'))
+                        self.assertTrue(result['goal_passed'])
+                        self.assertEqual(result['goal_checks']['candidate']['strict_passed'], 230)
+                        self.assertEqual(result['goal_checks']['candidate']['avg_invalid_loop'], 1.2)
+                        history = json.loads((root / 'gepa/previous-results.json').read_text())['records']
+                        self.assertEqual(history[0]['original_json'], original)
+                        self.assertFalse(history[0]['native_proof_available'])
+                        self.assertEqual(history[0]['goal_passed'], published['goal_passed'])
+                        saved = json.loads((target / 'baseline.json').read_text())
+                        self.assertEqual(saved['metrics']['strict_passed'], 200)
+                    else:
+                        for name, text in original.items():
+                            self.assertEqual((target / name).read_text(), text)
+                        if result is not None:
+                            self.assertEqual(result['publication_status'], 'not_published')
+                            self.assertEqual(result['selected_version'], published['version'])
+                        self.assertFalse((root / 'gepa/previous-results.json').exists())
+
     def test_native_publish_one_or_two_real_candidates_without_duplicating_scores(self):
         for count in (1, 2):
             with self.subTest(count=count), tempfile.TemporaryDirectory() as directory:
@@ -1225,7 +1281,13 @@ class StageGateRegressionTest(unittest.TestCase):
                     self.assertEqual(result['evaluated_candidate_count'], count)
                     self.assertEqual(len(result['candidate_goal_checks']), count)
                     self.assertEqual([source.read_bytes() for source in fixture['reports']], before)
-                    self.assertTrue((fixture['published'] / 'gepa-final/strategy.json').is_file())
+                    target = fixture['published'] / 'strategy'
+                    self.assertEqual(json.loads((target / 'strategy.json').read_text()),
+                                     json.loads(Path(result['proof_artifact']).read_text()))
+                    delivered = json.loads((target / 'manifest.json').read_text())
+                    self.assertTrue(delivered['goal_passed'])
+                    self.assertEqual(delivered['selected_node'], result['selected_node'])
+                    self.assertEqual(len(set(delivered['task_ids'])), 500)
 
     def test_fresh_native_paired_l0_proof_without_historical_500_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1402,12 +1464,21 @@ assert json.loads((root / 'healthy.json').read_text())['executions'] == 1
             shutil.copyfile(Path(reproduce.__file__), here / 'reproduce.py')
             (here / 'layout.py').write_text('''import json
 from pathlib import Path
+OUTPUT = Path(__file__).resolve().parents[4] / 'trace_output/appworld'
+GEPA = OUTPUT / 'gepa'
 def save(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
 ''')
-            (here / 'learning.py').write_text('def validate_seed_label(label):\n    return label\n')
+            (here / 'learning.py').write_text('''from pathlib import Path
+def validate_seed_label(label):
+    return label
+def _completed_training_tasks(controller):
+    marker = Path(__file__).resolve().parents[4] / 'trace_output/appworld/training/complete'
+    if not marker.is_file():
+        raise RuntimeError('appworld_training_not_complete')
+''')
             state_path = root / 'trace_output/appworld/gepa/status.json'
             state_path.parent.mkdir(parents=True)
             search = {'status': 'searching', 'round': 1, 'consecutive_failures': 0,
@@ -1428,7 +1499,14 @@ reproduce.train_with_recovery = train
 reproduce.seed_with_recovery = lambda **kwargs: {'level': 'L3'}
 reproduce.stage = lambda *args: None
 reproduce.verify = lambda *args, **kwargs: 0
-reproduce.run = lambda *args, **kwargs: 0
+def native_callback(script, *args, **kwargs):
+    if script == 'offline_gepa.py' and '--run' in args:
+        path = reproduce.OUTPUT / 'gepa/status.json'
+        state = reproduce._read(path)
+        state.update(job_id='fixture-job', job_status='passed')
+        reproduce.layout.save(path, state)
+    return 0
+reproduce.run = native_callback
 raise SystemExit(reproduce.main())
 ''')
             process = subprocess.Popen([sys.executable, '-B', str(wrapper), '--all'],
@@ -2465,7 +2543,424 @@ class OfflineGepaRecoveryTests(unittest.TestCase):
             self.assertEqual(offline_gepa.read(offline_gepa.CONFIG / 'gepa.json')['max_model_calls'], 1024)
 
 
+class OfflineGepaCommandRetryTests(unittest.TestCase):
+    """Run the real controller/offline loop around a model-free fake manager."""
+    fixture = OfflineGepaRecoveryTests.fixture
+
+    def run_command_fixture(self, *, failures=1, error='gepa_model_rate_limited',
+                            cancelled=False, model_budget_exhausted=False,
+                            deadline_seconds=1000, cancel_after_seconds=None):
+        from tools.trajectory_evolution.experiments.common_lifecycle import (
+            LifecycleController, STAGE_NAMES, StageResult,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            artifact, seed, _, _, tree = self.fixture(directory)
+            root = Path(directory)
+            original_tree = offline_gepa.read(tree)
+            original_tree.update(model_calls=8, trials_used=32, started_ms=1,
+                                 reflection_stages=[{'file': '1.pool-map-0', 'reused': False}])
+            offline_gepa.save(tree, original_tree)
+            report = tree.parent / 'evaluations/healthy/report.json'
+            report.parent.mkdir(parents=True)
+            report.write_text(json.dumps({'complete': True, 'trials': [{
+                'task_id': 'train-healthy', 'trial_id': 'retained-trial',
+                'verdict': 'passed', 'metrics': {'quality': 1},
+                'evidence': {'loop_review': {'status': 'complete', 'count': 0}},
+            }]}))
+            completed_map = tree.parent / 'reflections/1.pool-map-0.draft.json'
+            completed_map.parent.mkdir()
+            completed_map.write_text('{"reason":"retained diagnosis","experiences":[]}')
+            protected = {path: path.read_bytes() for path in (seed, tree, report, completed_map)}
+            remaining = failures
+            operations, delays, stages = [], [], []
+            clock = [0.0]
+
+            class Process:
+                def __init__(self):
+                    self.stdout = io.StringIO('trajectory-integration.v1 listening=127.0.0.1:1\n')
+                    self.closed = False
+                def poll(self):
+                    return 0 if self.closed else None
+                def terminate(self):
+                    self.closed = True
+                def wait(self, timeout=None):
+                    self.closed = True
+                    return 0
+                def kill(self):
+                    self.closed = True
+            process = Process()
+
+            def progress(job_id):
+                self.assertEqual(job_id, 'original')
+                return {'job_id': job_id, 'job_status': 'error' if remaining else 'passed',
+                        'job_error': error if remaining else None,
+                        'cancel_requested': cancelled or (cancel_after_seconds is not None
+                            and clock[0] >= cancel_after_seconds),
+                        'model_calls': 8, 'max_model_calls': 8 if model_budget_exhausted else 64,
+                        'deadline_ms': (2000000000 + deadline_seconds) * 1000,
+                        'rounds': 1, 'nodes': 2}
+
+            class Opener:
+                @contextmanager
+                def open(inner, request, timeout=None):
+                    nonlocal remaining
+                    message = json.loads(request.data)
+                    operation = message['operation']
+                    operations.append(operation)
+                    if operation == 'agent_evaluation.status':
+                        result = {'jobs': {'original': {'status': 'running'}}}
+                    elif operation == 'agent_evaluation.retry':
+                        self.assertEqual(set(message), {'operation', 'request_id', 'job_id'})
+                        self.assertEqual(message['job_id'], 'original')
+                        remaining -= 1
+                        result = {'accepted': True}
+                    else:
+                        raise AssertionError('fresh submission or unexpected management operation')
+                    yield io.StringIO(json.dumps({'ok': True, 'result': result}))
+
+            def sleep(seconds):
+                self.assertGreaterEqual(seconds, 0)
+                self.assertLessEqual(seconds, 5)
+                delays.append(seconds)
+                clock[0] += seconds
+                self.assertLess(clock[0], 1000, 'automatic retry did not stop at its bound')
+
+            class Adapter:
+                name = 'fake-appworld'
+                output_root = root
+                def split_counts(self):
+                    return {'train': 134, 'val': 12, 'holdout': 500}
+
+            state_path = root / 'command-lifecycle.json'
+            prior = {stage: {'status': 'complete', 'artifact': 'retained:' + stage}
+                     for stage in STAGE_NAMES[:STAGE_NAMES.index('gepa_run')]}
+            for stage in ('pilot32', 'validation100'):
+                prior[stage]['gate_passed'] = True
+            state_path.write_text(json.dumps({'stage_results': prior}))
+
+            def runner(stage, context):
+                stages.append(stage)
+                self.assertEqual(stage, 'gepa_run')
+                result = offline_gepa.run(seed)
+                return StageResult('complete' if result['job_status'] in ('passed', 'rejected')
+                                   else 'pending', data={'job_id': result['job_id']})
+
+            with patch.object(offline_gepa, 'require_seed_gates', return_value=artifact), \
+                 patch.object(offline_gepa, '_recorded_job', return_value='original'), \
+                 patch.object(offline_gepa.controller, 'environment', return_value={}), \
+                 patch.object(offline_gepa.subprocess, 'Popen', return_value=process) as launch, \
+                 patch.object(offline_gepa.select, 'select', return_value=([process.stdout], [], [])), \
+                 patch.object(offline_gepa.urllib.request, 'build_opener', return_value=Opener()), \
+                 patch.object(offline_gepa, 'progress', side_effect=progress), \
+                 patch.object(offline_gepa.time, 'sleep', side_effect=sleep), \
+                 patch.object(offline_gepa.time, 'time', side_effect=lambda: 2000000000 + clock[0]), \
+                 patch.object(offline_gepa.time, 'monotonic', side_effect=lambda: clock[0]):
+                state = LifecycleController(Adapter(), runner, state_path).run(stop_at='gepa_run')
+            launch.assert_called_once()
+            self.assertEqual(stages, ['gepa_run'])
+            self.assertTrue(process.closed)
+            self.assertEqual(state['stage_results']['gepa_run']['data']['job_id'], 'original')
+            for stage, receipt in prior.items():
+                self.assertEqual(state['stage_results'][stage], receipt)
+            for path, original in protected.items():
+                self.assertEqual(path.read_bytes(), original, 'retry rewrote cached task/map/budget')
+            return state, operations.count('agent_evaluation.retry'), sum(delays)
+
+    def test_one_command_recovers_429_same_job_without_resetting_cache_or_budget(self):
+        state, retries, delay = self.run_command_fixture()
+        self.assertEqual((state['status'], retries), ('complete', 1))
+        self.assertGreaterEqual(delay, 15)
+
+    def test_persistent_429_stops_after_three_same_job_retries(self):
+        state, retries, delay = self.run_command_fixture(failures=99)
+        self.assertEqual((state['status'], retries), ('pending', 3))
+        self.assertGreaterEqual(delay, 105)
+
+    def test_cancel_permanent_config_and_exhausted_budget_do_not_retry(self):
+        for options in ({'cancelled': True}, {'error': 'gepa_model_key_missing'},
+                        {'model_budget_exhausted': True}, {'deadline_seconds': 0}):
+            with self.subTest(options=options):
+                state, retries, _ = self.run_command_fixture(**options)
+                self.assertEqual((state['status'], retries), ('pending', 0))
+
+    def test_cancel_or_deadline_during_backoff_stops_without_retry(self):
+        for options in ({'cancel_after_seconds': 5}, {'deadline_seconds': 5}):
+            with self.subTest(options=options):
+                state, retries, delay = self.run_command_fixture(**options)
+                self.assertEqual((state['status'], retries, delay), ('pending', 0, 5))
+
+
+class NoNewCandidateTerminalTests(unittest.TestCase):
+    def test_same_seed_rejection_finishes_without_proof_or_publication(self):
+        for no_candidate, final_state, publication_blocked in ((True, None, False), (True, {}, False),
+                (True, {'candidates': []}, False), (False, {'candidates': [{'node': 1}]}, False),
+                (False, {'candidates': [{'node': 1}]}, True)):
+            with self.subTest(no_candidate=no_candidate, final_state=final_state,
+                              publication_blocked=publication_blocked), \
+                 tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                seed = output / 'published/strategy/strategy.json'
+                seed.parent.mkdir(parents=True)
+                seed.write_text('{"level":"L3"}')
+                seed.with_name('manifest.json').write_text('{"original_publication":true}')
+                original = {path: path.read_bytes() for path in seed.parent.iterdir()}
+                gepa = output / 'gepa'
+                runtime = gepa / 'runtime'; runtime.mkdir(parents=True)
+                (runtime / 'evaluation.json').write_text(json.dumps({'judge': {
+                    'runtime_config': str(reproduce._APPWORLD_LAYOUT.RUNTIME / 'runtime.json')}}))
+                (runtime / 'gepa.json').write_text(json.dumps({'prompt_file': str((ROOT /
+                    'tools/trajectory_evolution/config/prompts/gepa-reflection.txt').resolve())}))
+                (gepa / 'plan.json').write_text(json.dumps({'seed': str(seed)}))
+                identity = {'seed_label': 'strategy', 'seed_artifact': str(seed.resolve())}
+                receipts = {name: {'status': 'complete'} for name in
+                            ('prepare', 'train', 'seed', 'pilot32', 'validation100', 'gepa_prepare')}
+                for name in ('pilot32', 'validation100'):
+                    receipts[name]['gate_passed'] = True
+                lifecycle = gepa / 'lifecycle.json'
+                lifecycle.write_text(json.dumps({'candidate': identity, 'stage_results': receipts}))
+                tree = gepa / 'workspace/agent-evaluation/original/search/tree.json'
+                tree.parent.mkdir(parents=True)
+                tree.write_text(json.dumps({'status': 'validation_rejected' if no_candidate else 'completed',
+                    'holdout_started': not no_candidate,
+                    'final_holdout': final_state}))
+                tree_before = tree.read_bytes()
+                operations = []
+
+                def native_callback(script, *arguments, **kwargs):
+                    self.assertEqual(script, 'offline_gepa.py')
+                    operations.append(arguments[0])
+                    if arguments[0] == '--run':
+                        (gepa / 'status.json').write_text(json.dumps({'job_id': 'original',
+                            'job_status': 'rejected' if no_candidate else 'passed'}))
+                    elif arguments[0] == '--proof':
+                        proof = gepa / 'final-comparison/manifest.json'
+                        proof.parent.mkdir()
+                        proof.write_text(json.dumps({'goal_passed': True, 'selected_node': 1,
+                            'candidate_goal_checks': [{'node': 1, 'gate': {'candidate': {'quality': 1}}}]}))
+                    elif arguments[0] == '--publish' and publication_blocked:
+                        (gepa / 'status.json').write_text(json.dumps({'status': 'not_published',
+                            'publication': {'publication_status': 'not_published',
+                                            'publication_reason': 'appworld_delivery_historical_scope_unverified',
+                                            'requested_goal_passed': True}}))
+                    elif arguments[0] != '--publish':
+                        raise AssertionError('unexpected native operation')
+                    return 0
+
+                with _isolated_gepa_outputs(output), \
+                     patch.object(reproduce._APPWORLD_LAYOUT, 'GEPA', gepa), \
+                     patch.object(reproduce._AppWorldDatasetAdapter, 'output_root', output), \
+                     patch.object(reproduce, '_candidate_identity', return_value=identity), \
+                     patch.object(reproduce, 'verify', return_value=0), \
+                     patch.object(reproduce, '_native_gepa_service_active', return_value=False), \
+                     patch.object(offline_gepa, '_recorded_job', return_value='original'), \
+                     patch.object(reproduce, 'run', side_effect=native_callback), \
+                     patch.object(sys, 'argv', ['reproduce.py', '--all']), \
+                     redirect_stdout(io.StringIO()), \
+                     patch.object(offline_gepa.subprocess, 'Popen', side_effect=AssertionError('no live API')):
+                    self.assertEqual(reproduce.main(), 0)
+                    if no_candidate:
+                        self.assertEqual(reproduce.main(), 0)
+                result = json.loads(lifecycle.read_text())
+                if no_candidate:
+                    self.assertEqual(result['status'], 'not_qualified')
+                    self.assertEqual(result['goal_status'], 'goal_not_met')
+                    self.assertEqual(result['holdout_status'], 'not_run')
+                    self.assertNotIn('last_error', result)
+                    self.assertEqual(operations, ['--run'])
+                    self.assertNotIn('publish', result['stage_results'])
+                    self.assertFalse((gepa / 'final-comparison').exists())
+                else:
+                    self.assertEqual(result['status'], 'not_published' if publication_blocked else 'published')
+                    self.assertEqual(operations, ['--run', '--proof', '--publish'])
+                    if publication_blocked:
+                        self.assertNotIn('last_error', result)
+                        self.assertTrue(result['stage_results']['publish']['data']['requested_goal_passed'])
+                self.assertEqual(tree.read_bytes(), tree_before)
+                for path, before in original.items():
+                    self.assertEqual(path.read_bytes(), before)
+
+    def test_missing_foreign_or_started_holdout_is_not_no_candidate_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            seed = output / 'published/strategy/strategy.json'
+            gepa = output / 'gepa'; gepa.mkdir()
+            (gepa / 'status.json').write_text('{"job_id":"original","job_status":"rejected"}')
+            plan = gepa / 'plan.json'
+            tree = gepa / 'workspace/agent-evaluation/original/search/tree.json'
+            tree.parent.mkdir(parents=True)
+            with patch.object(reproduce._APPWORLD_LAYOUT, 'GEPA', gepa):
+                self.assertFalse(reproduce._native_gepa_no_new_candidate(seed))
+                for planned, state in ((output / 'foreign.json', {'status': 'validation_rejected'}),
+                                      (seed, {'status': 'error'}),
+                                      (seed, {'status': 'validation_rejected', 'holdout_started': True}),
+                                      (seed, {'status': 'validation_rejected', 'final_holdout': {
+                                          'candidates': [{'node': 1}]}})):
+                    plan.write_text(json.dumps({'seed': str(planned)}))
+                    tree.write_text(json.dumps(state))
+                    self.assertFalse(reproduce._native_gepa_no_new_candidate(seed))
+
+
+class PublishedRestartTests(unittest.TestCase):
+    def test_cleared_restart_uses_generic_seed_and_reaches_missing_gate_prefix(self):
+        for failed_count in (32, 100):
+            with self.subTest(failed_count=failed_count), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                seed = output / 'published/strategy/strategy.json'
+                old_alias = output / 'published/old-seed/strategy.json'
+                for path in (seed, old_alias):
+                    path.parent.mkdir(parents=True)
+                    path.write_text(json.dumps({'level': 'L3', 'agent': {'revision': 'retained-seed'}}))
+                seed.with_name('manifest.json').write_text(json.dumps({
+                    'version': 'retained-seed', 'source_strategy': str(old_alias)}))
+                baseline = seed.with_name('baseline.json')
+                baseline.write_text(json.dumps({'status': 'complete', 'items': [{'task_id': 'old-task'}],
+                                                'source_report': str(output / 'deleted-native/report.json')}))
+                before = {path: path.read_bytes() for path in (seed, old_alias, baseline)}
+                training = output / 'training/full-training-status.json'
+                training.parent.mkdir()
+                training.write_text(json.dumps({'status': 'complete'}))
+
+                def stage(seed_path, count):
+                    self.assertEqual(seed_path, seed.resolve())
+                    if count == failed_count:
+                        raise RuntimeError(f'appworld_seed_stage{count}_goal_gate_not_passed')
+
+                def verify(seed_path, count, *args, **kwargs):
+                    self.assertEqual(seed_path, seed.resolve())
+                    return int(count == failed_count)
+
+                with _isolated_gepa_outputs(output), \
+                     patch.object(reproduce._APPWORLD_LAYOUT, 'GEPA', output / 'gepa'), \
+                     patch.object(reproduce, 'assert_idle_for_fresh'), \
+                     patch.object(reproduce, 'stage', side_effect=stage) as stages, \
+                     patch.object(reproduce, 'verify', side_effect=verify) as checks, \
+                     patch.object(reproduce, 'run') as native, \
+                     patch.object(sys, 'argv', ['reproduce.py', '--restart-gepa', '--all']), \
+                     redirect_stdout(io.StringIO()), patch('sys.stderr', new=io.StringIO()):
+                    self.assertEqual(reproduce.main(), 1)
+                self.assertEqual([call.args[1] for call in stages.call_args_list],
+                                 [32] if failed_count == 32 else [32, 100])
+                self.assertEqual([call.args[1] for call in checks.call_args_list],
+                                 [32] if failed_count == 32 else [32, 100])
+                native.assert_not_called()
+                self.assertFalse((output / 'gepa/l0-current-stage500').exists())
+                for path, original in before.items():
+                    self.assertEqual(path.read_bytes(), original)
+                lifecycle = json.loads((output / 'gepa/lifecycle.json').read_text())
+                self.assertEqual(lifecycle['candidate']['seed_artifact'], str(seed.resolve()))
+                failed = 'pilot32' if failed_count == 32 else 'validation100'
+                self.assertFalse(lifecycle['stage_results'][failed]['gate_passed'])
+
+    def test_explicit_full_restart_uses_publication_instead_of_retired_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            for label in ('strategy', 'retired-seed'):
+                path = output / 'published' / label / 'strategy.json'
+                path.parent.mkdir(parents=True)
+                path.write_text('{}')
+            seed = output / 'published/strategy/strategy.json'
+            plan = output / 'gepa/plan.json'; plan.parent.mkdir()
+            plan.write_text(json.dumps({'seed': str(output / 'published/retired-seed/strategy.json')}))
+            with patch.object(reproduce, 'OUTPUT', output), \
+                 patch.object(reproduce, '_experiment_status'), \
+                 patch.object(reproduce, 'restart_gepa', return_value={'status': 'old_gepa_removed'}) as reset, \
+                 patch.object(reproduce, '_run_common_all', return_value={}) as common, \
+                 patch.object(sys, 'argv', ['reproduce.py', '--restart-gepa', '--all']), \
+                 redirect_stdout(io.StringIO()):
+                self.assertEqual(reproduce.main(), 0)
+            reset.assert_called_once_with(seed.resolve())
+            common.assert_called_once_with(seed.resolve(), 'strategy', stop_at=None)
+
+    def test_restart_alone_defaults_to_all_and_other_actions_remain_exclusive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            seed = output / 'published/strategy/strategy.json'
+            seed.parent.mkdir(parents=True)
+            seed.write_text('{}')
+            with patch.object(reproduce, 'OUTPUT', output), \
+                 patch.object(reproduce, '_experiment_status'), \
+                 patch.object(reproduce, 'restart_gepa', return_value={}), \
+                 patch.object(reproduce, '_run_common_all', return_value={}) as common, \
+                 patch.object(sys, 'argv', ['reproduce.py', '--restart-gepa']), \
+                 redirect_stdout(io.StringIO()):
+                self.assertEqual(reproduce.main(), 0)
+            common.assert_called_once_with(seed.resolve(), 'strategy', stop_at=None)
+        for argv in (['reproduce.py'], ['reproduce.py', '--restart-gepa', '--status'],
+                     ['reproduce.py', '--all', '--status']):
+            with self.subTest(argv=argv), patch.object(sys, 'argv', argv), \
+                 patch('sys.stderr', new=io.StringIO()):
+                with self.assertRaises(SystemExit) as stopped:
+                    reproduce.main()
+                self.assertEqual(stopped.exception.code, 2)
+
+    def test_nonempty_search_still_requires_real_seed_gates_before_reset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            retained = output / 'gepa/workspace/retained.json'
+            retained.parent.mkdir(parents=True)
+            retained.write_bytes(b'{"actual_checkpoint":true}')
+            with _isolated_gepa_outputs(output), \
+                 patch.object(reproduce._APPWORLD_LAYOUT, 'GEPA', output / 'gepa'), \
+                 patch.object(reproduce, 'assert_idle_for_fresh'), \
+                 patch.object(reproduce, 'verify', side_effect=RuntimeError('seed_gate_required')):
+                with self.assertRaisesRegex(RuntimeError, 'seed_gate_required'):
+                    reproduce.restart_gepa(output / 'published/strategy/strategy.json')
+            self.assertEqual(retained.read_bytes(), b'{"actual_checkpoint":true}')
+
+    def test_empty_symlink_search_is_still_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            target = output / 'other'; target.mkdir()
+            gepa = output / 'gepa'; gepa.symlink_to(target, target_is_directory=True)
+            with patch.object(reproduce._APPWORLD_LAYOUT, 'GEPA', gepa), \
+                 patch.object(reproduce, 'assert_idle_for_fresh'), \
+                 patch.object(reproduce, 'verify') as checks:
+                with self.assertRaisesRegex(RuntimeError, 'appworld_gepa_reset_symlink_refused'):
+                    reproduce.restart_gepa(output / 'published/strategy/strategy.json')
+            checks.assert_not_called()
+
+
 class GepaModelBudgetTests(unittest.TestCase):
+    def test_gepa_default_uses_retained_generic_publication_without_dead_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            seed = output / 'published/strategy/strategy.json'
+            seed.parent.mkdir(parents=True)
+            seed.write_text('{}')
+            (seed.parent / 'manifest.json').write_text(json.dumps({
+                'source_strategy': str(output / 'deleted-gepa/versions/004.json')}))
+            with patch.object(reproduce, 'OUTPUT', output), \
+                 patch.object(reproduce, 'seed_search', return_value={}), \
+                 patch.object(sys, 'argv', ['reproduce.py', '--gepa-run']), \
+                 patch.object(reproduce, '_experiment_status'), \
+                 patch.object(reproduce, '_EXPERIMENT_TRACKING', False), \
+                 patch.object(reproduce, '_EXPERIMENT_LABEL', None), \
+                 patch.object(reproduce, '_run_common_all', return_value={}) as common, \
+                 redirect_stdout(io.StringIO()):
+                self.assertEqual(reproduce.main(), 0)
+            common.assert_called_once_with(seed.resolve(), 'strategy', stop_at='gepa_run')
+
+    def test_gepa_default_preserves_existing_plan_over_generic_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            for label in ('strategy', 'frozen-seed'):
+                seed = output / 'published' / label / 'strategy.json'
+                seed.parent.mkdir(parents=True)
+                seed.write_text('{}')
+            planned = output / 'published/frozen-seed/strategy.json'
+            plan = output / 'gepa/plan.json'; plan.parent.mkdir()
+            plan.write_text(json.dumps({'seed': str(planned)}))
+            with patch.object(reproduce, 'OUTPUT', output), \
+                 patch.object(reproduce, 'seed_search', return_value={}), \
+                 patch.object(sys, 'argv', ['reproduce.py', '--gepa-run']), \
+                 patch.object(reproduce, '_experiment_status'), \
+                 patch.object(reproduce, '_EXPERIMENT_TRACKING', False), \
+                 patch.object(reproduce, '_EXPERIMENT_LABEL', None), \
+                 patch.object(reproduce, '_run_common_all', return_value={}) as common, \
+                 redirect_stdout(io.StringIO()):
+                self.assertEqual(reproduce.main(), 0)
+            common.assert_called_once_with(planned.resolve(), 'frozen-seed', stop_at='gepa_run')
+
     def test_normal_cli_forwards_explicit_optimizer_budget(self):
         for value in (1, 512, 1024):
             with self.subTest(value=value), \
@@ -2557,6 +3052,392 @@ class GepaModelBudgetTests(unittest.TestCase):
                 self.assertEqual((runtime / 'evaluation.json').read_bytes(), protected)
                 self.assertEqual(json.loads((runtime / 'gepa.json').read_text())['max_model_calls'],
                                  1024 if expected_calls else current)
+
+
+
+class AutomaticSeedSearchTests(unittest.TestCase):
+    """The real shared lifecycle/native gate around model-free capture fixtures."""
+    @contextmanager
+    def fixture(self, directory, *, passed_after=None, fail_at=32, duplicate=False,
+                duplicate_version=False, missing_loop=False, stale_judge=False,
+                pending_review=False, generation_error=None, duplicate_once=False):
+        import learning
+        root = Path(directory)
+        seed = root / 'published/strategy/strategy.json'
+        seed.parent.mkdir(parents=True)
+        artifact = {'level': 'L3', 'policy': {'candidate': 0,
+                    'snapshot': {'experiences': []}}}
+        seed.write_text(json.dumps(artifact))
+        seed.with_name('manifest.json').write_text(json.dumps({'version': 'fixture-native-0'}))
+        protected = {path: path.read_bytes() for path in seed.parent.iterdir()}
+        lifecycle = root / 'gepa/lifecycle.json'
+        lifecycle.parent.mkdir()
+        receipts = {name: {'status': 'complete', 'data': {'retained': name}}
+                    for name in ('prepare', 'train', 'seed')}
+        lifecycle.write_text(json.dumps({'candidate': {
+            'seed_label': 'strategy', 'seed_artifact': str(seed.resolve()),
+            'seed_version': 'fixture-native-0'}, 'stage_results': receipts}))
+        baselines, ids = {}, {}
+        for count in (32, 100):
+            baselines[count] = root / f'gepa/l0-stage{count}/result.json'
+            baselines[count].parent.mkdir()
+            ids[count] = _l0(baselines[count], count=count)
+        events, generations = [], []
+        remaining_error = [generation_error]
+
+        def freeze(*, label):
+            generations.append(label)
+            self.assertEqual(__import__('os').environ.get('APPWORLD_REGENERATE_CONTROLS'), '1')
+            for name in ('APPWORLD_AUTH_PHASE_FROM', 'APPWORLD_INCREMENTAL_TRAINING_FROM',
+                         'APPWORLD_ENGLISH_TRIGGERS', 'APPWORLD_ENGLISH_TRIGGERS_FROM'):
+                self.assertNotIn(name, __import__('os').environ)
+            if remaining_error[0]:
+                error, remaining_error[0] = remaining_error[0], None
+                raise error
+            index = 0 if duplicate or (duplicate_once and len(generations) == 1) else len(reproduce.seed_search()['attempts'])
+            value = {'level': 'L3', 'policy': {'candidate': index,
+                     'snapshot': {'experiences': []}}}
+            target = root / 'published' / label / 'strategy.json'
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(value))
+            target.with_name('manifest.json').write_text(json.dumps({
+                'version': 'fixture-native-0' if duplicate_version else f'fixture-native-{index}'}))
+            return value
+
+        def stage(candidate, count):
+            value = reproduce._read(candidate)
+            index = value['policy']['candidate']
+            events.append((index, count))
+            attempt = reproduce.begin_seed_attempt(candidate)
+            comparison = Path(attempt['pilot_comparison' if count == 32 else 'validation_comparison'])
+            comparison.parent.mkdir(parents=True, exist_ok=True)
+            fails = count == fail_at and (passed_after is None or index < passed_after)
+            _candidate(comparison, ids[count], quality=.4 if fails else .42,
+                       missing='avg_invalid_loop' if missing_loop else None)
+            captured = reproduce._read(comparison)
+            progress = comparison.with_name('progress.json')
+            captured.update(seed=str(candidate.resolve()), progress=str(progress))
+            for row in captured['items']:
+                row['l1_applied'] = 0
+            if pending_review:
+                captured.update(status='partial', review_distribution={'uncertain': 1},
+                    metrics={'candidate': {'planned': count, 'completed': count, 'missing': 0,
+                                           'execution_errors': 0, 'judge_errors': 1}})
+                for row in captured['items']:
+                    row['execution_status'] = 'completed'
+                captured['items'][0].update(verdict='uncertain', quality=None, quality_score=None)
+            comparison.write_text(json.dumps(captured))
+            progress.write_text(json.dumps(_candidate_checkpoint(comparison, value, captured['items'])))
+            # A complete-looking compact cannot replace a mismatched frozen
+            # native judge source; the production gate remains authoritative.
+            if stale_judge:
+                source = Path(reproduce._read(progress)['shards']['0']['source_report'])
+                config = source.parent.with_name(source.parent.name + '.regrade.config.json')
+                settings = reproduce._read(config)
+                settings['judge']['require_state_dependency'] = False
+                config.write_text(json.dumps(settings))
+            reproduce.verify(candidate, count, comparison)
+
+        def native(script, *arguments, **kwargs):
+            self.assertEqual(script, 'offline_gepa.py')
+            events.append(arguments[0])
+            self.assertIn(arguments[0], ('--prepare', '--run'))
+            if arguments[0] == '--run':
+                status = reproduce._read(root / 'gepa/status.json')
+                status.update(job_id='fixture-only', job_status='rejected')
+                reproduce._APPWORLD_LAYOUT.save(root / 'gepa/status.json', status)
+            return 0
+
+        with _isolated_gepa_outputs(root), ExitStack() as stack:
+            stack.enter_context(patch.object(reproduce._APPWORLD_LAYOUT, 'GEPA', root / 'gepa'))
+            stack.enter_context(patch.object(reproduce, '_CANDIDATE_STATE_LABEL', None))
+            stack.enter_context(patch.object(reproduce, '_host_version', return_value=None))
+            stack.enter_context(patch.object(reproduce, '_experiment_status'))
+            stack.enter_context(patch.object(reproduce._AppWorldDatasetAdapter, 'output_root', root))
+            stack.enter_context(patch.object(reproduce._AppWorldDatasetAdapter, 'split_counts',
+                return_value={'train': 134, 'val': 12, 'holdout': 500}))
+            stack.enter_context(patch.object(learning, '_completed_training_tasks',
+                return_value={f'train-{i}' for i in range(134)}))
+            stack.enter_context(patch.object(reproduce, 'prepare', side_effect=AssertionError('cached prepare')))
+            stack.enter_context(patch.object(reproduce, 'train_with_recovery', side_effect=AssertionError('cached TRAIN')))
+            stack.enter_context(patch.object(reproduce, 'seed_with_recovery', side_effect=freeze))
+            stack.enter_context(patch.object(reproduce, 'stage', side_effect=stage))
+            stack.enter_context(patch.object(reproduce, '_stage_l0_source', side_effect=lambda count, path: baselines[count]))
+            stack.enter_context(patch.object(reproduce, '_native_gepa_service_active', return_value=False))
+            stack.enter_context(patch.object(reproduce, '_native_gepa_no_new_candidate', return_value=True))
+            stack.enter_context(patch.object(reproduce, 'run', side_effect=native))
+            stack.enter_context(patch.object(offline_gepa.subprocess, 'Popen', side_effect=AssertionError('no API/Agent')))
+            stack.enter_context(redirect_stdout(io.StringIO()))
+            yield seed, root, events, generations, receipts
+        for path, original in protected.items():
+            self.assertEqual(path.read_bytes(), original, 'retained publication changed')
+
+    def test_all_generates_new_native_seed_and_crosses_both_original_gates_before_gepa(self):
+        for fail_at in (32, 100):
+            with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as directory, \
+                 self.fixture(directory, passed_after=1, fail_at=fail_at) as (seed, root, events, generated, retained):
+                result = reproduce._run_all_with_seed_search(seed, 'strategy', gepa_max_model_calls=512)
+                expected = [(0, 32)] + ([(0, 100)] if fail_at == 100 else [])
+                self.assertEqual(events, expected + [(1, 32), (1, 100), '--prepare', '--run'])
+                self.assertEqual(len(generated), 1)
+                self.assertEqual(result['status'], 'not_qualified')
+                self.assertEqual(reproduce.seed_search()['status'], 'found')
+                for name in ('prepare', 'train'):
+                    self.assertEqual(result['stage_results'][name], retained[name])
+                for name in ('pilot32', 'validation100'):
+                    self.assertIs(result['stage_results'][name]['gate_passed'], True)
+                self.assertEqual(result['stage_results']['gepa_run']['status'], 'complete')
+
+    def test_five_distinct_complete_failures_continue_to_sixth_candidate(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, passed_after=5) as (seed, root, events, generated, retained):
+            result = reproduce._run_all_with_seed_search(seed, 'strategy')
+            self.assertEqual(result['status'], 'not_qualified')
+            self.assertEqual(events, [(i, 32) for i in range(6)] + [(5, 100), '--prepare', '--run'])
+            self.assertEqual(len(generated), 5)
+            search = reproduce.seed_search()
+            self.assertEqual(search['status'], 'found')
+            self.assertEqual(len([r for r in search['attempts'] if r['status'] == 'failed']), 5)
+            self.assertEqual(len(search['attempts']), 6)
+            self.assertEqual(len({reproduce._read(Path(row['seed']))['policy']['candidate']
+                                 for row in search['attempts']}), 6)
+
+    def _retained_legacy_review(self, seed, root, events):
+        """Build five complete native-backed failures under the retired policy."""
+        current = seed
+        for index in range(5):
+            if index:
+                label = f'seed-auto-r1-a{index + 1}'
+                with patch.dict(__import__('os').environ, {'APPWORLD_REGENERATE_CONTROLS': '1'}):
+                    reproduce.seed_with_recovery(label=label)
+                current = root / 'published' / label / 'strategy.json'
+            with self.assertRaises(RuntimeError):
+                reproduce.stage(current, 32)
+        search = reproduce.seed_search()
+        search.update(status='review_required', consecutive_failures=5, current_seed=str(current.resolve()),
+            review_requirement='Review actual failure traces, then verify new training import or implementation fix and targeted tests before explicitly starting a new round.',
+            automatic_seed_generation={'round': 1, 'status': 'frozen', 'seed': str(current.resolve()),
+                'seed_label': current.parent.name, 'source_seed': str(seed.resolve()), 'source_attempt': 4})
+        reproduce._save_search(search)
+        paid = {'seed_label': current.parent.name, 'published': True,
+                'control_learning': {'model_calls': 3, 'validated_model_draft': {'retained': 'healthy'}},
+                'english_trigger_learning': {'model_calls': 2, 'attempts': [{'draft': ['retained']} ]}}
+        (root / 'training').mkdir(exist_ok=True)
+        (root / 'training/seed-compile-status.json').write_text(json.dumps(paid))
+        protected = {path: path.read_bytes() for path in root.rglob('*.json')
+                     if '/published/' in str(path) or '/l0-stage' in str(path)
+                     or '/seed-search-' in str(path)}
+        return current, paid, protected
+
+    def test_retired_five_failure_checkpoint_resumes_with_new_label_and_preserved_paid(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, passed_after=5) as (seed, root, events, generated, retained):
+            old, paid, protected = self._retained_legacy_review(seed, root, events)
+            with patch.object(sys, 'argv', ['reproduce.py', '--all']):
+                self.assertEqual(reproduce.main(), 0)
+            search = reproduce.seed_search()
+            self.assertEqual(search['round'], 2)
+            self.assertEqual(search['reviews'][0]['reason'], 'failed_seed_count_policy_withdrawn')
+            self.assertEqual(search['attempts'][4]['seed_generation_diagnostic'], paid)
+            self.assertEqual([r['status'] for r in search['attempts'][:5]], ['failed'] * 5)
+            self.assertEqual(generated[-1], 'seed-auto-r2-a6')
+            self.assertEqual(events, [(i, 32) for i in range(6)] + [(5, 100), '--prepare', '--run'])
+            for path, data in protected.items():
+                self.assertEqual(path.read_bytes(), data)
+
+    def test_explicit_review_restart_accepts_new_label_and_rejects_frozen_failed_label(self):
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit), tempfile.TemporaryDirectory() as directory, \
+                 self.fixture(directory, passed_after=5) as (seed, root, events, generated, retained):
+                old, paid, protected = self._retained_legacy_review(seed, root, events)
+                summary = 'Reviewed actual formal failures and verified the implementation repairs.'
+                before = reproduce.seed_search()
+                with self.assertRaisesRegex(RuntimeError, 'unchanged_after_review'):
+                    reproduce.restart_search_after_review(summary, candidate_seed=old)
+                self.assertEqual(reproduce.seed_search(), before)
+                args = ['reproduce.py', '--all', '--restart-search-after-review', summary]
+                if explicit:
+                    args += ['--seed-label', 'reviewed-new-candidate']
+                with patch.object(sys, 'argv', args):
+                    self.assertEqual(reproduce.main(), 0)
+                self.assertEqual(generated[-1], 'reviewed-new-candidate' if explicit else 'seed-auto-r2-a6')
+                self.assertEqual(reproduce.seed_search()['attempts'][4]['seed_generation_diagnostic'], paid)
+                for path, data in protected.items():
+                    self.assertEqual(path.read_bytes(), data)
+
+    def test_unrelated_review_cannot_be_cleared_by_failed_count_migration(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, passed_after=5) as (seed, root, events, generated, retained):
+            old, paid, protected = self._retained_legacy_review(seed, root, events)
+            search = reproduce.seed_search()
+            search['review_requirement'] = 'Approved source authority has been withdrawn; review is required.'
+            reproduce._save_search(search)
+            original = reproduce.seed_search()
+            result = reproduce._run_all_with_seed_search(old, old.parent.name)
+            self.assertEqual(result['status'], 'review_required')
+            self.assertEqual(reproduce.seed_search(), original)
+            self.assertEqual(events, [(i, 32) for i in range(5)])
+
+    def test_duplicate_body_or_native_version_does_not_retest_or_count(self):
+        for options in ({'duplicate': True}, {'duplicate_version': True}):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as directory, \
+                 self.fixture(directory, **options) as (seed, root, events, generated, retained):
+                result = reproduce._run_all_with_seed_search(seed, 'strategy')
+                self.assertEqual((result['status'], result['stop_reason']),
+                                 ('not_qualified', 'appworld_seed_generation_duplicate'))
+                self.assertEqual(events, [(0, 32)])
+                self.assertEqual(len(generated), 1)
+                self.assertEqual(reproduce.seed_search()['consecutive_failures'], 1)
+                self.assertEqual(len(reproduce.seed_search()['attempts']), 1)
+                self.assertEqual(reproduce._run_all_with_seed_search(seed, 'strategy')['status'], 'not_qualified')
+                self.assertEqual(len(generated), 1)
+                self.assertEqual(events, [(0, 32)])
+
+    def test_missing_loop_or_invalid_native_judge_never_advances_seed(self):
+        for options in ({'missing_loop': True}, {'stale_judge': True}):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as directory, \
+                 self.fixture(directory, **options) as (seed, root, events, generated, retained):
+                with self.assertRaisesRegex(RuntimeError, 'stage_gate_not_passed:pilot32'):
+                    reproduce._run_all_with_seed_search(seed, 'strategy')
+                self.assertEqual(events, [(0, 32)])
+                self.assertEqual(generated, [])
+                self.assertNotIn('automatic_seed_generation', reproduce.seed_search())
+
+    def test_pending_formal_review_keeps_current_seed_and_failure_allowance(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, pending_review=True) as (seed, root, events, generated, retained):
+            with self.assertRaisesRegex(RuntimeError, 'appworld_stage_review_pending'):
+                reproduce._run_all_with_seed_search(seed, 'strategy')
+            search = reproduce.seed_search()
+            self.assertEqual(search['current_seed'], str(seed.resolve()))
+            self.assertEqual(search['consecutive_failures'], 0)
+            self.assertEqual(search['attempts'][0]['status'], 'pending')
+            self.assertEqual(generated, [])
+            self.assertNotIn('automatic_seed_generation', search)
+            self.assertEqual(reproduce._read(root / 'gepa/lifecycle.json')
+                             ['stage_results']['pilot32']['status'], 'pending')
+
+    def test_interrupted_or_rate_limited_freeze_resumes_same_reserved_label(self):
+        for error in (KeyboardInterrupt(), RuntimeError('appworld_seed_recovery_exhausted:model_http_429')):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as directory, \
+                 self.fixture(directory, passed_after=1, generation_error=error) as (seed, root, events, generated, retained):
+                with self.assertRaises(type(error)):
+                    reproduce._run_all_with_seed_search(seed, 'strategy')
+                reserved = reproduce.seed_search()['automatic_seed_generation']
+                self.assertEqual(reserved['status'], 'pending')
+                self.assertFalse(Path(reserved['seed']).is_file())
+                self.assertEqual(reproduce.seed_search()['consecutive_failures'], 1)
+                with patch.object(sys, 'argv', ['reproduce.py', '--all']):
+                    self.assertEqual(reproduce.main(), 0)
+                self.assertEqual(generated, [reserved['seed_label'], reserved['seed_label']])
+                self.assertEqual(events, [(0, 32), (1, 32), (1, 100), '--prepare', '--run'])
+                self.assertEqual(reproduce.seed_search()['status'], 'found')
+
+
+
+    def test_one_command_skips_duplicate_without_retesting_and_preserves_paid_receipt(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, passed_after=1, duplicate_once=True) as (seed, root, events, generated, retained):
+            original = reproduce.seed_with_recovery
+            paid = {}
+            def freeze(*, label):
+                artifact = original(label=label)
+                diagnostic = {'seed_label': label, 'control_learning': {'model_calls': 3},
+                              'english_trigger_learning': {'model_calls': 2}}
+                (root / 'training').mkdir(exist_ok=True)
+                (root / 'training/seed-compile-status.json').write_text(json.dumps(diagnostic))
+                paid[label] = diagnostic
+                return artifact
+            with patch.object(reproduce, 'seed_with_recovery', side_effect=freeze), \
+                 patch.object(sys, 'argv', ['reproduce.py', '--all']):
+                self.assertEqual(reproduce.main(), 0)
+            self.assertEqual(generated, ['seed-auto-r1-a2', 'seed-auto-r1-a2-2'])
+            self.assertEqual(events, [(0, 32), (1, 32), (1, 100), '--prepare', '--run'])
+            search = reproduce.seed_search()
+            self.assertEqual(len(search['attempts']), 2)
+            self.assertEqual([r['status'] for r in search['attempts']], ['failed', 'passed'])
+            self.assertEqual(len(search['generation_history']), 1)
+            old = search['generation_history'][0]
+            self.assertEqual(old['status'], 'duplicate')
+            self.assertEqual(old['seed_generation_diagnostic'], paid[generated[0]])
+            self.assertEqual(search['attempts'][1]['seed_generation_diagnostic'], paid[generated[1]])
+            self.assertTrue(Path(old['seed']).is_file())
+
+    def test_one_command_recovers_transient_seed_429_on_same_reserved_label(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, passed_after=1,
+                generation_error=RuntimeError('appworld_seed_recovery_exhausted:model_http_429')) \
+                as (seed, root, events, generated, retained):
+            with patch.object(reproduce.time, 'sleep') as sleep, \
+                 patch.object(sys, 'argv', ['reproduce.py', '--all']):
+                self.assertEqual(reproduce.main(), 0)
+            self.assertEqual(generated, ['seed-auto-r1-a2', 'seed-auto-r1-a2'])
+            self.assertEqual(events, [(0, 32), (1, 32), (1, 100), '--prepare', '--run'])
+            self.assertEqual(sleep.call_args_list, [unittest.mock.call(15)])
+            state = reproduce._read(root / 'gepa/lifecycle.json')
+            for name in ('prepare', 'train'):
+                self.assertEqual(state['stage_results'][name], retained[name])
+            self.assertEqual(reproduce.seed_search()['status'], 'found')
+
+    def test_temporary_transport_keeps_running_with_bounded_backoff_and_interrupt(self):
+        import urllib.error
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, passed_after=1) as (seed, root, events, generated, retained):
+            old = (root / 'gepa/lifecycle.json').read_bytes()
+            error = urllib.error.HTTPError('https://fixture.invalid', 503, 'capacity', {}, None)
+            with patch.object(reproduce, '_run_all_with_seed_search',
+                    side_effect=[error, error, error, error, KeyboardInterrupt()]) as runner, \
+                 patch.object(reproduce.time, 'sleep') as sleep:
+                with self.assertRaises(KeyboardInterrupt):
+                    reproduce._run_all_autonomously(seed, 'strategy')
+            self.assertEqual(runner.call_count, 5)
+            self.assertEqual(sleep.call_args_list, [unittest.mock.call(v) for v in (15, 30, 60, 60)])
+            state = reproduce._read(root / 'gepa/lifecycle.json')
+            self.assertEqual(state['autonomous_recovery']['reason'], 'model_http_503')
+            self.assertEqual(state['stage_results'], json.loads(old)['stage_results'])
+            self.assertEqual(events, [])
+            self.assertEqual(generated, [])
+
+    def test_native_retry_respects_original_budget_deadline_cancel_and_error(self):
+        for progress, expected in (
+            ({'model_calls': 1024, 'max_model_calls': 1024}, 'appworld_gepa_model_budget_exhausted'),
+            ({'deadline_ms': 1}, 'appworld_gepa_deadline_exhausted'),
+            ({'cancel_requested': True}, 'appworld_native_gepa_cancelled'),
+            ({'job_status': 'error', 'job_error': 'source_authority_invalid'},
+                'appworld_native_gepa_unclassified_error')):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory, \
+                 self.fixture(directory, passed_after=1) as (seed, root, events, generated, retained):
+                state = reproduce._read(root / 'gepa/lifecycle.json')
+                state.update(phase='gepa_run', status='pending')
+                reproduce._APPWORLD_LAYOUT.save(root / 'gepa/lifecycle.json', state)
+                with patch.object(reproduce, '_run_all_with_seed_search',
+                        side_effect=RuntimeError('appworld_native_gepa_checkpoint_requires_resume')) as runner, \
+                     patch.object(offline_gepa, 'progress', return_value=progress), \
+                     patch.object(reproduce.time, 'sleep') as sleep:
+                    result = reproduce._run_all_autonomously(seed, 'strategy')
+                self.assertEqual(result['stop_reason'], expected)
+                self.assertEqual(result['status'], 'cancelled' if progress.get('cancel_requested') else 'blocked')
+                self.assertEqual(result['goal_status'], 'goal_not_met')
+                self.assertEqual(runner.call_count, 1)
+                sleep.assert_not_called()
+                self.assertEqual(result['stage_results'], state['stage_results'])
+
+    def test_invalid_source_is_normal_blocked_result_without_retry_or_false_complete(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             self.fixture(directory, passed_after=1) as (seed, root, events, generated, retained):
+            with patch.object(reproduce, '_run_all_with_seed_search',
+                    side_effect=RuntimeError('appworld_frozen_seed_validated_source_missing')) as runner, \
+                 patch.object(reproduce.time, 'sleep') as sleep, \
+                 patch.object(sys, 'argv', ['reproduce.py', '--all']):
+                self.assertEqual(reproduce.main(), 0)
+            state = reproduce._read(root / 'gepa/lifecycle.json')
+            self.assertEqual(state['status'], 'blocked')
+            self.assertEqual(state['goal_status'], 'goal_not_met')
+            self.assertEqual(state['stop_reason'], 'appworld_frozen_seed_validated_source_missing')
+            self.assertEqual(runner.call_count, 1)
+            sleep.assert_not_called()
+            self.assertEqual(events, [])
+            self.assertEqual(generated, [])
 
 
 class EntrypointRecoveryTests(unittest.TestCase):
@@ -2804,6 +3685,7 @@ class OfflineGepaExternalPreparationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir="/tmp") as td:
             _, _, config = self.prepare_fixture(Path(td), existing_source=False)
             self.assertFalse(any(key.startswith("holdout_baseline_") for key in config))
+            self.assertIs(config['final_holdout_include_seed'], False)
 
     def test_prepare_uses_three_metric_search_contract_and_reports_resources(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as td:
@@ -3120,3 +4002,2002 @@ class StageTransportRecoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class NativeCumulativeBudgetRecoveryTests(unittest.TestCase):
+    fixture = OfflineGepaRecoveryTests.fixture
+
+    def budget_fixture(self, directory, *, stop='max_rounds'):
+        artifact, seed, jobs, state_path, tree = self.fixture(directory, status='rejected')
+        canonical_seed = seed.parent / 'strategy' / 'strategy.json'
+        canonical_seed.parent.mkdir(); seed.replace(canonical_seed); seed = canonical_seed
+        binding = patch.object(reproduce._APPWORLD_LAYOUT, 'GEPA', offline_gepa.GEPA)
+        binding.start(); self.addCleanup(binding.stop)
+        old = {'max_rounds': 30, 'max_model_calls': 512, 'max_trials': 8000,
+               'timeout_ms': 50 * 3600000}
+        offline_gepa.save(offline_gepa.CONFIG / 'gepa.json', old)
+        offline_gepa.save(offline_gepa.PLAN, {'seed': str(seed.resolve()),
+            'search': {'max_rounds': 30, 'max_model_calls': 512}, 'dataset_version': 'frozen-public'})
+        offline_gepa.save(offline_gepa.STATUS, {'job_id': 'original', 'job_status': 'rejected'})
+        value = offline_gepa.read(tree)
+        value.update(status='validation_rejected', stop_reason=stop, rounds=30, model_calls=480,
+            trials_used=1024, active=None, batch=None, holdout_started=False,
+            budget_extensions=[dict(old, reason='initial_budget')])
+        offline_gepa.save(tree, value)
+        stages = {name: {'status': 'complete', 'data': {'retained': name}}
+            for name in ('prepare', 'train', 'seed', 'pilot32', 'validation100', 'gepa_prepare', 'gepa_run')}
+        stages['comparison500'] = {'status': 'blocked', 'reason': 'appworld_gepa_no_new_qualified_candidate'}
+        offline_gepa.save(offline_gepa.GEPA / 'lifecycle.json', {'stage_results': stages,
+            'candidate': reproduce._candidate_identity(seed, seed.parent.name)})
+        report = tree.parent / 'evaluations/healthy/report.pb'
+        report.parent.mkdir(parents=True); report.write_bytes(b'original-native-healthy-report')
+        draft = tree.parent / 'reflections/map.draft.json'
+        draft.parent.mkdir(); draft.write_text('{"original_model_draft":true}')
+        baseline = offline_gepa.GEPA / 'l0-current-stage32/result.json'
+        baseline.parent.mkdir(); baseline.write_text('{"original_frozen_L0":true}')
+        return artifact, seed, state_path, tree, {p: p.read_bytes() for p in (seed, report, draft, baseline)}, stages
+
+    def test_real_prepare_and_run_extend_same_job_keep_old_grades_and_paid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifact, seed, state_path, tree, protected, stages = self.budget_fixture(directory)
+            before = tree.read_bytes()
+            requested = reproduce._request_native_gepa_budget_extension(seed)
+            self.assertEqual((requested['max_rounds'], requested['max_model_calls']), (60, 1024))
+            self.assertEqual(tree.read_bytes(), before)
+            lifecycle = offline_gepa.read(offline_gepa.GEPA / 'lifecycle.json')
+            for name in ('prepare','train','seed','pilot32','validation100'):
+                self.assertEqual(lifecycle['stage_results'][name], stages[name])
+            self.assertEqual(lifecycle['stage_results']['gepa_run']['status'], 'pending')
+            with patch.object(offline_gepa, 'require_seed_gates', return_value=artifact), \
+                 patch.object(offline_gepa, '_training_ready', return_value=Path(directory)/'retained-memory.json'), \
+                 patch.object(offline_gepa, 'build_dataset', return_value={'metadata': {'dataset_version': 'frozen-public'}, 'summary': {'splits': {'train':134,'val':12,'holdout':500}}}), \
+                 patch.object(offline_gepa, '_copy_training_configs'), \
+                 patch.object(offline_gepa.controller, 'ids', return_value=['retained-task']), \
+                 patch.object(offline_gepa.controller, 'evaluation_config', return_value={'judge': {}, 'variants': []}):
+                plan = offline_gepa.prepare(seed, max_model_calls=1024)
+            self.assertEqual(plan['budget_extension']['previous_limits']['max_model_calls'],512)
+            self.assertEqual(offline_gepa.read(offline_gepa.CONFIG/'gepa.json')['max_rounds'],60)
+            operations=[]
+            class Process:
+                def __init__(self):
+                    self.stdout=io.StringIO('trajectory-integration.v1 listening=127.0.0.1:1\n'); self.closed=False
+                def poll(self):return 0 if self.closed else None
+                def terminate(self):self.closed=True
+                def wait(self,timeout=None):self.closed=True;return 0
+                def kill(self):self.closed=True
+            process=Process()
+            class Opener:
+                @contextmanager
+                def open(inner,request,timeout=None):
+                    message=json.loads(request.data);operations.append(message['operation'])
+                    if message['operation']=='agent_evaluation.status':result={'jobs':{'original':{'status':'rejected'}}}
+                    elif message['operation']=='agent_evaluation.retry':
+                        self.assertEqual(message['job_id'],'original')
+                        self.assertEqual(set(message),{'operation','request_id','job_id'})
+                        value=offline_gepa.read(tree);value.update(rounds=31,model_calls=481,status='searching')
+                        offline_gepa.save(tree,value);result={'accepted':True}
+                    else:raise AssertionError('new submission would lose original job identity')
+                    yield io.StringIO(json.dumps({'ok':True,'result':result}))
+            with patch.object(offline_gepa,'require_seed_gates',return_value=artifact), \
+                 patch.object(offline_gepa.controller,'environment',return_value={}), \
+                 patch.object(offline_gepa.subprocess,'Popen',return_value=process), \
+                 patch.object(offline_gepa.select,'select',return_value=([process.stdout],[],[])), \
+                 patch.object(offline_gepa.urllib.request,'build_opener',return_value=Opener()), \
+                 patch.object(offline_gepa,'progress',return_value={'job_id':'original','job_status':'passed','rounds':31,'model_calls':481}):
+                result=offline_gepa.run(seed)
+            self.assertEqual(result['job_id'],'original')
+            self.assertEqual(operations,['agent_evaluation.status','agent_evaluation.retry'])
+            self.assertEqual(offline_gepa.read(tree)['nodes'],json.loads(before)['nodes'])
+            self.assertEqual(offline_gepa.read(tree)['trials_used'],1024)
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_rejected_budget_extension_refuses_no_increase_holdout_or_unverified_basis(self):
+        for mutation in ('no-increase','holdout','published','active','legacy-exhausted','plan-mismatch'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,state_path,tree,protected,stages=self.budget_fixture(directory)
+                if mutation=='no-increase':
+                    config=offline_gepa.read(offline_gepa.CONFIG/'gepa.json');config['max_rounds']=256
+                    offline_gepa.save(offline_gepa.CONFIG/'gepa.json',config)
+                    plan=offline_gepa.read(offline_gepa.PLAN);plan['search']['max_rounds']=256;offline_gepa.save(offline_gepa.PLAN,plan)
+                elif mutation=='published':
+                    state=offline_gepa.read(state_path);state['jobs']['original']['published']=True;offline_gepa.save(state_path,state)
+                elif mutation=='plan-mismatch':
+                    plan=offline_gepa.read(offline_gepa.PLAN);plan['search']['max_model_calls']=480;offline_gepa.save(offline_gepa.PLAN,plan)
+                else:
+                    value=offline_gepa.read(tree)
+                    if mutation=='holdout':value['holdout_started']=True
+                    elif mutation=='active':value['active']={'actual-worker':'healthy'}
+                    else:value.update(reflection_exhausted=True,budget_extensions=[])
+                    offline_gepa.save(tree,value)
+                before=tree.read_bytes()
+                if mutation=='plan-mismatch':
+                    with self.assertRaisesRegex(RuntimeError,'previous_budget_unverified'):
+                        reproduce._request_native_gepa_budget_extension(seed)
+                else:self.assertIsNone(reproduce._request_native_gepa_budget_extension(seed))
+                self.assertEqual(tree.read_bytes(),before)
+                for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_native_retry_does_not_swallow_wrong_seed_or_existing_holdout(self):
+        for mutation in ('wrong-seed','holdout','no-increase','wrong-config'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,state_path,tree,_,_=self.budget_fixture(directory)
+                requested=reproduce._request_native_gepa_budget_extension(seed)
+                plan=offline_gepa.read(offline_gepa.PLAN)
+                offline_gepa.save(offline_gepa.CONFIG/'gepa.json',requested)
+                if mutation=='wrong-seed':offline_gepa.save(tree.parent.parent/'seed.json',{'wrong':True})
+                elif mutation=='holdout':
+                    value=offline_gepa.read(tree);value['final_holdout']={'candidates':[{'node':1}]};offline_gepa.save(tree,value)
+                elif mutation=='no-increase':plan['budget_extension']['requested_limits']=plan['budget_extension']['previous_limits']
+                else:offline_gepa.save(offline_gepa.CONFIG/'gepa.json',{'max_model_calls':512})
+                with self.assertRaisesRegex(RuntimeError,'offline_gepa_budget_extension_'):
+                    offline_gepa._rejected_budget_extension_ready(plan,artifact,{'status':'rejected'},'original')
+
+    def test_single_outer_command_extends_then_reenters_same_seed_without_submit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,state_path,tree,protected,_=self.budget_fixture(directory)
+            calls=[]
+            def continuation(actual_seed,label,**budgets):
+                calls.append((actual_seed,label,budgets))
+                self.assertEqual(actual_seed,seed)
+                self.assertEqual(budgets['gepa_max_model_calls'],1024)
+                self.assertEqual(offline_gepa.read(offline_gepa.PLAN)['budget_extension']['job_id'],'original')
+                self.assertEqual(offline_gepa.read(offline_gepa.GEPA/'lifecycle.json')['stage_results']['gepa_run']['status'],'pending')
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=continuation), \
+                 patch.object(reproduce,'_reserve_after_unqualified_native_search') as reserve:
+                result=reproduce._run_all_autonomously(seed,seed.parent.name,gepa_max_model_calls=512)
+            self.assertEqual(result['status'],'published');self.assertEqual(len(calls),1);reserve.assert_not_called()
+            self.assertEqual(offline_gepa.read(tree)['model_calls'],480)
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_hard_cap_reserves_distinct_candidate_preserves_old_job_and_paid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,state_path,tree,protected,_=self.budget_fixture(directory,stop='model_budget')
+            cfg=offline_gepa.read(offline_gepa.CONFIG/'gepa.json');cfg['max_model_calls']=1024;cfg['max_rounds']=256
+            offline_gepa.save(offline_gepa.CONFIG/'gepa.json',cfg)
+            plan=offline_gepa.read(offline_gepa.PLAN);plan['search'].update(max_model_calls=1024,max_rounds=256);offline_gepa.save(offline_gepa.PLAN,plan)
+            search={'round':2,'status':'searching','attempts':[{'attempt':6,'round':2,'seed':str(seed.resolve()),'seed_label':seed.parent.name,'status':'passed','grade':'original-frozen-grade','seed_generation_diagnostic':{'controls':{'model_calls':3},'english':{'model_calls':3}}}]}
+            reproduce._save_search(search)
+            before_tree=tree.read_bytes();before_state=state_path.read_bytes()
+            self.assertIsNone(reproduce._request_native_gepa_budget_extension(seed))
+            candidate,label=reproduce._reserve_after_unqualified_native_search(seed)
+            result=reproduce.seed_search()
+            self.assertNotEqual(candidate,seed);self.assertFalse(candidate.exists())
+            self.assertEqual(result['attempts'],search['attempts'])
+            self.assertEqual(result['native_job_history'][0]['job_id'],'original')
+            self.assertEqual(result['native_job_history'][0]['model_calls'],480)
+            self.assertEqual(result['native_job_history'][0]['submission']['job_id'],'original')
+            self.assertEqual(result['automatic_seed_generation']['source_seed'],str(seed.resolve()))
+            self.assertEqual(result['automatic_seed_generation']['seed_label'],label)
+            self.assertEqual(tree.read_bytes(),before_tree);self.assertEqual(state_path.read_bytes(),before_state)
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_normal_main_retires_old_plan_then_resumes_new_label_after_interrupt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,state_path,tree,protected,_=self.budget_fixture(directory,stop='model_budget')
+            cfg=offline_gepa.read(offline_gepa.CONFIG/'gepa.json');cfg.update(max_model_calls=1024,max_rounds=256)
+            offline_gepa.save(offline_gepa.CONFIG/'gepa.json',cfg)
+            plan=offline_gepa.read(offline_gepa.PLAN);plan['search'].update(max_model_calls=1024,max_rounds=256);offline_gepa.save(offline_gepa.PLAN,plan)
+            reproduce._save_search({'round':2,'status':'found','current_seed':str(seed.resolve()),
+                'attempts':[{'attempt':6,'round':2,'seed':str(seed.resolve()),'status':'passed'}]})
+            before=tree.read_bytes();seen=[]
+            def interrupted(actual_seed,label,**budgets):
+                seen.append((actual_seed,label))
+                self.assertNotEqual(actual_seed,seed)
+                self.assertFalse(offline_gepa.PLAN.exists())
+                self.assertFalse((offline_gepa.GEPA/'submission.json').exists())
+                raise KeyboardInterrupt()
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=interrupted), \
+                 patch.object(reproduce,'_native_gepa_service_active',return_value=False), \
+                 patch.object(reproduce,'_experiment_status'),redirect_stdout(io.StringIO()):
+                with patch.object(sys,'argv',['reproduce.py','--all','--gepa-max-model-calls','1024']):
+                    self.assertEqual(reproduce.main(),130)
+                    candidate=reproduce.seed_search()['current_seed']
+                    self.assertEqual(reproduce.main(),130)
+            self.assertEqual(len(seen),2)
+            self.assertEqual(seen[0],seen[1]);self.assertEqual(str(seen[0][0]),candidate)
+            search=reproduce.seed_search()
+            self.assertEqual(len(search['native_job_history']),1)
+            self.assertEqual(search['native_job_history'][0]['plan'],plan)
+            self.assertEqual(search['native_job_history'][0]['submission'],{'job_id':'original'})
+            self.assertEqual(tree.read_bytes(),before)
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+class FlattenedJudgeTransportRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, directory, *, count=32, mutation=None):
+        root=Path(directory);seed=root/'published/strategy/strategy.json';seed.parent.mkdir(parents=True)
+        seed.write_text('{"level":"L3","policy":{"fixture":true}}')
+        gepa=root/'gepa';output=gepa/f'strategy-stage{count}';capture=output/'shards/shard-00/capture';capture.mkdir(parents=True)
+        source=capture/'report.json';current=reproduce._APPWORLD_LAYOUT.judge_projection()
+        projection=json.loads(json.dumps(current))
+        if mutation=='judge':projection['require_state_dependency']=not projection.get('require_state_dependency',True)
+        (capture.parent/'config.json').write_text(json.dumps({'judge':projection}))
+        rows=[{'task_id':f'task-{i:03d}','trial_id':f'trial-{i:03d}','execution_status':'completed',
+            'checks':[{'check_id':'model','status':'error','reason':'evaluation_judge_http_429'}],
+            'evidence':{'output':{'framework_capture':{'status':'complete'}},
+                        'loop_review':{'status':'error'}}} for i in range(count)]
+        if mutation=='execution':rows[0]['evidence']['output']['framework_capture']['status']='incomplete'
+        elif mutation=='schema':rows[0]['checks'][0]['reason']='evaluation_judge_schema_invalid'
+        elif mutation=='coverage':rows.pop()
+        source.write_text(json.dumps({'complete':True,'run_id':'captured-native','dataset_version':'frozen-dataset','trials':rows}))
+        source.with_name('manifest.json').write_text(json.dumps({'complete':True,'run_id':'captured-native','dataset_version':'frozen-dataset'}))
+        progress={'planned_tasks':count,'artifact':json.loads(seed.read_text()),
+            'shards':{'0':{'execution_complete':True,'source_report':str(source)}}}
+        if mutation=='artifact':progress['artifact']={'level':'L3','policy':{'wrong':True}}
+        (output/'progress.json').write_text(json.dumps(progress))
+        state={'phase':'pilot32' if count==32 else 'validation100',
+            'candidate':{'seed_artifact':str(seed.resolve())}}
+        if mutation=='phase':state['phase']='gepa_run'
+        before={path:path.read_bytes() for path in (seed,source,source.with_name('manifest.json'),output/'progress.json')}
+        with _isolated_gepa_outputs(root),patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',gepa), \
+             patch.object(reproduce,'_CANDIDATE_STATE_LABEL',None):
+            yield state,seed,source,before
+        for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_flattened_compare_transport_recovers_both_complete_native_scopes(self):
+        for count in (32,100):
+            with self.subTest(count=count),tempfile.TemporaryDirectory() as directory,self.fixture(directory,count=count) as (state,seed,source,before):
+                self.assertEqual(reproduce._stage_review_recovery_state(source.parent.parent.parent.parent,count,baseline=False),'transport')
+                for reason in ('compare.py_failed:1','RuntimeError:compare.py_failed:1'):
+                    self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError(reason),state),'appworld_stage_review_pending')
+
+    def test_partial_capture_wrong_judge_schema_artifact_or_phase_cannot_retry(self):
+        for mutation in ('execution','judge','schema','coverage','artifact','phase'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,self.fixture(directory,mutation=mutation) as (state,seed,source,before):
+                self.assertIsNone(reproduce._autonomous_retry_reason(RuntimeError('RuntimeError:compare.py_failed:1'),state))
+
+    def test_one_outer_command_backoff_reuses_completed_capture_and_seed(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (state,seed,source,before):
+            state_path=Path(directory)/'gepa/lifecycle.json'
+            reproduce._APPWORLD_LAYOUT.save(state_path,state)
+            calls=[]
+            def run(actual_seed,label,**budgets):
+                calls.append(actual_seed)
+                if len(calls)==1:raise RuntimeError('RuntimeError:compare.py_failed:1')
+                return {'status':'complete','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=run), \
+                 patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep') as sleep:
+                result=reproduce._run_all_autonomously(seed,'strategy')
+            self.assertEqual(result['status'],'complete');self.assertEqual(calls,[seed,seed])
+            sleep.assert_called_once_with(15)
+
+class WorkerCheckpointRecoveryTests(unittest.TestCase):
+    def test_internal_readonly_check_uses_frozen_capture_and_waits_for_live_writer(self):
+        helper=FlattenedJudgeTransportRecoveryTests()
+        with tempfile.TemporaryDirectory() as directory,helper.fixture(directory) as (state,seed,source,before):
+            state.update(status='blocked',stop_reason='compare.py_failed:1')
+            lifecycle=Path(directory)/'gepa/lifecycle.json';reproduce._APPWORLD_LAYOUT.save(lifecycle,state)
+            with patch.object(reproduce,'_active_output_processes',return_value=[]) as processes:
+                self.assertEqual(reproduce._worker_resume_check(),75)
+                with patch.object(sys,'argv',['reproduce.py','--worker-resume-check']):self.assertEqual(reproduce.main(),75)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):
+                self.assertEqual(reproduce._worker_resume_check(),76)
+            self.assertEqual(reproduce._worker_checkpoint_seed(state),seed)
+            self.assertEqual(reproduce._read(lifecycle),state)
+
+    def test_unknown_authority_fault_terminal_or_user_cancel_does_not_restart(self):
+        helper=FlattenedJudgeTransportRecoveryTests()
+        for change in ('unknown','complete','cancel','wrong-judge','incomplete-capture'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as directory, \
+                 helper.fixture(directory,mutation={'wrong-judge':'judge','incomplete-capture':'execution'}.get(change)) as (state,seed,source,before):
+                state.update(status='blocked',stop_reason='compare.py_failed:1')
+                if change=='unknown':state['stop_reason']='appworld_frozen_seed_validated_source_missing'
+                elif change=='complete':state['status']='complete'
+                elif change=='cancel':reproduce._APPWORLD_LAYOUT.save(Path(directory)/'gepa/status.json',{'experiment':{'reason':'user_interrupt'}})
+                reproduce._APPWORLD_LAYOUT.save(Path(directory)/'gepa/lifecycle.json',state)
+                with patch.object(reproduce,'_active_output_processes') as processes:
+                    self.assertEqual(reproduce._worker_resume_check(),0)
+                    processes.assert_not_called()
+
+    def test_retry_wait_retains_reserved_label_and_spent_seed_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory,_isolated_gepa_outputs(Path(directory)):
+            root=Path(directory);source=root/'published/original/strategy.json';source.parent.mkdir(parents=True);source.write_text('{"level":"L3"}')
+            candidate=root/'published/reserved/strategy.json'
+            state={'phase':'seed','status':'retry_wait','candidate':{'seed_artifact':str(source)},
+                   'autonomous_recovery':{'reason':'model_http_429','retry':2}}
+            search={'round':2,'current_seed':str(candidate),'automatic_seed_generation':{'round':2,'status':'pending','seed':str(candidate),'seed_label':'reserved','source_seed':str(source)},'generation_history':[{'seed_generation_diagnostic':{'model_calls':3}}]}
+            reproduce._save_search(search);reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+            before=(root/'gepa/status.json').read_bytes()
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(),75)
+                self.assertEqual(reproduce._worker_checkpoint_seed(state),candidate)
+            self.assertEqual((root/'gepa/status.json').read_bytes(),before)
+
+    def run_worker_shell(self, *, exits, checks, action='--all'):
+        import os
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);here=root/'tools/trajectory_evolution/experiments/appworld';here.mkdir(parents=True)
+            here.joinpath('reproduce.sh').write_bytes((EXPERIMENT / 'reproduce.sh').read_bytes())
+            bindir=root/'bin';bindir.mkdir();state=root/'fake-state.json';calls=root/'fake-calls.jsonl';delays=root/'fake-delays'
+            state.write_text(json.dumps({'exits':list(exits),'checks':list(checks)}))
+            fake=bindir/'fake-python'
+            fake.write_text('#!'+sys.executable+'\n'+'''import json,os,sys\nfrom pathlib import Path\ns=Path(os.environ['FAKE_STATE']);v=json.loads(s.read_text());a=sys.argv[1:]\nwith Path(os.environ['FAKE_CALLS']).open('a') as f:f.write(json.dumps(a)+'\\n')\nk='checks' if '--worker-resume-check' in a else 'exits'\ncode=v[k].pop(0) if v[k] else 0\ns.write_text(json.dumps(v));raise SystemExit(code)\n''');fake.chmod(0o755)
+            sleeper=bindir/'sleep';sleeper.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$FAKE_DELAYS"\n');sleeper.chmod(0o755)
+            env=dict(os.environ,AGENTFLOW_PYTHON=str(fake),PATH=str(bindir)+os.pathsep+os.environ['PATH'],FAKE_STATE=str(state),FAKE_CALLS=str(calls),FAKE_DELAYS=str(delays));env.pop('TMUX_PANE',None)
+            result=subprocess.run(['bash',str(here/'reproduce.sh'),'--worker',action,'--gepa-max-model-calls','1024'],env=env,cwd=root,timeout=10,capture_output=True,text=True)
+            return result.returncode,[json.loads(x) for x in calls.read_text().splitlines()],delays.read_text().splitlines() if delays.exists() else [],(root/'trace_output/appworld/training/run.log').read_text()
+
+    def test_real_worker_shell_restarts_only_qualified_failure_and_keeps_entry_args(self):
+        code,calls,delays,log=self.run_worker_shell(exits=[1,0],checks=[75,0])
+        actions=[row for row in calls if '--worker-resume-check' not in row]
+        self.assertEqual(code,0);self.assertEqual(len(actions),2)
+        self.assertEqual(delays,['15'])
+        self.assertIn('--all',actions[0]);self.assertIn('--all',actions[1])
+        self.assertNotIn('--worker-checkpoint-resume',actions[0]);self.assertIn('--worker-checkpoint-resume',actions[1])
+        self.assertIn('--gepa-max-model-calls',actions[1]);self.assertIn('1024',actions[1])
+        self.assertIn('appworld_controller_exit_code=0',log)
+
+    def test_worker_waits_for_writer_and_never_repeats_reset_or_user_cancel(self):
+        code,calls,delays,_=self.run_worker_shell(exits=[1,0],checks=[76,75,0],action='--restart-gepa')
+        actions=[row for row in calls if '--worker-resume-check' not in row]
+        self.assertEqual((code,delays),(0,['5','15']))
+        self.assertIn('--restart-gepa',actions[0]);self.assertNotIn('--restart-gepa',actions[1]);self.assertIn('--all',actions[1])
+        for exit_code in (130,143):
+            with self.subTest(exit_code=exit_code):
+                code,calls,delays,_=self.run_worker_shell(exits=[exit_code],checks=[75])
+                self.assertEqual((code,len(calls),delays),(exit_code,1,[]))
+        code,calls,delays,_=self.run_worker_shell(exits=[1],checks=[0])
+        self.assertEqual((code,len(calls),delays),(1,2,[]))
+
+
+class RepairedProjectionCheckpointTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, directory, *, mutation=None):
+        helper=FlattenedJudgeTransportRecoveryTests()
+        with helper.fixture(directory) as (state,seed,source,before):
+            root=Path(directory);row=json.loads(source.read_text())
+            trial,run,task='a'*32,'b'*40,'appworld-fixture_1'
+            official=root/'official-evidence'/('agentflow-'+'c'*32)
+            log=official/'tasks/fixture_1/logs/environment_io.md';log.parent.mkdir(parents=True)
+            code='print("executed fixture")';log.write_text('```python\n'+code+'\n```\n\n```\nExecution successful.\n```\n')
+            failed='print("failed proposal")'
+            events=[{'event_id':'event-1','sequence':'1','kind':'run.start','input':{'task_id':task}},
+                    {'event_id':'decision-1','sequence':'2','kind':'loop.decision','loop_id':'main','caused_by':['event-1']},
+                    {'event_id':'failed-start','sequence':'3','kind':'action.start','actor_id':'skill_executor','action_id':'failed','caused_by':['decision-1'],'input':{'code':failed}},
+                    {'event_id':'failed-end','sequence':'4','kind':'action.end','actor_id':'skill_executor','action_id':'failed','caused_by':['failed-start'],'input':{'code':failed},'attributes':{'executed':True,'extensions':{'source_event_name':'skill_executor.tool_result'}},'output':{'status':'error','tool_result':json.dumps({'error':'fixture failure'})}},
+                    {'event_id':'world-start','sequence':'5','kind':'action.start','loop_id':'main','action_id':'world','caused_by':['decision-1'],'input':{'code':code}},
+                    {'event_id':'world-end','sequence':'6','kind':'action.end','loop_id':'main','action_id':'world','caused_by':['world-start'],'input':{'code':code},'attributes':{'executed':True},'output':{'observation':'Execution successful.'}}]
+            evidence={'execution_run_id':run,'execution_status':'completed',
+                      'output':{'framework_capture':{'status':'complete'},'official_evidence_dir':str(official),'official_experiment_name':official.name},
+                      'trace':{'identity':{'run_id':run,'conversation_id':trial},'events':events},
+                      'evidence_projection':{'status':'error','error_code':'evaluation_evidence_projection_unavailable'}}
+            native={'task_id':task,'trial_id':trial,'execution_status':'completed',
+                    'checks':[{'check_id':'model','status':'error','reason':'evaluation_evidence_projection_unavailable'}],'evidence':evidence}
+            if mutation=='schema':native['checks'][0]['reason']='evaluation_judge_schema_invalid'
+            elif mutation=='world_binding':
+                events[2]['input']['code']=code;events[3]['input']['code']=code
+            elif mutation=='missing_io':log.unlink()
+            elif mutation=='incomplete_capture':evidence['output']['framework_capture']['status']='incomplete'
+            row['trials'][0]=native;source.write_text(json.dumps(row))
+            atomics=source.parent/'trials';atomics.mkdir();atomic=atomics/(trial+'.json');atomic.write_text(json.dumps(native))
+            if mutation=='atomic_mismatch':
+                changed=json.loads(atomic.read_text());changed['evidence']['trace']['events'][0]['input']['unverified']=True
+                atomic.write_text(json.dumps(changed))
+            comparison={'status':'partial','seed':str(seed),'items':[{'task_id':r['task_id'],'execution_status':'completed'} for r in row['trials']],
+                        'metrics':{'candidate':{'planned':32,'completed':32,'missing':0,'execution_errors':0,'judge_errors':1}},'review_distribution':{'complete':31,'missing':1}}
+            comparison_path=source.parents[3]/'comparison.json';comparison_path.write_text(json.dumps(comparison))
+            before.clear();before.update({path:path.read_bytes() for path in (seed,source,source.with_name('manifest.json'),atomic,comparison_path,source.parents[3]/'progress.json')})
+            state.update(status='blocked',stop_reason='stage_gate_not_passed:pilot32',stage_results={'pilot32':{'status':'complete','gate_passed':False,'data':{'callback':'appworld.stage32','comparison':str(comparison_path)}}})
+            yield state,seed,source,before,comparison
+            for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_actual_flattened_gate_and_worker_qualify_only_repaired_native_projection(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (state,seed,source,before,comparison):
+            self.assertEqual(reproduce._stage_review_recovery_state(source.parents[3],32,baseline=False),'projection')
+            for reason in ('stage_gate_not_passed:pilot32','RuntimeError:stage_gate_not_passed:pilot32','appworld_stage_review_pending'):
+                self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError(reason),state),'appworld_stage_review_pending')
+            self.assertTrue(reproduce._comparison_review_pending(comparison,seed,32))
+            reproduce._APPWORLD_LAYOUT.save(Path(directory)/'gepa/lifecycle.json',state)
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+
+    def test_missing_review_reopens_legacy_complete_receipt_without_releasing_gate(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (state,seed,source,before,comparison):
+            candidate=dict(state['candidate'])
+            self.assertTrue(reproduce._resume_pending_comparison_receipts(state,seed,candidate,None))
+            self.assertEqual(state['stage_results']['pilot32']['status'],'pending')
+            self.assertIsNone(state['stage_results']['pilot32']['gate_passed'])
+            self.assertEqual(state['candidate'],candidate)
+            self.assertFalse(reproduce._comparison_review_pending(dict(comparison,status='complete'),seed,32))
+
+    def test_unknown_schema_failed_binding_missing_io_and_incomplete_capture_do_not_restart(self):
+        for mutation in ('schema','world_binding','missing_io','incomplete_capture','atomic_mismatch'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,self.fixture(directory,mutation=mutation) as (state,seed,source,before,comparison):
+                for reason in ('stage_gate_not_passed:pilot32','appworld_stage_review_pending'):
+                    self.assertIsNone(reproduce._autonomous_retry_reason(RuntimeError(reason),state))
+                reproduce._APPWORLD_LAYOUT.save(Path(directory)/'gepa/lifecycle.json',state)
+                with patch.object(reproduce,'_active_output_processes') as processes:
+                    self.assertEqual(reproduce._worker_resume_check(),0);processes.assert_not_called()
+
+    def test_one_command_backoff_keeps_the_same_saved_projection_source(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (state,seed,source,before,comparison):
+            reproduce._APPWORLD_LAYOUT.save(Path(directory)/'gepa/lifecycle.json',state);calls=[]
+            def run(actual_seed,label,**budgets):
+                calls.append(actual_seed)
+                if len(calls)==1:raise RuntimeError('stage_gate_not_passed:pilot32')
+                return {'status':'complete','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=run),patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep') as sleep:
+                result=reproduce._run_all_autonomously(seed,'strategy')
+            self.assertEqual(result['status'],'complete');self.assertEqual(calls,[seed,seed]);sleep.assert_called_once_with(15)
+
+
+class RateLimitBudgetSubprocessRecoveryTests(unittest.TestCase):
+    fixture = OfflineGepaRecoveryTests.fixture
+    budget_fixture = NativeCumulativeBudgetRecoveryTests.budget_fixture
+
+    def rate_fixture(self, directory, *, stop='model_budget'):
+        artifact, seed, state_path, tree, protected, stages = self.budget_fixture(directory, stop=stop)
+        jobs = offline_gepa.read(state_path)
+        jobs['jobs']['original'].update(status='error', error='gepa_model_rate_limited')
+        offline_gepa.save(state_path, jobs)
+        value = offline_gepa.read(tree)
+        value.update(status='error', error='gepa_model_rate_limited', model_calls=512,
+                     started_ms=1, active=1, batch={'retained_pending_maps': True})
+        if stop != 'model_budget':
+            value['model_calls'] = 480
+        offline_gepa.save(tree, value)
+        offline_gepa.save(offline_gepa.STATUS, {'job_id': 'original', 'job_status': 'error'})
+        lifecycle = offline_gepa.read(offline_gepa.GEPA / 'lifecycle.json')
+        lifecycle.update(status='pending', phase='gepa_run')
+        lifecycle['stage_results']['gepa_run']['data']['job_id'] = 'original'
+        offline_gepa.save(offline_gepa.GEPA / 'lifecycle.json', lifecycle)
+        scripts = Path(directory) / 'child-entry'; scripts.mkdir()
+        # This is a real isolated child process, standing in for the native
+        # budget closure tested independently by --rate-limit-budget. Its
+        # first exit is flattened by production reproduce.run(), not a mock.
+        (scripts / 'offline_gepa.py').write_text("""import json,os,sys
+from pathlib import Path
+root=Path(sys.argv[1]); stop=sys.argv[2]
+assert os.environ.get('AGENTFLOW_SHARED_LIFECYCLE')=='1'
+submission=json.loads((root/'gepa/submission.json').read_text())
+plan=json.loads((root/'gepa/plan.json').read_text())
+assert sys.argv[3]==plan['seed']
+ledger=root/'child-calls.json';calls=json.loads(ledger.read_text()) if ledger.exists() else []
+calls.append({'job_id':submission['job_id'],'seed':sys.argv[3]});ledger.write_text(json.dumps(calls))
+if len(calls)==1 or stop=='reject':sys.exit(1)
+treepath=root/'gepa/workspace/agent-evaluation'/submission['job_id']/'search/tree.json'
+tree=json.loads(treepath.read_text());tree.update(status='validation_rejected',stop_reason=stop,active=None,batch=None);tree.pop('error',None);treepath.write_text(json.dumps(tree))
+statepath=root/'gepa/workspace/agent-evaluation/state.json';state=json.loads(statepath.read_text());state['jobs'][submission['job_id']].update(status='rejected');statepath.write_text(json.dumps(state))
+(root/'gepa/status.json').write_text(json.dumps({'job_id':submission['job_id'],'job_status':'rejected'}))
+""")
+        return seed, state_path, tree, protected, scripts
+
+    def test_actual_child_exit_rate_limit_retries_same_job_then_extends_cumulative_budget(self):
+        for stop in ('model_budget', 'gepa_search_time_reserved'):
+            with self.subTest(stop=stop), tempfile.TemporaryDirectory() as directory:
+                seed, state_path, tree, protected, scripts = self.rate_fixture(directory, stop=stop)
+                old = offline_gepa.read(tree)
+                calls = []
+                def shared_prefix(actual_seed, label, **budgets):
+                    calls.append((actual_seed, label, budgets))
+                    if len(calls) <= 2:
+                        reproduce.run('offline_gepa.py', directory, stop, str(actual_seed))
+                        return {'status':'not_qualified', 'stop_reason':'appworld_gepa_no_new_qualified_candidate'}
+                    receipt = offline_gepa.read(offline_gepa.PLAN)['budget_extension']
+                    self.assertEqual(receipt['job_id'], 'original')
+                    self.assertEqual(receipt['model_calls_used'], old['model_calls'])
+                    self.assertEqual(receipt['previous_limits']['max_model_calls'], 512)
+                    self.assertEqual(budgets['gepa_max_model_calls'], 1024)
+                    self.assertEqual(offline_gepa.read(offline_gepa.GEPA/'lifecycle.json')['stage_results']['gepa_run']['status'],'pending')
+                    return {'status':'complete', 'phase':'gepa_prepare'}
+                with patch.object(reproduce,'HERE',scripts), patch.object(reproduce,'ROOT',Path(directory)), \
+                     patch.object(reproduce,'_run_all_with_seed_search',side_effect=shared_prefix), \
+                     patch.object(reproduce,'_experiment_status'), patch.object(reproduce.time,'sleep') as sleep, \
+                     patch.object(reproduce,'_reserve_after_unqualified_native_search') as reserve, redirect_stdout(io.StringIO()):
+                    result=reproduce._run_all_autonomously(seed,'strategy',gepa_max_model_calls=512)
+                self.assertEqual(result['status'],'complete')
+                self.assertEqual([x[0] for x in calls],[seed,seed,seed])
+                sleep.assert_called_once_with(15);reserve.assert_not_called()
+                ledger=json.loads((Path(directory)/'child-calls.json').read_text())
+                self.assertEqual(ledger,[{'job_id':'original','seed':str(seed)}]*2)
+                current=offline_gepa.read(tree)
+                for key in ('model_calls','trials_used','nodes','started_ms','budget_extensions'):
+                    self.assertEqual(current[key],old[key])
+                for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_actual_child_exit_cannot_reclassify_changed_source_holdout_cancel_or_unknown_error(self):
+        for mutation in ('frozen-seed','receipt-job','lifecycle-job','unknown-error','holdout','replay','cancel'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory:
+                seed,state_path,tree,protected,scripts=self.rate_fixture(directory)
+                if mutation=='frozen-seed':
+                    offline_gepa.save(tree.parent.parent/'seed.json',{'different_source':True})
+                elif mutation=='receipt-job':
+                    offline_gepa.save(offline_gepa.STATUS,{'job_id':'newer','job_status':'error'})
+                elif mutation=='lifecycle-job':
+                    path=offline_gepa.GEPA/'lifecycle.json';value=offline_gepa.read(path)
+                    value['stage_results']['gepa_run']['data']['job_id']='newer';offline_gepa.save(path,value)
+                elif mutation=='holdout':
+                    value=offline_gepa.read(tree);value['holdout_started']=True;offline_gepa.save(tree,value)
+                else:
+                    value=offline_gepa.read(state_path);job=value['jobs']['original']
+                    if mutation=='unknown-error':job['error']='gepa_source_not_approved'
+                    elif mutation=='replay':job['final_holdout_replay']=True
+                    else:job['cancel_requested']=True
+                    offline_gepa.save(state_path,value)
+                before={path:path.read_bytes() for path in (tree,state_path,seed,offline_gepa.PLAN)}
+                def shared_prefix(actual_seed,label,**budgets):
+                    reproduce.run('offline_gepa.py',directory,'reject',str(actual_seed))
+                with patch.object(reproduce,'HERE',scripts),patch.object(reproduce,'ROOT',Path(directory)), \
+                     patch.object(reproduce,'_run_all_with_seed_search',side_effect=shared_prefix), \
+                     patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep') as sleep,redirect_stdout(io.StringIO()):
+                    result=reproduce._run_all_autonomously(seed,'strategy')
+                self.assertEqual(result['status'],'blocked');sleep.assert_not_called()
+                self.assertEqual(len(json.loads((Path(directory)/'child-calls.json').read_text())),1)
+                for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+                for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+
+class GenerationReceiptRegressionTests(unittest.TestCase):
+    def test_generation_receipt_attempt_retains_fees_before_gate_without_draft_copy(self):
+        with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+            root = Path(directory)
+            seed = root/'published/candidate-receipt/strategy.json'
+            seed.parent.mkdir(parents=True)
+            artifact = {'level': 'L3', 'policy': {'fixture': True}}
+            seed.write_text(json.dumps(artifact))
+            receipt = {'schema_version': 1, 'seed_label': seed.parent.name,
+                'control_learning': {'status': 'generated', 'model_calls': 2,
+                    'validated_model_draft': {'action_rules': [], 'loop_rules': []},
+                    'attempts': [{'attempt': 1, 'status': 'rejected', 'usage': None},
+                        {'attempt': 2, 'status': 'generated', 'usage': {'total_tokens': 11}}]},
+                'english_trigger_learning': {'status': 'compiled', 'model_calls': 3, 'attempts': [],
+                    'incremental_generation': {'model_calls': 3, 'model_attempts': 3,
+                        'batches': [{'attempt': 3, 'status': 'compiled', 'usage': {'total_tokens': 17},
+                            'draft': [{'memory_id': 'approved-fixture', 'trigger_pattern': 'login access_token'}]}]}}}
+            manifest = seed.with_name('manifest.json')
+            manifest.write_text(json.dumps({'version': 'fixture-native-version', 'generation_receipt': receipt}))
+            with patch.object(reproduce, 'OUTPUT', root), \
+                 patch.object(reproduce._APPWORLD_LAYOUT, 'version', return_value='fixture-native-version'):
+                attempt = reproduce.begin_seed_attempt(seed)
+                summary = attempt['seed_generation_receipt']
+                self.assertEqual(summary['manifest_ref'], str(manifest.resolve()))
+                self.assertEqual(summary['control_learning']['model_calls'], 2)
+                self.assertEqual(summary['english_trigger_learning']['model_calls'], 3)
+                self.assertIsNone(summary['control_learning']['attempts'][0]['usage'])
+                self.assertTrue(all(key not in json.dumps(summary) for key in
+                    ('validated_model_draft', 'trigger_pattern', 'source_experiences', 'snapshot')))
+                self.assertNotIn('seed_generation_diagnostic', attempt)
+                self.assertEqual(reproduce.seed_search()['attempts'][0], attempt)
+                self.assertEqual(reproduce.begin_seed_attempt(seed)['seed_generation_receipt'], summary)
+                # A different native version cannot claim these immutable paid receipts.
+                manifest.write_text(json.dumps({'version': 'wrong-version', 'generation_receipt': receipt}))
+                with self.assertRaisesRegex(RuntimeError, 'generation_receipt_mismatch'):
+                    reproduce._retain_seed_generation_receipt({}, seed)
+
+class UnavailableSeedGenerationRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self,directory):
+        root=Path(directory);source=root/'published/strategy/strategy.json';source.parent.mkdir(parents=True)
+        source.write_text('{"level":"L3","policy":{"source":"approved-fixture"}}')
+        seed=root/'published/seed-auto-r1-a2/strategy.json'
+        gepa=root/'gepa';gepa.mkdir()
+        state={'phase':'seed','candidate':{'seed_artifact':str(seed)},'stage_results':{
+            'prepare':{'status':'complete','data':{'original':True}},
+            'train':{'status':'complete','data':{'original':True}},
+            'seed':{'status':'failed','reason':'RuntimeError:appworld_english_trigger_no_evidence_supported_fallback'}}}
+        search={'round':1,'status':'searching','attempts':[], 'current_seed':str(seed),
+            'automatic_seed_generation':{'round':1,'status':'pending','seed':str(seed),
+                'seed_label':seed.parent.name,'source_seed':str(source),'source_attempt':1,
+                'method':'approved_training_native_seed'}}
+        diagnostic={'seed_label':seed.parent.name,'validated_evidence_required':True,
+            'control_learning':{'model_calls':2,'status':'generated'},
+            'english_trigger_learning':{'model_calls':3,'status':'specific_conditions_failed',
+                'attempts':[{'attempt':i,'status':'rejected','usage':{'total_tokens':i*10}} for i in (1,2,3)],
+                'evidence_fallback':{'status':'no_native_valid_trigger','model_calls':0}}}
+        with _isolated_gepa_outputs(root),patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',gepa), \
+             patch.object(reproduce,'_CANDIDATE_STATE_LABEL',None):
+            reproduce._APPWORLD_LAYOUT.save(gepa/'lifecycle.json',state)
+            reproduce._save_search(search)
+            reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+            protected={source:source.read_bytes()}
+            for name in ('training/healthy-report.json','gepa/l0-current-stage32/result.json'):
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('{"retained_original":true}')
+                protected[path]=path.read_bytes()
+            yield seed,source,state,diagnostic,protected
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_one_command_archives_unavailable_generation_and_continues_new_label(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (seed,source,state,diagnostic,protected):
+            calls=[]
+            def shared_prefix(actual_seed,label,**budgets):
+                calls.append((actual_seed,label))
+                if len(calls)==1:raise RuntimeError('RuntimeError:appworld_english_trigger_no_evidence_supported_fallback')
+                search=reproduce.seed_search()
+                old=search['generation_history'][0]
+                self.assertEqual(old['seed'],str(seed));self.assertEqual(old['status'],'unsupported')
+                self.assertEqual(old['seed_generation_diagnostic'],diagnostic)
+                self.assertEqual(search['attempts'],[])
+                self.assertEqual(search['automatic_seed_generation']['source_seed'],str(source))
+                self.assertNotEqual(actual_seed,seed);self.assertFalse(actual_seed.exists())
+                self.assertEqual(label,actual_seed.parent.name)
+                self.assertEqual(reproduce._read(Path(directory)/'gepa/lifecycle.json')['stage_results']['train'],state['stage_results']['train'])
+                return {'status':'complete','phase':'seed'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=shared_prefix), \
+                 patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep') as sleep,redirect_stdout(io.StringIO()):
+                result=reproduce._run_all_autonomously(seed,seed.parent.name)
+            self.assertEqual(result['status'],'complete');self.assertEqual(len(calls),2);sleep.assert_not_called()
+            self.assertEqual(reproduce._read(Path(directory)/'training/seed-compile-status.json'),diagnostic)
+
+    def test_nested_seed_search_failure_resumes_actual_pending_after_two_scored_candidates(self):
+        with tempfile.TemporaryDirectory() as directory, AutomaticSeedSearchTests.fixture(self,directory,
+                passed_after=2) as (initial,root,events,generated,retained):
+            original_freeze=reproduce.seed_with_recovery.side_effect
+            real_search=reproduce._run_all_with_seed_search
+            generation_calls=[];outer_calls=[];failed=[]
+            def freeze(*,label):
+                generation_calls.append(label)
+                if len(generation_calls)==2:
+                    seed=root/'published'/label/'strategy.json';failed.append(seed)
+                    diagnostic={'seed_label':label,'validated_evidence_required':True,
+                        'control_learning':{'model_calls':2,'status':'generated'},
+                        'english_trigger_learning':{'model_calls':3,'status':'specific_conditions_failed',
+                            'attempts':[{'attempt':i,'status':'rejected','usage':{'total_tokens':i*10}}
+                                        for i in (1,2,3)],
+                            'evidence_fallback':{'status':'no_native_valid_trigger','model_calls':0}}}
+                    reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+                    raise RuntimeError('appworld_english_trigger_no_evidence_supported_fallback')
+                return original_freeze(label=label)
+            def prefix(actual_seed,label,**budgets):
+                outer_calls.append(actual_seed)
+                value=real_search(actual_seed,label,**budgets)
+                # Stop this model-free fixture after the real unchanged
+                # 32/100 gates and native stage boundaries have succeeded.
+                self.assertEqual(value['status'],'not_qualified')
+                return {'status':'complete','phase':'gepa_run'}
+            with patch.object(reproduce,'seed_with_recovery',side_effect=freeze), \
+                 patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix):
+                result=reproduce._run_all_autonomously(initial,'strategy')
+            self.assertEqual(result['status'],'complete')
+            self.assertEqual(outer_calls[0],initial)
+            self.assertNotEqual(outer_calls[1],initial)
+            self.assertNotEqual(outer_calls[1],failed[0])
+            self.assertEqual(len(generation_calls),3)
+            search=reproduce.seed_search();old=search['generation_history'][0]
+            self.assertEqual(old['seed'],str(failed[0]));self.assertEqual(old['status'],'unsupported')
+            self.assertNotEqual(old['source_seed'],str(initial))
+            self.assertEqual(old['seed_generation_diagnostic']['english_trigger_learning']['model_calls'],3)
+            self.assertEqual(old['seed_generation_diagnostic']['control_learning']['model_calls'],2)
+            self.assertEqual([row['status'] for row in search['attempts']],['failed','failed','passed'])
+            self.assertEqual(events,[(0,32),(1,32),(2,32),(2,100),'--prepare','--run'])
+
+    def test_old_worker_readonly_check_allows_main_to_advance_saved_local_failure(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (seed,source,state,diagnostic,protected):
+            root=Path(directory);state.update(status='blocked',stop_reason='appworld_stage_failed')
+            reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+            value=reproduce._read(root/'gepa/status.json')
+            value['experiment']={'status':'blocked','reason':'appworld_stage_failed'}
+            reproduce._APPWORLD_LAYOUT.save(root/'gepa/status.json',value)
+            before={path:path.read_bytes() for path in root.rglob('*.json')}
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(),75)
+            for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+            calls=[]
+            def prefix(actual_seed,label,**budgets):
+                calls.append(actual_seed)
+                if len(calls)==1:raise RuntimeError('RuntimeError:appworld_english_trigger_no_evidence_supported_fallback')
+                return {'status':'complete','phase':'seed'}
+            with patch.object(sys,'argv',['reproduce.py','--all','--worker-checkpoint-resume']), \
+                 patch.object(reproduce,'_active_output_processes',return_value=[]), \
+                 patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix), \
+                 patch.object(reproduce,'_experiment_status'),redirect_stdout(io.StringIO()):
+                self.assertEqual(reproduce.main(),0)
+            self.assertEqual(calls[0],seed);self.assertNotEqual(calls[1],seed)
+            old=reproduce.seed_search()['generation_history'][0]
+            self.assertEqual(old['seed_generation_diagnostic'],diagnostic)
+
+    def test_unavailable_generation_requires_exact_paid_native_and_source_receipts(self):
+        for mutation in ('paid-two','paid-bool','wrong-label','wrong-candidate','fallback-pending','source-missing','frozen-artifact','source-error'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (seed,source,state,diagnostic,protected):
+                error=RuntimeError('appworld_english_trigger_no_evidence_supported_fallback')
+                if mutation=='paid-two':diagnostic['english_trigger_learning']['model_calls']=2
+                elif mutation=='paid-bool':diagnostic['english_trigger_learning']['model_calls']=True
+                elif mutation=='wrong-label':diagnostic['seed_label']='other-candidate'
+                elif mutation=='wrong-candidate':state['candidate']['seed_artifact']=str(source)
+                elif mutation=='fallback-pending':diagnostic['english_trigger_learning']['evidence_fallback']['status']='pending'
+                elif mutation=='source-missing':
+                    search=reproduce.seed_search();search['automatic_seed_generation']['source_seed']=str(source.parent.parent/'missing/strategy.json');reproduce._save_search(search)
+                elif mutation=='frozen-artifact':seed.parent.mkdir(parents=True);seed.write_text('{"already_frozen":true}')
+                else:error=RuntimeError('native_runtime_recompile_failed')
+                reproduce._APPWORLD_LAYOUT.save(Path(directory)/'training/seed-compile-status.json',diagnostic)
+                before=(Path(directory)/'gepa/status.json').read_bytes()
+                self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed,error,state))
+                self.assertEqual((Path(directory)/'gepa/status.json').read_bytes(),before)
+
+
+class InterruptedWorkerCheckpointTests(unittest.TestCase):
+    @contextmanager
+    def seed_fixture(self, directory):
+        root=Path(directory);source=root/'published/original/strategy.json';source.parent.mkdir(parents=True)
+        source.write_text(json.dumps({'level':'L3','policy':{'snapshot':{'experiences':[
+            {'memory_id':'experience-a','content_revision':'revision-a','target_scope':reproduce._APPWORLD_LAYOUT.SCOPE}],
+            'identity':{'user_id':reproduce._APPWORLD_LAYOUT.OWNER,'agent_id':reproduce._APPWORLD_LAYOUT.AGENT},
+            'options':{'require_validated_evidence':True,'target_scopes':[reproduce._APPWORLD_LAYOUT.SCOPE]}},'options':{
+            'approved_experiences':[{'memory_id':'experience-a','content_revision':'revision-a'}]}}}))
+        source.with_name('manifest.json').write_text(json.dumps({'validated_evidence_required':True,'version':'native-source-version'}))
+        seed=root/'published/reserved/strategy.json'
+        state={'status':'running','phase':'seed','stop_reason':'stage_gate_not_passed:pilot32',
+            'candidate':{'seed_artifact':str(seed)},'stage_results':{'train':{'status':'complete'}}}
+        search={'round':1,'current_seed':str(seed),'automatic_seed_generation':{
+            'round':1,'status':'pending','method':'approved_training_native_seed','seed':str(seed),
+            'seed_label':'reserved','source_seed':str(source)}}
+        diagnostic={'seed_label':'reserved','validated_evidence_required':True,
+            'english_trigger_learning':{'status':'pending','model_calls':1,'incremental_generation':{
+                'source_experiences':[{'memory_id':'experience-a','content_revision':'revision-a'}],
+                'batches':[{'attempt':1,'status':'draft_ready','memory_ids':['experience-a'],
+                    'usage':{'total_tokens':11},'draft':[{'memory_id':'experience-a','trigger_pattern':'login'}]}]}}}
+        with _isolated_gepa_outputs(root),patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',root/'gepa'),patch.object(reproduce,'_CANDIDATE_STATE_LABEL',None),patch.object(reproduce._APPWORLD_LAYOUT,'version',return_value='native-source-version'):
+            reproduce._save_search(search);reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+            reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+            yield root,state,seed,source,diagnostic
+
+    def test_reserved_paid_seed_without_fresh_fault_resumes_readonly_and_waits_for_writer(self):
+        with tempfile.TemporaryDirectory() as directory,self.seed_fixture(directory) as (root,state,seed,source,diagnostic):
+            before={p:p.read_bytes() for p in root.rglob('*.json')}
+            self.assertTrue(reproduce._interrupted_worker_checkpoint(state))
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(),75)
+                with patch.object(sys,'argv',['reproduce.py','--worker-resume-check']):self.assertEqual(reproduce.main(),75)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):
+                self.assertEqual(reproduce._worker_resume_check(),76)
+            for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+            self.assertFalse(seed.exists())
+
+    def test_running_pilot_uses_own_capture_not_old_gate_fault(self):
+        helper=FlattenedJudgeTransportRecoveryTests()
+        with tempfile.TemporaryDirectory() as directory,helper.fixture(directory) as (state,seed,source,before):
+            config=source.parent.parent/'config.json';settings=reproduce._read(config)
+            settings['variants']=[{'id':'candidate','artifact':reproduce._read(seed)}]
+            reproduce._APPWORLD_LAYOUT.save(config,settings)
+            state.update(status='running',stop_reason='stage_gate_not_passed:validation100',
+                candidate=reproduce._candidate_identity(seed,seed.parent.name))
+            reproduce._APPWORLD_LAYOUT.save(Path(directory)/'gepa/lifecycle.json',state)
+            self.assertTrue(reproduce._interrupted_worker_checkpoint(state))
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            self.assertEqual(reproduce._read(Path(directory)/'gepa/lifecycle.json'),state)
+
+    def test_interrupt_requires_bound_receipts_not_cancel_authority_or_stale_error(self):
+        for mutation in ('cancel','failed-stage','source-error','unknown-stop','candidate','label','source','paid-bool','binding','no-batch'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,self.seed_fixture(directory) as (root,state,seed,source,diagnostic):
+                if mutation=='cancel':state['cancel_requested']=True
+                elif mutation=='failed-stage':state['stage_results']['seed']={'status':'failed','reason':'invalid_credentials'}
+                elif mutation=='source-error':state['last_error']='appworld_frozen_seed_validated_source_missing'
+                elif mutation=='unknown-stop':state['stop_reason']='permission_denied'
+                elif mutation=='candidate':state['candidate']['seed_artifact']=str(source)
+                elif mutation=='label':diagnostic['seed_label']='other'
+                elif mutation=='source':source.unlink()
+                elif mutation=='paid-bool':diagnostic['english_trigger_learning']['model_calls']=True
+                elif mutation=='binding':diagnostic['english_trigger_learning']['incremental_generation']['source_experiences'][0]['content_revision']='changed'
+                elif mutation=='no-batch':diagnostic['english_trigger_learning']['incremental_generation']['batches']=[]
+                reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+                reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+                before={p:p.read_bytes() for p in root.rglob('*.json')}
+                self.assertFalse(reproduce._interrupted_worker_checkpoint(state))
+                with patch.object(reproduce,'_active_output_processes') as processes:
+                    self.assertEqual(reproduce._worker_resume_check(),0);processes.assert_not_called()
+                for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+        for mutation in ('judge','artifact'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,FlattenedJudgeTransportRecoveryTests().fixture(directory,mutation=mutation) as (state,seed,source,before):
+                state.update(status='running',candidate=reproduce._candidate_identity(seed,seed.parent.name))
+                self.assertFalse(reproduce._interrupted_worker_checkpoint(state))
+        for mutation in ('capture-artifact','capture-outside'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,FlattenedJudgeTransportRecoveryTests().fixture(directory) as (state,seed,source,before):
+                config=source.parent.parent/'config.json';settings=reproduce._read(config)
+                settings['variants']=[{'id':'candidate','artifact':reproduce._read(seed)}]
+                reproduce._APPWORLD_LAYOUT.save(config,settings)
+                state.update(status='running',candidate=reproduce._candidate_identity(seed,seed.parent.name))
+                if mutation=='capture-artifact':
+                    settings['variants'][0]['artifact']={'wrong':True};reproduce._APPWORLD_LAYOUT.save(config,settings)
+                else:
+                    progress_path=source.parent.parent.parent.parent/'progress.json';progress=reproduce._read(progress_path)
+                    progress['shards']['0']['source_report']=str(Path(directory)/'outside/report.json')
+                    reproduce._APPWORLD_LAYOUT.save(progress_path,progress)
+                self.assertFalse(reproduce._interrupted_worker_checkpoint(state))
+                for path,data in before.items():path.write_bytes(data)
+
+    def test_compiled_inheritance_directory_binds_all_126_native_snapshot_sources_not_26_active(self):
+        with tempfile.TemporaryDirectory() as directory,self.seed_fixture(directory) as (root,state,seed,source,diagnostic):
+            artifact=reproduce._read(source)
+            cards=[{'memory_id':f'experience-{i}','content_revision':f'revision-{i}',
+                'target_scope':reproduce._APPWORLD_LAYOUT.SCOPE} for i in range(126)]
+            artifact['policy']['snapshot']['experiences']=cards
+            artifact['policy']['options']['approved_experiences']=[{key:row[key] for key in ('memory_id','content_revision')} for row in cards[:26]]
+            reproduce._APPWORLD_LAYOUT.save(source,artifact)
+            english=diagnostic['english_trigger_learning'];english['status']='compiled'
+            english['incremental_generation']['source_experiences']=[{key:row[key] for key in ('memory_id','content_revision')} for row in cards]
+            english['incremental_generation']['batches'][0].update(status='pending',memory_ids=['experience-125'])
+            reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+            self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            english['incremental_generation']['source_experiences'][-1]['content_revision']='other'
+            reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+            self.assertIsNone(reproduce._interrupted_worker_checkpoint(state))
+
+    def test_frozen_complete_seed_checkpoint_reuses_exact_native_artifact_without_paid_call(self):
+        with tempfile.TemporaryDirectory() as directory,self.seed_fixture(directory) as (root,state,seed,source,diagnostic):
+            seed.parent.mkdir(parents=True);seed.write_bytes(source.read_bytes())
+            seed.with_name('manifest.json').write_bytes(source.with_name('manifest.json').read_bytes())
+            state['stage_results']['seed']={'status':'complete','artifact':str(seed)}
+            reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+            before={path:path.read_bytes() for path in root.rglob('*.json')}
+            self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_partial_capture_only_waits_while_bound_writer_is_alive(self):
+        helper=FlattenedJudgeTransportRecoveryTests()
+        with tempfile.TemporaryDirectory() as directory,helper.fixture(directory,mutation='execution') as (state,seed,source,before):
+            config=source.parent.parent/'config.json';settings=reproduce._read(config)
+            settings['variants']=[{'id':'candidate','artifact':reproduce._read(seed)}]
+            reproduce._APPWORLD_LAYOUT.save(config,settings)
+            state.update(status='running',candidate=reproduce._candidate_identity(seed,seed.parent.name))
+            reproduce._APPWORLD_LAYOUT.save(Path(directory)/'gepa/lifecycle.json',state)
+            self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'waiting')
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),0)
+
+    def test_real_worker_shell_recovers_abnormal_exit_without_repeating_reset(self):
+        helper=WorkerCheckpointRecoveryTests()
+        for code in (137,1):
+            with self.subTest(code=code):
+                result,calls,delays,log=helper.run_worker_shell(exits=[code,0],checks=[75,0])
+                actions=[row for row in calls if '--worker-resume-check' not in row]
+                self.assertEqual((result,len(actions),delays),(0,2,['15']))
+                self.assertIn('--worker-checkpoint-resume',actions[1])
+
+
+class GeneratedControlWorkerCheckpointTests(InterruptedWorkerCheckpointTests):
+    def test_native_generated_three_paid_controls_before_english_revalidate_without_reset(self):
+        from copy import deepcopy
+        with tempfile.TemporaryDirectory() as directory,self.seed_fixture(directory) as (root,state,seed,source,diagnostic):
+            diagnostic.pop('english_trigger_learning')
+            diagnostic['control_learning']={'status':'generated','model_calls':3,
+                'generated_rules':{'action_rules':0,'loop_rules':1,'schedule_rules':0},
+                'validated_model_draft':{'action_rules':[],'loop_rules':[{
+                    'memory_id':'experience-a','replan_on_failure':True,'max_replans':1}], 'schedule_rules':[]},
+                'attempts':[{'status':'generated','usage':{'total_tokens':17}}]}
+            reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+            runtime=root/'training/runtime';reproduce._APPWORLD_LAYOUT.save(runtime/'service.json',{'control_learning':{'enabled':True}})
+            native_calls=[]
+            def native(binary,workdir,operation,payload):
+                native_calls.append(list(operation));policy=deepcopy(payload['policy'])
+                if operation==['runtime','recompile']:policy['options']=deepcopy(payload['options'])
+                elif operation==['runtime','control-compile']:
+                    self.assertEqual(payload['draft'],diagnostic['control_learning']['validated_model_draft'])
+                    policy['options']['loop_rules']=[{'target_scope':reproduce._APPWORLD_LAYOUT.SCOPE,
+                        'source_experience':{'memory_id':'experience-a','content_revision':'revision-a'}}]
+                else:self.fail('worker must not call model/query/Agent')
+                return json.dumps(policy)
+            before={path:path.read_bytes() for path in root.rglob('*.json')}
+            with patch.object(reproduce._APPWORLD_LAYOUT,'RUNTIME',runtime),patch.object(reproduce._APPWORLD_LAYOUT,'native',side_effect=native):
+                self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+                self.assertEqual(native_calls[-1],['runtime','control-compile'])
+                self.assertEqual(native_calls.count(['runtime','control-compile']),1)
+                self.assertTrue(all(op in (['runtime','recompile'],['runtime','control-compile']) for op in native_calls))
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+                for paid in (1,2,3):
+                    with self.subTest(paid=paid):
+                        diagnostic['control_learning']['model_calls']=paid
+                        reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+                        self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+                for paid in (True,-1,4):
+                    with self.subTest(rejected_paid=paid):
+                        bad=deepcopy(diagnostic);bad['control_learning']['model_calls']=paid
+                        reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',bad)
+                        native_calls.clear()
+                        self.assertIsNone(reproduce._interrupted_worker_checkpoint(state))
+                        self.assertEqual(native_calls,[])
+                reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+                initial=deepcopy(diagnostic);initial['english_trigger_learning']={'status':'pending','model_calls':0}
+                reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',initial)
+                self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+                reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+                bad=deepcopy(diagnostic);bad['control_learning']['validated_model_draft']['loop_rules'][0]['memory_id']='foreign'
+                reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',bad)
+                native_calls.clear();self.assertIsNone(reproduce._interrupted_worker_checkpoint(state));self.assertEqual(native_calls,[])
+                reproduce._APPWORLD_LAYOUT.save(root/'training/seed-compile-status.json',diagnostic)
+                with patch.object(reproduce._APPWORLD_LAYOUT,'native',side_effect=RuntimeError('control_source_not_approved')):
+                    self.assertIsNone(reproduce._interrupted_worker_checkpoint(state))
+            for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+
+
+class AutonomousActiveSeedBindingTests(unittest.TestCase):
+    """Real nested prefix/terminal handlers, isolated native bookkeeping only."""
+    @contextmanager
+    def advanced_fixture(self,directory,*,rate_limited=False):
+        real_terminal=reproduce._native_gepa_no_new_candidate
+        with AutomaticSeedSearchTests.fixture(self,directory,passed_after=2) as values:
+            initial,root,events,generated,retained=values
+            actual=[];source_files={};native_runs=[]
+            def native(script,*arguments,**kwargs):
+                self.assertEqual(script,'offline_gepa.py');events.append(arguments[0])
+                active=Path(arguments[arguments.index('--seed-artifact')+1]).resolve()
+                artifact=reproduce._read(active);actual[:]=[active]
+                job='same-native-job'
+                tree=offline_gepa.WORKSPACE/'agent-evaluation'/job/'search/tree.json'
+                seed_copy=tree.parent.parent/'seed.json'
+                if arguments[0]=='--prepare':
+                    old={'max_rounds':30,'max_model_calls':512,'max_trials':8000,'timeout_ms':50*3600000}
+                    offline_gepa.save(offline_gepa.CONFIG/'gepa.json',old)
+                    offline_gepa.save(offline_gepa.PLAN,{'seed':str(active),'search':{'max_rounds':30,'max_model_calls':512}})
+                    offline_gepa.save(offline_gepa.GEPA/'submission.json',{'job_id':job})
+                    offline_gepa.save(seed_copy,artifact)
+                    report=tree.parent/'evaluations/retained/report.pb';offline_gepa.save(report.with_suffix('.json'),{'healthy_task':'original'})
+                    report.write_bytes(b'original healthy capture')
+                    draft=tree.parent/'reflections/map.draft.json';offline_gepa.save(draft,{'paid_map':'original'})
+                    source_files.update({p:p.read_bytes() for p in (active,seed_copy,report,draft)})
+                    return 0
+                self.assertEqual(arguments[0],'--run');native_runs.append(active)
+                error=rate_limited and len(native_runs)==1
+                offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/state.json',{'jobs':{job:{
+                    'status':'error' if error else 'rejected','error':'gepa_model_rate_limited' if error else None,
+                    'user':offline_gepa.USER,'level':'L3','gepa':True}}})
+                offline_gepa.save(tree,{'status':'error' if error else 'validation_rejected',
+                    'error':'gepa_model_rate_limited' if error else None,'stop_reason':'model_budget',
+                    'active':1 if error else None,'batch':{'paid_maps':True} if error else None,
+                    'model_calls':512,'trials_used':1024,'rounds':30,'started_ms':1,
+                    'budget_extensions':[{'reason':'initial_budget','max_model_calls':512}],
+                    'holdout_started':False,'nodes':[{'id':0,'formal':'original'}]})
+                status=reproduce._read(offline_gepa.STATUS);status.update(job_id=job,job_status='error' if error else 'rejected')
+                offline_gepa.save(offline_gepa.STATUS,status)
+                if error:raise RuntimeError('offline_gepa.py_failed:1')
+                return 0
+            with patch.object(reproduce,'_native_gepa_no_new_candidate',side_effect=real_terminal), \
+                 patch.object(reproduce,'run',side_effect=native), \
+                 patch.object(reproduce._APPWORLD_LAYOUT,'version',side_effect=lambda artifact:f"fixture-native-{artifact['policy']['candidate']}"), \
+                 patch.object(reproduce.time,'sleep') as sleep:
+                yield initial,root,events,generated,retained,actual,source_files,native_runs,sleep
+
+    def test_real_inner_two_failures_rebind_before_same_job_budget_extension(self):
+        with tempfile.TemporaryDirectory() as td,self.advanced_fixture(td) as values:
+            initial,root,events,generated,retained,active,protected,native_runs,sleep=values
+            real_prefix=reproduce._run_all_with_seed_search;calls=[]
+            def prefix(seed,label,**budgets):
+                calls.append(seed)
+                if len(calls)==1:return real_prefix(seed,label,**budgets)
+                self.assertEqual(seed,active[0]);self.assertNotEqual(seed,initial)
+                self.assertEqual(budgets['gepa_max_model_calls'],1024)
+                receipt=offline_gepa.read(offline_gepa.PLAN)['budget_extension']
+                self.assertEqual(receipt['seed'],str(seed));self.assertEqual(receipt['job_id'],'same-native-job')
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix), \
+                 patch.object(reproduce,'_reserve_after_unqualified_native_search') as reserve:
+                result=reproduce._run_all_autonomously(initial,'strategy')
+            self.assertEqual(result['status'],'published');self.assertEqual(len(generated),2)
+            self.assertEqual(calls,[initial,active[0]]);reserve.assert_not_called();sleep.assert_not_called()
+            self.assertEqual(events,[(0,32),(1,32),(2,32),(2,100),'--prepare','--run'])
+            self.assertEqual([r['status'] for r in reproduce.seed_search()['attempts']],['failed','failed','passed'])
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+            self.assertEqual(offline_gepa.read(offline_gepa.WORKSPACE/'agent-evaluation/same-native-job/search/tree.json')['model_calls'],512)
+
+    def test_real_inner_rate_limit_at_cap_rebinds_before_normal_retry_and_extension(self):
+        with tempfile.TemporaryDirectory() as td,self.advanced_fixture(td,rate_limited=True) as values:
+            initial,root,events,generated,retained,active,protected,native_runs,sleep=values
+            real_prefix=reproduce._run_all_with_seed_search;calls=[]
+            def prefix(seed,label,**budgets):
+                calls.append(seed)
+                if len(calls)<=2:return real_prefix(seed,label,**budgets)
+                self.assertEqual(seed,active[0]);self.assertEqual(budgets['gepa_max_model_calls'],1024)
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix), \
+                 patch.object(reproduce,'_reserve_after_unqualified_native_search') as reserve:
+                result=reproduce._run_all_autonomously(initial,'strategy')
+            self.assertEqual(result['status'],'published');self.assertEqual(calls,[initial,active[0],active[0]])
+            self.assertEqual(native_runs,[active[0],active[0]]);self.assertEqual(len(generated),2)
+            sleep.assert_called_once_with(15);reserve.assert_not_called()
+            self.assertEqual(offline_gepa.read(offline_gepa.PLAN)['budget_extension']['model_calls_used'],512)
+            for path,data in protected.items():self.assertEqual(path.read_bytes(),data)
+
+    def test_changed_seed_requires_plan_native_body_version_and_search_binding(self):
+        for defect in ('plan','native-body','native-version','current-seed'):
+            with self.subTest(defect=defect),tempfile.TemporaryDirectory() as td,self.advanced_fixture(td) as values:
+                initial,root,events,generated,retained,active,protected,native_runs,sleep=values
+                result=reproduce._run_all_with_seed_search(initial,'strategy');self.assertEqual(result['status'],'not_qualified')
+                current=active[0];state=offline_gepa.read(offline_gepa.GEPA/'lifecycle.json')
+                if defect=='plan':
+                    plan=offline_gepa.read(offline_gepa.PLAN);plan['seed']=str(initial);offline_gepa.save(offline_gepa.PLAN,plan)
+                elif defect=='native-body':
+                    offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/same-native-job/seed.json',{'wrong_source':True})
+                elif defect=='native-version':
+                    value=offline_gepa.read(current);value['policy']['candidate']=99;offline_gepa.save(current,value)
+                else:
+                    search=reproduce.seed_search();search['current_seed']=str(initial);reproduce._save_search(search)
+                before=offline_gepa.read(offline_gepa.PLAN)
+                with self.assertRaisesRegex(RuntimeError,'native_seed_binding_invalid'):
+                    reproduce._autonomous_native_seed(initial,state)
+                self.assertEqual(offline_gepa.read(offline_gepa.PLAN),before);sleep.assert_not_called()
+
+
+class LegacyTerminalWorkerRecoveryTests(unittest.TestCase):
+    """A new worker may recover a stale outer only from the real bound job."""
+    @contextmanager
+    def legacy_fixture(self, directory):
+        with AutonomousActiveSeedBindingTests.advanced_fixture(self, directory) as values:
+            initial, root, events, generated, retained, active, protected, native_runs, sleep = values
+            # Simulate only the old outer's omitted synchronization. The real
+            # nested prefix, terminal lookup and reserve guard remain intact.
+            with patch.object(reproduce, '_autonomous_native_seed', return_value=(initial, 'strategy')):
+                result = reproduce._run_all_autonomously(initial, 'strategy')
+            self.assertEqual(result['status'], 'blocked')
+            self.assertEqual(result['stop_reason'], 'appworld_gepa_terminal_receipt_invalid')
+            self.assertEqual(result['phase'], 'gepa_run')
+            self.assertNotEqual(active[0], initial)
+            self.assertEqual(events, [(0, 32), (1, 32), (2, 32), (2, 100), '--prepare', '--run'])
+            yield values
+            for path, original in protected.items():
+                self.assertEqual(path.read_bytes(), original)
+            sleep.assert_not_called()
+
+    def test_old_progressed_outer_terminal_worker_resumes_actual_seed_without_writes(self):
+        with tempfile.TemporaryDirectory(dir='/tmp') as td, self.legacy_fixture(td) as values:
+            initial, root, events, generated, retained, active, protected, native_runs, sleep = values
+            preserved = {p: p.read_bytes() for p in (root / 'gepa').rglob('*') if p.is_file()}
+            with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(), 75)
+            with patch.object(reproduce, '_active_output_processes', return_value=[123]):
+                self.assertEqual(reproduce._worker_resume_check(), 76)
+            for path, original in preserved.items():
+                self.assertEqual(path.read_bytes(), original, 'worker qualification wrote a receipt')
+            calls = []
+            def resumed(seed, label, **budget):
+                calls.append((seed, label, budget['gepa_max_model_calls']))
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_all_with_seed_search', side_effect=resumed):
+                result = reproduce._run_all_autonomously(active[0], active[0].parent.name)
+            self.assertEqual(result['status'], 'published')
+            self.assertEqual(calls, [(active[0], active[0].parent.name, 1024)])
+            extension = offline_gepa.read(offline_gepa.PLAN)['budget_extension']
+            self.assertEqual(extension['seed'], str(active[0]))
+            self.assertEqual(extension['job_id'], 'same-native-job')
+            self.assertEqual(extension['model_calls_used'], 512)
+
+    def test_legacy_terminal_worker_rejects_wrong_binding_cancel_and_real_errors(self):
+        defects = ('candidate', 'artifact', 'plan', 'current-seed', 'immutable-seed',
+                   'submission', 'job-owner', 'native-job', 'job-error', 'tree-error',
+                   'cancelled', 'job-cancel', 'tree-cancel', 'active', 'batch',
+                   'holdout', 'final-holdout', 'pilot-gate', 'stage-job', 'last-error')
+        for defect in defects:
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory(dir='/tmp') as td, self.legacy_fixture(td) as values:
+                initial, root, events, generated, retained, active, protected, native_runs, sleep = values
+                state_path = root / 'gepa/lifecycle.json';state = reproduce._read(state_path)
+                tree_path = root / 'gepa/workspace/agent-evaluation/same-native-job/search/tree.json'
+                job_path = root / 'gepa/workspace/agent-evaluation/state.json'
+                if defect == 'candidate':state['candidate']['seed_version'] = 'unbound-version'
+                elif defect == 'artifact':
+                    artifact = reproduce._read(active[0]);artifact['policy']['candidate'] = 99
+                    offline_gepa.save(active[0], artifact)
+                    protected.pop(active[0])  # The deliberate negative mutation is not a test write leak.
+                elif defect == 'plan':
+                    plan = offline_gepa.read(offline_gepa.PLAN);plan['seed'] = str(initial)
+                    offline_gepa.save(offline_gepa.PLAN, plan)
+                elif defect == 'current-seed':
+                    search = reproduce.seed_search();search['current_seed'] = str(initial);reproduce._save_search(search)
+                elif defect == 'immutable-seed':
+                    path = tree_path.parent.parent / 'seed.json'
+                    offline_gepa.save(path, {'level': 'L3', 'wrong': True});protected.pop(path)
+                elif defect == 'submission':offline_gepa.save(root / 'gepa/submission.json', {'job_id': 'unbound-job'})
+                elif defect in ('job-owner', 'native-job', 'job-error', 'job-cancel'):
+                    jobs = offline_gepa.read(job_path);job = jobs['jobs']['same-native-job']
+                    key, value = {'job-owner': ('user', 'different-owner'), 'native-job': ('status', 'error'),
+                                  'job-error': ('error', 'model_transport_failed'), 'job-cancel': ('cancel_requested', True)}[defect]
+                    job[key] = value;offline_gepa.save(job_path, jobs)
+                elif defect in ('tree-error', 'tree-cancel', 'active', 'batch', 'holdout', 'final-holdout'):
+                    tree = offline_gepa.read(tree_path)
+                    key, value = {'tree-error': ('error', 'candidate_failed'), 'tree-cancel': ('cancel_requested', True),
+                        'active': ('active', 1), 'batch': ('batch', {}), 'holdout': ('holdout_started', True),
+                        'final-holdout': ('final_holdout', {'candidates': [1]})}[defect]
+                    tree[key] = value;offline_gepa.save(tree_path, tree)
+                elif defect == 'cancelled':state['status'] = 'cancelled'
+                elif defect == 'pilot-gate':state['stage_results']['pilot32']['gate_passed'] = False
+                elif defect == 'stage-job':state['stage_results']['gepa_run']['data']['job_id'] = 'wrong-job'
+                else:state['last_error'] = 'unclassified_real_error'
+                offline_gepa.save(state_path, state)
+                with patch.object(reproduce, '_active_output_processes') as processes:
+                    self.assertEqual(reproduce._worker_resume_check(), 0)
+                    processes.assert_not_called()
+
+    def test_legacy_terminal_worker_does_not_classify_other_errors_as_retry(self):
+        for fault in ('appworld_autonomous_native_seed_binding_invalid', 'reflection_candidate_error',
+                      'appworld_gepa_model_budget_exhausted', 'appworld_gepa_terminal_receipt_invalid_extra'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(dir='/tmp') as td, self.legacy_fixture(td) as values:
+                root = values[1];state_path = root / 'gepa/lifecycle.json';state = reproduce._read(state_path)
+                state['stop_reason'] = fault;offline_gepa.save(state_path, state)
+                self.assertIsNone(reproduce._autonomous_retry_reason(RuntimeError(fault), state))
+                with patch.object(reproduce, '_active_output_processes') as processes:
+                    self.assertEqual(reproduce._worker_resume_check(), 0)
+                    processes.assert_not_called()
+
+
+class Baseline100InterruptedWorkerRecoveryTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, directory):
+        import compare
+        root = Path(directory); gepa=root/'gepa'; seed=root/'published/current/strategy.json'
+        reproduce._APPWORLD_LAYOUT.save(seed, {'level':'L3','policy':{'frozen':True}})
+        reproduce._APPWORLD_LAYOUT.save(seed.with_name('manifest.json'), {'version':'candidate-native'})
+        l0=root/'published/L0.json'; reproduce._APPWORLD_LAYOUT.save(l0, {
+            'level':'L0','policy':None,'agent':{'revision':'baseline-revision'}})
+        tasks=[f'task-{i:03d}' for i in range(100)]
+        dataset=root/'training/datasets/comparison500';dataset.mkdir(parents=True)
+        (dataset/'holdout.jsonl').write_text('\n'.join(json.dumps({'task_id':t,'task_version':'version-'+t}) for t in tasks)+'\n')
+        pilot=gepa/'current-stage32/comparison.json'; pilot.parent.mkdir(parents=True)
+        baseline32=gepa/'l0-current-stage32/result.json';baseline32.parent.mkdir(parents=True)
+        ids=_l0(baseline32);_candidate(pilot,ids,strict=7,quality=.6)
+        value=reproduce._read(pilot);progress=_candidate_checkpoint(pilot,reproduce._read(seed),value['items'])
+        for shard in progress['shards'].values():shard['complete']=True
+        progress.update(planned_tasks=32,total_parallelism=0,workers_per_shard=16)
+        reproduce._APPWORLD_LAYOUT.save(pilot.with_name('progress.json'),progress)
+        value.update(seed=str(seed),source_l0=str(baseline32),progress=str(pilot.with_name('progress.json')),host_version='fixture-host')
+        reproduce._APPWORLD_LAYOUT.save(pilot,value)
+        baseline=gepa/'l0-current-stage100';baseline.mkdir(parents=True)
+        config={'task_ids':tasks,'repetitions':1,'splits':['holdout'],'max_trials':100,
+                'variants':[{'id':'candidate','version':'baseline-revision','instrumentation_config':str(root/'training/runtime/l0-evaluation-service.json')}],
+                'judge':reproduce._APPWORLD_LAYOUT.judge_projection()}
+        reproduce._APPWORLD_LAYOUT.save(baseline/'capture.config.json',config)
+        (baseline/'capture.host-version').write_text('fixture-host')
+        folder=baseline/'capture';reproduce._APPWORLD_LAYOUT.save(folder/'started.json',{
+            'planned_trials':100,'run_id':'native-run','dataset_version':'native-dataset'})
+        row={'task_id':tasks[0],'task_version':'version-'+tasks[0],'trial_id':'trial-a','variant_id':'candidate',
+             'execution_status':'completed','verdict':'passed','checks':[],
+             'evidence':{'loaded_version':'baseline-native','output':{'framework_capture':{'status':'complete'}},
+                         'trace':{'events':[{'kind':'run.start'},{'kind':'run.end'}]}}}
+        trial=folder/'trials/trial-a.json';reproduce._APPWORLD_LAYOUT.save(trial,row)
+        with _isolated_gepa_outputs(root),patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',gepa), \
+             patch.object(reproduce._APPWORLD_LAYOUT,'RUNTIME',root/'training/runtime'),patch.object(compare,'DATASET',dataset), \
+             patch.object(reproduce,'_host_version',return_value='fixture-host'),patch.object(reproduce,'_CANDIDATE_STATE_LABEL',None), \
+             patch.object(reproduce._APPWORLD_LAYOUT,'version',side_effect=lambda a:'baseline-native' if a.get('level')=='L0' else 'candidate-native'):
+            search={'round':2,'current_seed':str(seed),'attempts':[{'round':2,'seed':str(seed),'host_version':'fixture-host',
+                'pilot_comparison':str(pilot),'validation_comparison':str(gepa/'current-stage100/comparison.json')}],
+                'automatic_seed_generation':{'round':2,'status':'frozen','seed':str(seed),'source_seed':str(root/'published/previous/strategy.json')}}
+            reproduce._save_search(search)
+            state={'status':'running','phase':'validation100','stop_reason':'appworld_seed_generation_duplicate',
+                'candidate':reproduce._candidate_identity(seed,'current'),'stage_results':{
+                    'pilot32':{'status':'complete','gate_passed':True},'validation100':{'status':'pending'}}}
+            reproduce._APPWORLD_LAYOUT.save(gepa/'lifecycle.json',state)
+            yield root,state,seed,baseline,trial,pilot
+
+    def test_real_formal_pilot_before_candidate_progress_preserves_partial_baseline_readonly(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+            passed,proof=gate.verify_stage('32',pilot,Path(reproduce._read(pilot)['source_l0']),seed)
+            self.assertTrue(passed,proof)
+            before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            self.assertFalse((root/'gepa/current-stage100/progress.json').exists())
+            self.assertEqual(reproduce._interrupted_worker_checkpoint(state),'ready')
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            for p,data in before.items():self.assertEqual(p.read_bytes(),data)
+
+    def test_baseline_temporary_judge_failure_recovers_but_permanent_or_unbound_evidence_does_not(self):
+        for mutation in ('temporary','conflict','contract','schema','task','revision','judge','host','pilot','cancel','unknown','outside_output','authority_fault','bad_trace'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+                row=reproduce._read(trial)
+                if mutation in ('temporary','schema','conflict'):
+                    row.update(verdict='error',error_code='evaluation_judge_failed')
+                    row['checks']=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_429' if mutation=='temporary' else 'evaluation_judge_reason_conflict' if mutation=='conflict' else 'evaluation_judge_schema_invalid'}]
+                elif mutation=='bad_trace':row['evidence']['trace']['events']=[{'kind':'run.start'}]
+                elif mutation=='contract':row.update(execution_status='error',error_code='evaluation_entry_capture_contract_invalid')
+                elif mutation=='task':row['task_id']='task-outside-100'
+                elif mutation=='revision':row['task_version']='replaced'
+                elif mutation=='judge':
+                    config=reproduce._read(baseline/'capture.config.json');config['judge']['require_state_dependency']=False;reproduce._APPWORLD_LAYOUT.save(baseline/'capture.config.json',config)
+                elif mutation=='host':(baseline/'capture.host-version').write_text('wrong-host')
+                elif mutation=='pilot':
+                    value=reproduce._read(pilot);value['items'][0]['quality']=0;reproduce._APPWORLD_LAYOUT.save(pilot,value)
+                elif mutation=='cancel':state['cancel_requested']=True
+                elif mutation=='unknown':state['stop_reason']='source_authority_revoked'
+                elif mutation=='outside_output':
+                    search=reproduce.seed_search();search['attempts'][0]['validation_comparison']=str(root/'outside/comparison.json');reproduce._save_search(search)
+                elif mutation=='authority_fault':
+                    state['last_error']='source_authority_revoked'
+                    row.update(verdict='error',error_code='evaluation_judge_failed')
+                    row['checks']=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_429'}]
+                    search=reproduce.seed_search();search['experiment']={'status':'blocked','reason':'compare.py_failed:1'};reproduce._save_search(search)
+                reproduce._APPWORLD_LAYOUT.save(trial,row);reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):
+                    self.assertEqual(reproduce._worker_resume_check(),75 if mutation in ('temporary','conflict') else 0)
+                if mutation in ('temporary','conflict'):
+                    blocked=dict(state,status='blocked',stop_reason='compare.py_failed:1')
+                    self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError('compare.py_failed:1'),blocked),'appworld_stage_review_pending')
+
+    def test_actual_running_baseline_ignores_only_bound_previous_compare_exit(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+            state['stop_reason']='appworld_stage_failed'
+            state['stage_results']['validation100']={'status':'failed','reason':'RuntimeError:compare.py_failed:1','data':{}}
+            reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+            before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            for p,data in before.items():self.assertEqual(p.read_bytes(),data)
+            for reason in ('source_authority_revoked','evaluation_entry_capture_contract_invalid','model_credentials_invalid'):
+                state['stage_results']['validation100']['reason']=reason
+                reproduce._APPWORLD_LAYOUT.save(root/'gepa/lifecycle.json',state)
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),0)
+
+    def test_latest_baseline_review_cannot_hide_permanent_judge_failure_or_wrong_source(self):
+        from copy import deepcopy
+        for fault in ('transport','conflict','schema','credentials','uncertain','foreign_tasks','wrong_judge'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+                rows=[]
+                for i in range(100):
+                    row=deepcopy(reproduce._read(trial));row.update(task_id=f'task-{i:03d}',task_version=f'version-task-{i:03d}',trial_id=f'trial-{i:03d}',verdict='error',error_code='evaluation_judge_failed')
+                    row['checks']=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_429'}];rows.append(row)
+                reason={'conflict':'evaluation_judge_reason_conflict','schema':'evaluation_judge_schema_invalid','credentials':'evaluation_judge_http_401','uncertain':'evaluation_judge_uncertain'}.get(fault)
+                if reason:rows[0]['checks'][0]['reason']=reason
+                if fault=='foreign_tasks':rows[0]['task_id']='outside-100'
+                source=baseline/'regrade/report.json';reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                reproduce._APPWORLD_LAYOUT.save(source.with_name('manifest.json'),{'complete':True})
+                current=reproduce._APPWORLD_LAYOUT.judge_projection()
+                if fault=='wrong_judge':current['require_state_dependency']=False
+                reproduce._APPWORLD_LAYOUT.save(baseline/'regrade.regrade.config.json',{'judge':current})
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):
+                    self.assertEqual(reproduce._worker_resume_check(),75 if fault in ('transport','conflict') else 0)
+
+    def test_empty_baseline_waits_only_for_live_writer_and_failed_latest_attempt_not_hidden(self):
+        with tempfile.TemporaryDirectory() as directory,self.fixture(directory) as (root,state,seed,baseline,trial,pilot):
+            trial.unlink()
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),0)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            newer=baseline/'capture-retry-01';reproduce._APPWORLD_LAYOUT.save(newer/'started.json',reproduce._read(baseline/'capture/started.json'))
+            reproduce._APPWORLD_LAYOUT.save(newer/'trials/failure.json',{'task_id':'task-000','task_version':'version-task-000','variant_id':'candidate','execution_status':'error','error_code':'evaluation_entry_capture_contract_invalid','evidence':{'loaded_version':'baseline-native'}})
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),0)
+class InitialNativeReviewRecoveryTests(unittest.TestCase):
+    fixture = OfflineGepaRecoveryTests.fixture
+
+    def review_fixture(self, directory, *, baseline=False, reason='evaluation_judge_reason_conflict'):
+        import hashlib
+        artifact, old_seed, jobs, native, tree_path = self.fixture(directory, status='error')
+        seed = old_seed.parent / 'strategy' / 'strategy.json'
+        seed.parent.mkdir(); old_seed.replace(seed)
+        offline_gepa.save(offline_gepa.PLAN, {'seed': str(seed)})
+        offline_gepa.save(offline_gepa.STATUS, {'job_id': 'original', 'job_status': 'error'})
+        source = tree_path.parent.parent
+        offline_gepa.save(source/'baseline.json', {'level': 'L0'})
+        code = 'gepa_baseline_evaluation_inconclusive' if baseline else 'gepa_seed_evaluation_inconclusive'
+        version = 'native-L0' if baseline else 'native-seed'
+        offline_gepa.DATASET.mkdir(parents=True)
+        offline_gepa.save(offline_gepa.DATASET/'manifest.json', {'metadata': {'dataset_version':'native-dataset'}})
+        (offline_gepa.DATASET/'val.jsonl').write_text(''.join(json.dumps({'task_id':f'val-{i}', 'task_version':f'v-{i}'})+'\n' for i in range(2)))
+        offline_gepa.save(offline_gepa.CONFIG/'evaluation.json', {'fixture':True})
+        offline_gepa.save(offline_gepa.CONFIG/'gepa.json', {'max_model_calls':64, 'timeout_ms':100000000000000, 'objective':{'token_weight':0.05}})
+        offline_gepa.save(offline_gepa.CONFIG/'agent-evaluation.json', {'gate':{'resources_report_only':True}})
+        report_path = tree_path.parent/'evaluations/entry/attempt-2/report.json'
+        report_path.parent.mkdir(parents=True)
+        rows=[]
+        for i in range(2):
+            rows.append({'trial_id':f'trial-{i}','task_id':f'val-{i}','task_version':f'v-{i}',
+                'variant_id':'candidate','split':'val','repetition':1.0,'execution_status':'completed',
+                'verdict':'passed' if i else 'error', 'error_code':'' if i else 'evaluation_judge_failed',
+                'checks':[] if i else [{'check_id':'model','status':'error','reason':reason}],
+                'metrics':{'tokens':100}, 'evidence':{'loaded_version':version,
+                    'trace':{'events':[{'kind':'run.start'},{'kind':'run.end'}]},
+                    'assessment':{'quality':1,'coverage':1},'loop_review':{'status':'complete','count':0}}})
+        report={'schema_version':1,'report_kind':'task_evaluation.v1','complete':True,
+            'dataset_version':'native-dataset','run_id':'native-report',
+            'configuration':{'splits':['val'],'repetitions':1.0,'model_enabled':True,
+                'allow_unreviewed':False,'judge_fingerprint':'native-judge',
+                'variants':[{'id':'candidate','version':version}]},'trials':rows}
+        def write_report(value):
+            payload=json.dumps(value).encode();report_path.write_bytes(payload)
+            digest=hashlib.sha256(payload).hexdigest()
+            offline_gepa.save(report_path.with_name('manifest.json'),{'complete':True,'run_id':'native-report',
+                'dataset_version':'native-dataset','files':{'report.json':digest}})
+            value_tree=offline_gepa.read(tree_path)
+            if value_tree.get('evaluations'):
+                value_tree['evaluations']['entry']['report_hash']=digest
+                offline_gepa.save(tree_path,value_tree)
+            return digest
+        digest=write_report(report)
+        contexts={'evaluation_context':'native-grading','candidate_evaluation_context':'native-execution'}
+        jobs['original'].update(error=code,seed_version='native-seed',**contexts)
+        offline_gepa.save(native,{'jobs':jobs})
+        offline_gepa.save(tree_path,dict(contexts,status='error',error=code,rounds=0.0,
+            seed_version='native-seed',baseline_version='native-L0',dataset_version='native-dataset',model_calls=0.0,started_ms=1,
+            active=None,batch=None,nodes=[{'id':0.0,'status':'seed'}],trials_used=4.0,
+            evaluations={'entry':dict(contexts,version=version,split='val',status='inconclusive',attempt=2.0,
+                task_ids=['val-0','val-1'],report='evaluations/entry/attempt-2/report.json',report_hash=digest)}))
+        lifecycle={'status':'pending','phase':'gepa_run','candidate':reproduce._candidate_identity(seed,'strategy'),
+            'stage_results':{'gepa_run':{'status':'pending','reason':'appworld_native_gepa_checkpoint_requires_resume',
+                'data':{'job_id':'original'}}}}
+        offline_gepa.save(offline_gepa.GEPA/'lifecycle.json',lifecycle)
+        binding=patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',offline_gepa.GEPA)
+        binding.start();self.addCleanup(binding.stop)
+        return artifact,seed,native,tree_path,report,write_report,lifecycle
+
+    @contextmanager
+    def identity(self):
+        import compare
+        with patch.object(offline_gepa.controller,'version',side_effect=lambda a:'native-L0' if a.get('level')=='L0' else 'native-seed'), \
+             patch.object(compare,'_native_gepa_evaluation_context',return_value='native-grading'):
+            yield
+
+    def test_actual_native_double_attempt_and_generic_judge_error_are_resumable(self):
+        for baseline in (False,True):
+            with self.subTest(baseline=baseline),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory,baseline=baseline)
+                protected={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+                with self.identity():
+                    self.assertTrue(offline_gepa.initial_review_recovery(artifact,'original'))
+                    self.assertIsNotNone(reproduce._initial_native_review_progress(lifecycle,seed))
+                    self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError('offline_gepa.py_failed:1'),lifecycle),
+                        'appworld_native_gepa_checkpoint_requires_resume')
+                    with patch.object(reproduce,'_worker_checkpoint_seed',return_value=seed), \
+                         patch.object(reproduce,'_active_output_processes',return_value=[]):
+                        self.assertEqual(reproduce._worker_resume_check(),75)
+                    with patch.object(reproduce,'_worker_checkpoint_seed',return_value=seed), \
+                         patch.object(reproduce,'_active_output_processes',return_value=['healthy writer']):
+                        self.assertEqual(reproduce._worker_resume_check(),76)
+                for path,payload in protected.items():self.assertEqual(path.read_bytes(),payload)
+
+    def test_unknown_schema_auth_uncertainty_bad_execution_and_scope_are_not_resumed(self):
+        for change in ('http_401','http_403','schema_invalid','uncertain','runner','loaded','task','trace','digest',
+                       'holdout','cancel','contexts','attempt-bool','attempt-fraction','attempt-nan','wrong-job'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+                value=offline_gepa.read(tree)
+                if change in ('http_401','http_403','schema_invalid'):
+                    report['trials'][0]['checks'][0]['reason']='evaluation_judge_'+change;write(report)
+                elif change=='uncertain':
+                    report['trials'][0].update(error_code='',verdict='uncertain',checks=[]);write(report)
+                elif change=='runner':
+                    report['trials'][0].update(error_code='runner_nonzero_exit',execution_status='failed');write(report)
+                elif change=='loaded':report['trials'][0]['evidence']['loaded_version']='foreign';write(report)
+                elif change=='task':report['trials'][0]['task_version']='foreign';write(report)
+                elif change=='trace':report['trials'][0]['evidence']['trace']['events'].pop();write(report)
+                elif change=='digest':(tree.parent/'evaluations/entry/attempt-2/report.json').write_text('{}')
+                elif change=='holdout':value['holdout_started']=True;offline_gepa.save(tree,value)
+                elif change=='contexts':value['candidate_evaluation_context']='changed';offline_gepa.save(tree,value)
+                elif change.startswith('attempt-'):
+                    value['evaluations']['entry']['attempt']={'attempt-bool':True,'attempt-fraction':2.5,'attempt-nan':float('nan')}[change];offline_gepa.save(tree,value)
+                elif change=='wrong-job':offline_gepa.save(offline_gepa.STATUS,{'job_id':'newer'})
+                else:
+                    jobs=offline_gepa.read(native);jobs['jobs']['original']['cancel_requested']=True;offline_gepa.save(native,jobs)
+                with self.identity():
+                    if change!='wrong-job':self.assertFalse(offline_gepa.initial_review_recovery(artifact,'original'))
+                    self.assertIsNone(reproduce._initial_native_review_progress(lifecycle,seed))
+
+    def test_pending_normal_return_and_flattened_child_failure_retry_exact_current_seed(self):
+        for flattened in (False,True):
+            with self.subTest(flattened=flattened),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+                before={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+                calls=[]
+                def inner(actual_seed,label,**budgets):
+                    calls.append((actual_seed,label))
+                    if len(calls)==1:
+                        if flattened:raise RuntimeError('offline_gepa.py_failed:1')
+                        return {'status':'pending'}
+                    return {'status':'complete'}
+                with self.identity(),patch.object(reproduce,'_run_all_with_seed_search',side_effect=inner), \
+                     patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep') as sleep,redirect_stdout(io.StringIO()):
+                    result=reproduce._run_all_autonomously(seed,'strategy')
+                self.assertEqual(result['status'],'complete')
+                self.assertEqual(calls,[(seed,'strategy')]*2);sleep.assert_called_once_with(15)
+                for path,payload in before.items():self.assertEqual(path.read_bytes(),payload)
+
+    def test_offline_native_poll_retries_only_the_original_job_and_keeps_paid_cache(self):
+        # Reuse the existing real offline.run/LifecycleController fake-native
+        # contract. Source proof is tested above, transport only is stubbed here.
+        with patch.object(offline_gepa,'initial_review_recovery',return_value=True):
+            test=OfflineGepaCommandRetryTests()
+            test._testMethodName='test_one_command_recovers_429_same_job_without_resetting_cache_or_budget'
+            try:
+                state,retries,delay=test.run_command_fixture(error='gepa_baseline_evaluation_inconclusive')
+            finally:
+                test.doCleanups()
+            self.assertEqual((state['status'],retries),('complete',1))
+            self.assertGreaterEqual(delay,15)
+
+
+class InitialNativeReviewRetryRejectionTests(InitialNativeReviewRecoveryTests):
+    def rejection_fixture(self, http_status, body, *, operation='agent_evaluation.retry'):
+        import urllib.error
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+            protected={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+            calls=[]
+            class Process:
+                def __init__(inner):
+                    inner.stdout=io.StringIO('trajectory-integration.v1 listening=127.0.0.1:1\n');inner.closed=False
+                def poll(inner):return 0 if inner.closed else None
+                def terminate(inner):inner.closed=True
+                def wait(inner,timeout=None):inner.closed=True;return 0
+            process=Process()
+            class Opener:
+                @contextmanager
+                def open(inner,request,timeout=None):
+                    message=json.loads(request.data);calls.append(message['operation'])
+                    if message['operation']==operation:
+                        if http_status!=200:
+                            raise urllib.error.HTTPError(request.full_url,http_status,'redacted',{},io.BytesIO(body.encode()))
+                        yield io.StringIO(body)
+                    else:
+                        self.assertEqual(message['operation'],'agent_evaluation.status')
+                        yield io.StringIO(json.dumps({'ok':True,'result':{'jobs':{'original':{'status':'error','error':'gepa_seed_evaluation_inconclusive'}}}}))
+            with self.identity(),patch.object(offline_gepa,'require_seed_gates',return_value=artifact),                  patch.object(offline_gepa.controller,'environment',return_value={}),                  patch.object(offline_gepa.subprocess,'Popen',return_value=process),                  patch.object(offline_gepa.select,'select',return_value=([process.stdout],[],[])),                  patch.object(offline_gepa.urllib.request,'build_opener',return_value=Opener()):
+                self.assertTrue(offline_gepa.initial_review_recovery(artifact,'original'))
+                with self.assertRaises(RuntimeError):offline_gepa.run(seed)
+                receipt=offline_gepa.read(offline_gepa.STATUS).get('retry_error')
+                transient=http_status in (408,429,500,502,503,504)
+                self.assertEqual(receipt is None,transient)
+                self.assertEqual(offline_gepa.initial_review_recovery(artifact,'original'),transient)
+                self.assertEqual(reproduce._initial_native_review_progress(lifecycle,seed) is not None,transient)
+                reason=reproduce._autonomous_retry_reason(RuntimeError('offline_gepa.py_failed:1'),lifecycle)
+                self.assertEqual(reason is not None,transient)
+                if not transient:
+                    self.assertEqual(set(receipt),{'job_id','code','http_status'})
+                    self.assertEqual(receipt['job_id'],'original');self.assertEqual(receipt['http_status'],http_status)
+                    self.assertNotIn('private-payload',json.dumps(receipt))
+                    # A later launch checks the saved denial before retrying,
+                    # so flattening the child exception cannot authorize a loop.
+                    with patch.object(reproduce,'_worker_checkpoint_seed',return_value=seed),                          patch.object(reproduce,'_active_output_processes',return_value=[]):
+                        self.assertEqual(reproduce._worker_resume_check(),0)
+                for path,payload in protected.items():self.assertEqual(path.read_bytes(),payload)
+            self.assertTrue(process.closed)
+            self.assertEqual(calls.count('agent_evaluation.retry'),0 if operation.endswith('status') else 1)
+
+    def test_permanent_native_retry_denial_stops_flattened_outer_retries(self):
+        for status,code in ((409,'evaluation_initial_review_context_changed'),(409,'evaluation_job_obsolete'),
+                            (409,'evaluation_job_not_retryable'),(401,'unauthorized'),
+                            (400,'runtime_rule_source_not_approved')):
+            with self.subTest(code=code):
+                self.rejection_fixture(status,json.dumps({'error':{'code':code,'private':'private-payload'}}))
+        self.rejection_fixture(401,json.dumps({'error':{'code':'unauthorized'}}),operation='agent_evaluation.status')
+
+    def test_management_transients_do_not_create_permanent_denial_receipt(self):
+        for status in (408,429,500,502,503,504):
+            with self.subTest(status=status):self.rejection_fixture(status,'{}')
+
+    def test_unknown_response_is_not_initial_review_authority(self):
+        for status,body in ((409,'not JSON private-payload'),(200,'not JSON private-payload'),
+                            (200,'[]'),(200,'{"ok":true,"result":[]}'),(200,'{"ok":true,"result":{"accepted":false}}'),
+                            (200,'{"ok":false,"private":"private-payload"}')):
+            with self.subTest(status=status,body_type=body[:1]):self.rejection_fixture(status,body)
+        for result in ({}, {'jobs':[]}, {'jobs':{'foreign':{}}},
+                       {'jobs':{'original':{}}}, {'jobs':{'original':{'status':'unknown'}}}):
+            with self.subTest(status_response=result):
+                self.rejection_fixture(200,json.dumps({'ok':True,'result':result}),operation='agent_evaluation.status')
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree,report,write,lifecycle=self.review_fixture(directory)
+            with self.identity():
+                offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','retry_error':{'job_id':'foreign','code':'unauthorized','http_status':401}})
+                self.assertTrue(offline_gepa.initial_review_recovery(artifact,'original'))
+                offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','retry_error':[]})
+                self.assertFalse(offline_gepa.initial_review_recovery(artifact,'original'))
+
+
+class StageKnownTransientConsistencyTests(unittest.TestCase):
+    baseline_fixture = Baseline100InterruptedWorkerRecoveryTests.fixture
+
+    def test_closed_stage32_and100_http500_and_partial_transport_are_retryable(self):
+        import copy,compare
+        for count in (32,100):
+            for reason in ('evaluation_judge_http_500','evaluation_judge_transport_18'):
+                with self.subTest(count=count,reason=reason),tempfile.TemporaryDirectory() as directory:
+                    root=Path(directory);source=root/'shards/shard-00/capture/report.json'
+                    current=reproduce._APPWORLD_LAYOUT.judge_projection()
+                    rows=[{'task_id':f'task-{i:03d}','trial_id':f'trial-{i:03d}',
+                           'execution_status':'completed','verdict':'error','error_code':'evaluation_judge_failed',
+                           'checks':[{'check_id':'model','status':'error','reason':reason}],
+                           'evidence':{'output':{'framework_capture':{'status':'complete'}},
+                                       'trace':{'events':[{'kind':'run.start'},{'kind':'run.end'}]}}}
+                          for i in range(count)]
+                    reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                    reproduce._APPWORLD_LAYOUT.save(source.with_name('manifest.json'),{'complete':True})
+                    reproduce._APPWORLD_LAYOUT.save(source.parent.parent/'config.json',{'judge':current})
+                    reproduce._APPWORLD_LAYOUT.save(root/'progress.json',{'planned_tasks':count,
+                        'shards':{'0':{'execution_complete':True,'source_report':str(source)}}})
+                    before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                    self.assertEqual(reproduce._stage_review_recovery_state(root,count,baseline=False),'transport')
+                    for p,old in before.items():self.assertEqual(p.read_bytes(),old)
+                    for invalid in ('evaluation_judge_http_401','evaluation_judge_http_403',
+                                    'evaluation_judge_schema_invalid','evaluation_judge_uncertain'):
+                        rows[0]['checks'][0]['reason']=invalid
+                        reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                        self.assertIsNone(reproduce._stage_review_recovery_state(root,count,baseline=False))
+                    rows[0]['checks'][0]['reason']=reason;rows[0]['execution_status']='error'
+                    reproduce._APPWORLD_LAYOUT.save(source,{'complete':True,'trials':rows})
+                    self.assertIsNone(reproduce._stage_review_recovery_state(root,count,baseline=False))
+
+    def test_baseline100_atomic_http500_and_transport18_resume_without_replaying_agents(self):
+        for reason in ('evaluation_judge_http_500','evaluation_judge_transport_18'):
+            with self.subTest(reason=reason),tempfile.TemporaryDirectory() as directory,self.baseline_fixture(directory) as (root,state,seed,baseline,trial,pilot):
+                row=reproduce._read(trial);row.update(verdict='error',error_code='evaluation_judge_failed')
+                row['checks']=[{'check_id':'model','status':'error','reason':reason}]
+                reproduce._APPWORLD_LAYOUT.save(trial,row)
+                before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                self.assertEqual(reproduce._baseline100_worker_checkpoint(seed,state),'transport')
+                self.assertEqual(reproduce._autonomous_retry_reason(RuntimeError('compare.py_failed:1'),state),'appworld_stage_review_pending')
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+                state['cancel_requested']=True
+                self.assertIsNone(reproduce._baseline100_worker_checkpoint(seed,state))
+                for p,old in before.items():self.assertEqual(p.read_bytes(),old)
+
+class FinalNativeReviewBudgetRecoveryTests(InitialNativeReviewRecoveryTests):
+    def final_fixture(self, directory):
+        artifact,seed,native,tree_path,report,write,lifecycle=self.review_fixture(directory,reason='evaluation_judge_http_503')
+        dataset=offline_gepa.read(offline_gepa.DATASET/'manifest.json');dataset['summary']={'splits':{'holdout':2}};offline_gepa.save(offline_gepa.DATASET/'manifest.json',dataset)
+        (offline_gepa.DATASET/'holdout.jsonl').write_bytes((offline_gepa.DATASET/'val.jsonl').read_bytes())
+        plan=offline_gepa.read(offline_gepa.PLAN);plan['split_counts']={'holdout':2};offline_gepa.save(offline_gepa.PLAN,plan)
+        report['configuration']['splits']=['holdout']
+        for row in report['trials']:row['split']='holdout'
+        write(report)
+        tree=offline_gepa.read(tree_path);tree.pop('error');tree.update(status='inconclusive',rounds=4.0,model_calls=64.0,holdout_started=True)
+        tree['evaluations']['entry'].update(split='holdout')
+        final={'protocol':'top-k-v1','campaign_id':'frozen-campaign','status':'inconclusive','candidates':[{'node':0.0,'rank':1.0,'version':'native-seed','status':'inconclusive','report_kind':'task_evaluation.v1','trials':2.0}]}
+        tree['final_holdout']=final;offline_gepa.save(tree_path,tree);offline_gepa.save(tree_path.parent/'versions/0.json',artifact)
+        state=offline_gepa.read(native);job=state['jobs']['original'];job.pop('error');job.update(status='inconclusive',gepa=True,search={'final_holdout':final});offline_gepa.save(native,state)
+        offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','job_status':'inconclusive'})
+        return artifact,seed,native,tree_path,report,write,lifecycle
+
+    def test_final_pending_at_reflection_cap_resumes_same_job_without_new_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree,report,write,state=self.final_fixture(directory)
+            protected={p:p.read_bytes() for p in (native,tree,seed,tree.parent/'evaluations/entry/attempt-2/report.json')}
+            calls=[]
+            def prefix(actual,label,**budgets):
+                calls.append((actual,budgets));return {'status':'pending' if len(calls)==1 else 'complete','phase':'gepa_run'}
+            with self.identity(),patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix), \
+                    patch.object(reproduce,'_autonomous_native_seed',return_value=(seed,'strategy')), \
+                    patch.object(reproduce,'_rate_limited_native_resume_progress',return_value=None), \
+                    patch.object(reproduce,'_initial_native_review_progress',return_value=None), \
+                    patch.object(reproduce,'_experiment_status'),patch.object(reproduce.time,'sleep'),redirect_stdout(io.StringIO()):
+                self.assertTrue(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+                self.assertIsNotNone(reproduce._final_native_review_progress(state,seed))
+                self.assertEqual(reproduce._run_all_autonomously(seed,'strategy')['status'],'complete')
+                self.assertEqual(calls,[(seed,{}),(seed,{})])
+            for path,before in protected.items():self.assertEqual(path.read_bytes(),before)
+
+    def test_final_review_source_unknown_cancel_expired_and_prior_denial_do_not_allow_cap_exception(self):
+        for failure in ('401','schema','unknown','cancel','source','context','version','open','hash','deadline','denial'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as directory:
+                artifact,seed,native,tree_path,report,write,state=self.final_fixture(directory)
+                tree=offline_gepa.read(tree_path);jobs=offline_gepa.read(native)
+                if failure in ('401','schema','unknown'):
+                    report['trials'][0]['checks'][0]['reason']={'401':'evaluation_judge_http_401','schema':'evaluation_judge_schema_invalid','unknown':'evaluation_judge_uncertain'}[failure];write(report)
+                elif failure=='cancel':jobs['jobs']['original']['cancel_requested']=True
+                elif failure=='source':report['trials'][0]['task_version']='foreign';write(report)
+                elif failure=='context':tree['candidate_evaluation_context']='foreign'
+                elif failure=='version':tree['final_holdout']['candidates'][0]['version']='foreign'
+                elif failure=='open':report['trials'][0]['evidence']['trace']['events'].pop();write(report)
+                elif failure=='hash':tree['evaluations']['entry']['report_hash']='changed'
+                elif failure=='deadline':
+                    cfg=offline_gepa.read(offline_gepa.CONFIG/'gepa.json');cfg['timeout_ms']=1;offline_gepa.save(offline_gepa.CONFIG/'gepa.json',cfg)
+                else:offline_gepa.save(offline_gepa.STATUS,{'job_id':'original','retry_error':{'job_id':'original','code':'evaluation_context_changed'}})
+                # The writer owns report_hash updates; never revert its newest source pointer.
+                if failure in ('context','version','hash'):offline_gepa.save(tree_path,tree)
+                offline_gepa.save(native,jobs)
+                with self.identity():
+                    self.assertFalse(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+                    self.assertIsNone(reproduce._final_native_review_progress(state,seed))
+
+
+    def test_native_cached_final_pair_selects_frozen_report_without_fresh_entry_ambiguity(self):
+        import copy
+        with tempfile.TemporaryDirectory() as directory:
+            artifact,seed,native,tree_path,report,write,state=self.final_fixture(directory)
+            tree=offline_gepa.read(tree_path)
+            fresh=copy.deepcopy(tree['evaluations']['entry'])
+            tree['evaluations']['fresh-candidate']=fresh
+            tree['evaluations']['entry'].update(baseline_version='native-L0',baseline_source={'kind':'locked-native-source'})
+            final=tree['final_holdout']['candidates'][0]
+            final.update(report_kind='gepa_cached_pair.v1',trials=4.0,baseline_source={'kind':'locked-native-source'})
+            offline_gepa.save(tree_path,tree)
+            jobs=offline_gepa.read(native);jobs['jobs']['original']['search']['final_holdout']=tree['final_holdout'];offline_gepa.save(native,jobs)
+            report['report_kind']='gepa_cached_pair.v1'
+            report['configuration']['variants'].insert(0,{'id':'baseline','version':'native-L0'})
+            baseline=copy.deepcopy(report['trials'])
+            for row in baseline:
+                row.update(variant_id='baseline',trial_id=row['trial_id']+'-baseline',verdict='passed',error_code='',checks=[])
+                row['evidence']['loaded_version']='native-L0'
+            report['trials']=baseline+report['trials'];write(report)
+            with self.identity():
+                self.assertTrue(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+                self.assertIsNotNone(reproduce._final_native_review_progress(state,seed))
+                changed=offline_gepa.read(tree_path);changed['final_holdout']['candidates'][0]['baseline_source']={'kind':'different'}
+                offline_gepa.save(tree_path,changed);jobs['jobs']['original']['search']['final_holdout']=changed['final_holdout'];offline_gepa.save(native,jobs)
+                self.assertFalse(offline_gepa.final_holdout_review_recovery(artifact,'original'))
+
+
+class CompletedFinalGoalContinuationTests(unittest.TestCase):
+    native_publish_fixture = StageGateRegressionTest.native_publish_fixture
+
+    @contextmanager
+    def completed_final_fixture(self, directory):
+        root=Path(directory)
+        with self.native_publish_fixture(root,count=1,correct=200) as native:
+            seed=root/'published/strategy/strategy.json'
+            artifact={'level':'L3','policy':{},'agent':{'revision':'immutable-seed'}}
+            reproduce._APPWORLD_LAYOUT.save(seed,artifact)
+            reproduce._APPWORLD_LAYOUT.save(seed.with_name('manifest.json'),{'version':'immutable-seed'})
+            gepa=native['gepa'];jobroot=native['tree_path'].parent.parent
+            offline_gepa.save(jobroot/'seed.json',artifact)
+            tree=native['tree'];tree.update(seed_version='immutable-seed',holdout_started=True,active=None,batch=None,rounds=30,model_calls=500,trials_used=1000)
+            native['tree_path'].write_text(json.dumps(tree))
+            jobs={'fixture-job':{'user':offline_gepa.USER,'level':'L3','gepa':True,'status':'rejected',
+                'evaluation_context':tree['evaluation_context'],'candidate_evaluation_context':tree['candidate_evaluation_context'],
+                'search':{'final_holdout':tree['final_holdout']}}}
+            offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/state.json',{'jobs':jobs})
+            offline_gepa.save(offline_gepa.PLAN,{'seed':str(seed.resolve())})
+            offline_gepa.save(gepa/'submission.json',{'job_id':'fixture-job'})
+            offline_gepa.save(offline_gepa.STATUS,{'job_id':'fixture-job','job_status':'rejected'})
+            offline_gepa.publish(proof_only=True)
+            reproduce._save_search({'round':1,'status':'found','current_seed':str(seed.resolve()),
+                'attempts':[{'attempt':1,'seed':str(seed.resolve()),'status':'passed'}]})
+            state={'status':'blocked','phase':'comparison500','last_error':'stage_gate_not_passed:comparison500',
+                'candidate':reproduce._candidate_identity(seed,'strategy'),'stage_results':{
+                'prepare':{'status':'complete'},'train':{'status':'complete'},
+                'gepa_run':{'status':'complete','data':{'job_id':'fixture-job'}},
+                'comparison500':{'status':'complete','gate_passed':False}}}
+            offline_gepa.save(gepa/'lifecycle.json',state)
+            with patch.object(reproduce._APPWORLD_LAYOUT,'GEPA',gepa),patch.object(reproduce,'_native_gepa_service_active',return_value=False):
+                yield root,seed,state,native,jobs
+
+    def test_completed_final_rejection_readonly_worker_reserves_distinct_train_candidate_once(self):
+        with tempfile.TemporaryDirectory() as directory,self.completed_final_fixture(directory) as (root,seed,state,native,jobs):
+            protected={path:path.read_bytes() for path in [seed,native['tree_path'],*native['reports']]}
+            proof_before=(native['gepa']/'final-comparison/manifest.json').read_bytes()
+            before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            checkpoint=reproduce._completed_failed_final_checkpoint(state)
+            self.assertIsNotNone(checkpoint)
+            with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),75)
+            with patch.object(reproduce,'_active_output_processes',return_value=[123]):self.assertEqual(reproduce._worker_resume_check(),76)
+            for p,bytes_before in before.items():self.assertEqual(p.read_bytes(),bytes_before)
+            seen=[]
+            def prefix(candidate,label,**budgets):
+                seen.append(candidate);self.assertNotEqual(candidate,seed)
+                self.assertFalse(offline_gepa.PLAN.exists());self.assertFalse((native['gepa']/'submission.json').exists())
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix):
+                self.assertEqual(reproduce._run_all_autonomously(seed,'strategy')['status'],'published')
+            self.assertEqual(len(seen),1)
+            search=reproduce.seed_search();self.assertEqual(len(search['native_job_history']),1)
+            self.assertEqual(search['native_job_history'][0]['final_proof'],checkpoint['proof'])
+            feedback=search['automatic_seed_generation']['native_search_feedback']
+            self.assertEqual(feedback['stop_reason'],'appworld_gepa_final_goal_not_met')
+            self.assertNotIn('final_proof',feedback);self.assertNotIn('candidate_goal_checks',feedback)
+            self.assertEqual((native['gepa']/'final-comparison/manifest.json').read_bytes(),proof_before)
+            for p,old in protected.items():self.assertEqual(p.read_bytes(),old)
+            self.assertIsNone(reproduce._completed_failed_final_checkpoint(offline_gepa.read(native['gepa']/'lifecycle.json')))
+
+    def test_completed_final_permanent_unknown_incomplete_or_changed_source_never_advances(self):
+        for fault in ('partial','source','cancel','unknown','state-unknown','judge401','changed-proof'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory,self.completed_final_fixture(directory) as (root,seed,state,native,jobs):
+                if fault=='partial':native['tree']['final_holdout']['candidates'][0]['status']='inconclusive'
+                elif fault=='source':native['tree']['seed_version']='different'
+                elif fault=='cancel':jobs['fixture-job']['cancel_requested']=True
+                elif fault=='unknown':jobs['fixture-job']['error']='source_authority_revoked'
+                elif fault=='state-unknown':state['last_error']='source_authority_revoked';offline_gepa.save(native['gepa']/'lifecycle.json',state)
+                elif fault=='judge401':
+                    report=offline_gepa.read(native['reports'][0]);report['trials'][-1].update(verdict='error',error_code='evaluation_judge_failed',checks=[{'check_id':'model','status':'error','reason':'evaluation_judge_http_401'}]);native['reports'][0].write_text(json.dumps(report))
+                else:
+                    proof=offline_gepa.read(native['gepa']/'final-comparison/manifest.json');proof['goal_passed']=True;offline_gepa.save(native['gepa']/'final-comparison/manifest.json',proof)
+                native['tree_path'].write_text(json.dumps(native['tree']));offline_gepa.save(offline_gepa.WORKSPACE/'agent-evaluation/state.json',{'jobs':jobs})
+                protected={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                self.assertIsNone(reproduce._completed_failed_final_checkpoint(state))
+                with patch.object(reproduce,'_active_output_processes',return_value=[]):self.assertEqual(reproduce._worker_resume_check(),0)
+                for p,before in protected.items():self.assertEqual(p.read_bytes(),before)
+
+
+    def test_completed_final_inprocess_gate_failure_continues_without_repeating_holdout(self):
+        with tempfile.TemporaryDirectory() as directory,self.completed_final_fixture(directory) as (root,seed,state,native,jobs):
+            initial=dict(state,status='running',last_error=None)
+            initial['stage_results']=dict(state['stage_results'],comparison500={'status':'pending'})
+            offline_gepa.save(native['gepa']/'lifecycle.json',initial)
+            calls=[]
+            def prefix(actual_seed,label,**budgets):
+                calls.append(actual_seed)
+                if len(calls)==1:
+                    offline_gepa.save(native['gepa']/'lifecycle.json',state)
+                    raise RuntimeError('stage_gate_not_passed:comparison500')
+                self.assertNotEqual(actual_seed,seed)
+                return {'status':'published','phase':'publish'}
+            with patch.object(reproduce,'_run_all_with_seed_search',side_effect=prefix):
+                self.assertEqual(reproduce._run_all_autonomously(seed,'strategy')['status'],'published')
+            self.assertEqual(len(calls),2)
+            self.assertEqual(len(reproduce.seed_search()['native_job_history']),1)
+
+
+class SpentControlDraftContinuationTests(unittest.TestCase):
+    @contextmanager
+    def spent_control_fixture(self, directory):
+        import copy
+        layout = reproduce._APPWORLD_LAYOUT
+        root = Path(directory)
+        binary = ROOT / 'tools/trajectory_evolution/build-v4/trajectory_evolution'
+        if not binary.is_file():
+            self.skipTest('native CLI unavailable')
+        def native(operation, value):
+            result = subprocess.run([str(binary), *operation], input=json.dumps(value),
+                capture_output=True, text=True, cwd=ROOT, timeout=20)
+            if result.returncode:
+                raise RuntimeError('fixture native rejected: ' + result.stdout + result.stderr)
+            return json.loads(result.stdout) if operation != ['artifact-version'] else result.stdout.strip()
+        scope, owner, agent = layout.SCOPE, layout.OWNER, layout.AGENT
+        memory = root / 'training/evolution/by-user' / owner / 'memory/evolution-memory.json'
+        entry = {'memory_id': 'experience-spent-source', 'status': 'EVOLUTION_MEMORY_STATUS_CANDIDATE',
+            'candidate': {'schema_version': 1, 'candidate_id': 'candidate-spent-source',
+                'generator_version': 'scoped-experience-generator-v1',
+                'target_type': 'CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION',
+                'target_scope': scope, 'status': 'EVOLUTION_CANDIDATE_STATUS_PROPOSED',
+                'trigger_pattern': 'invalid parameters recovery', 'observed_problem': 'Repeated request failure.',
+                'proposed_change': 'Correct request arguments within the existing recovery budget.',
+                'support_user_count': 1, 'support_evidence': [{'evidence_id': 'evidence-spent-source',
+                    'source': {'user_id': owner, 'dialogue_id': 'source-spent-source'},
+                    'verdict': 'SEMANTIC_VERDICT_USEFUL'}]}}
+        memory_value = {'schema_version': 1, 'store_kind': 'trajectory_evolution_memory',
+            'store_version': 'evolution-memory-store-v1', 'revision': 1, 'entries': [entry]}
+        _GEPA_REAL_SAVE(memory, memory_value)
+        identity = {'user_id': owner, 'agent_id': agent, 'conversation_id': 'evaluation-version', 'run_id': 'evaluation-version'}
+        shadow = {'target_scopes': [scope], 'max_policy_entries': 64, 'max_advice_items': 1,
+            'max_advice_bytes': 2048, 'max_query_bytes': 32768, 'max_memory_bytes': 16777216,
+            'max_snapshot_bytes': 262144, 'max_match_terms': 128, 'min_matched_terms': 2,
+            'require_validated_evidence': True}
+        snapshot = native(['shadow', 'compile'], {'memory_path': str(memory), 'identity': identity, 'options': shadow})
+        self.assertEqual(len(snapshot['experiences']), 1)
+        reference = {key: snapshot['experiences'][0][key] for key in ('memory_id', 'content_revision')}
+        base = {'rule_id': 'base-budget', 'target_scope': scope, 'max_iterations': 30,
+            'max_no_progress': 3, 'no_progress_decision': 'replan', 'max_replans': 1,
+            'replan_context': 'Correct the observed request within the existing budget.',
+            'error_codes': ['appworld_auth_401'], 'reason': 'The original bounded recovery budget.'}
+        learned = dict(base, rule_id='approved-source-recovery', max_no_progress=2,
+            source_experience=reference, match_mode='predicate', replan_on_failure=True)
+        options = {'requested_level': 'L3', 'host_capabilities': ['context.request', 'action.filter', 'loop.decide'],
+            'fallback': 'strict', 'allowed_users': [owner], 'approved_experiences': [reference],
+            'experience_template': '{{experience}}', 'max_context_bytes': 2048,
+            'loop_rules': [base]}
+        policy = native(['runtime', 'compile'], {'memory_path': str(memory), 'identity': identity,
+            'shadow_options': shadow, 'options': options})
+        policy = native(['runtime', 'control-compile'], {'policy': policy,
+            'control_learning': {'enabled': True, 'prompt_file': 'approved-control-fixture.txt', 'max_rules': 16, 'actions': {'appworld.execute': ['code']}},
+            'draft': {'action_rules': [], 'schedule_rules': [], 'loop_rules': [{
+                'memory_id': reference['memory_id'], 'max_iterations': 30, 'max_no_progress': 2,
+                'max_replans': 1, 'error_codes': ['appworld_auth_401'],
+                'replan_on_failure': True, 'reason': 'Use the approved source within the original recovery budget.'}]}})
+        source = root / 'published/strategy/strategy.json'
+        artifact = {'schema_version': 1, 'level': 'L3', 'user_id': owner,
+            'agent': {'name': agent, 'revision': 'spent-source-fixture-v1'}, 'policy': policy}
+        _GEPA_REAL_SAVE(source, artifact)
+        _GEPA_REAL_SAVE(source.with_name('manifest.json'), {'version': native(['artifact-version'], artifact),
+            'validated_evidence_required': True})
+        _GEPA_REAL_SAVE(root / 'training/runtime/runtime.json', {'prompts': {}})
+        _GEPA_REAL_SAVE(root / 'training/runtime/training-service.json', {
+            'application_id': agent, 'principals': [{'user_id': owner}],
+            'data_dir': str(root / 'training/evolution'),
+            'runtime_config': str(root / 'training/runtime/runtime.json')})
+        seed = root / 'published/seed-auto-r1-a2/strategy.json'
+        reason = 'appworld_seed_control_format_repair_exhausted'
+        state = {'status': 'blocked', 'phase': 'seed', 'stop_reason': 'appworld_stage_failed',
+            'candidate': {'seed_artifact': str(seed)}, 'stage_results': {
+                'prepare': {'status': 'complete'}, 'train': {'status': 'complete'},
+                'seed': {'status': 'failed', 'reason': 'RuntimeError:' + reason}}}
+        search = {'round': 1, 'status': 'searching', 'attempts': [], 'current_seed': str(seed),
+            'automatic_seed_generation': {'round': 1, 'status': 'pending', 'seed': str(seed),
+                'seed_label': seed.parent.name, 'source_seed': str(source), 'source_attempt': 1,
+                'method': 'approved_training_native_seed'}}
+        diagnostic = {'seed_label': seed.parent.name, 'scope': scope, 'published': False,
+            'validated_evidence_required': True, 'memory_source': str(memory),
+            'canonical_memory_source': str(memory), 'evidence_refresh': {'status': 'completed', 'model_calls': 0},
+            'control_learning': {'model_calls': 3, 'model_attempts': 3, 'status': 'format_repair_exhausted',
+                'attempts': [{'attempt': index, 'status': 'format_invalid', 'usage': {'total_tokens': index * 7}}
+                             for index in (1, 2, 3)],
+                'evidence_fallback': {'status': 'insufficient_evidence',
+                    'reason': 'appworld_evidence_recovery_no_cited_failure_pair', 'model_calls': 0}}}
+        with _isolated_gepa_outputs(root), patch.object(layout, 'TRAINING', root / 'training'), \
+             patch.object(layout, 'RUNTIME', root / 'training/runtime'), \
+             patch.object(layout, 'TRAINING_SERVICE', root / 'training/runtime/training-service.json'), \
+             patch.object(reproduce, '_CANDIDATE_STATE_LABEL', None):
+            reproduce._save_search(search)
+            _GEPA_REAL_SAVE(root / 'gepa/lifecycle.json', state)
+            _GEPA_REAL_SAVE(root / 'training/seed-compile-status.json', diagnostic)
+            protected = {source: source.read_bytes(), source.with_name('manifest.json'): source.with_name('manifest.json').read_bytes()}
+            yield root, seed, source, state, diagnostic, memory, native
+            for path, value in protected.items():
+                self.assertEqual(path.read_bytes(), value)
+
+    def test_spent_control_worker_blocked_receipt_resumes_and_preserves_paid_native_source(self):
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            before = {path: path.read_bytes() for path in root.rglob('*.json')}
+            with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(), 75)
+                with patch.object(sys, 'argv', ['reproduce.py', '--worker-resume-check']):
+                    self.assertEqual(reproduce.main(), 75)
+            with patch.object(reproduce, '_active_output_processes', return_value=[123]):
+                self.assertEqual(reproduce._worker_resume_check(), 76)
+            for path, data in before.items():
+                self.assertEqual(path.read_bytes(), data)
+            result = reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state)
+            self.assertIsNotNone(result)
+            next_seed, label = result
+            self.assertNotEqual(next_seed, seed)
+            search = reproduce.seed_search()
+            old = search['generation_history'][0]
+            self.assertEqual(old['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(old['status'], 'unsupported')
+            self.assertEqual(reproduce._spent_control_reuse_source(search['automatic_seed_generation'], search), source)
+            self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state))
+            self.assertEqual(len(reproduce.seed_search()['generation_history']), 1)
+
+    def test_spent_control_real_outer_reserves_distinct_candidate_and_uses_existing_english_entry(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            events = []
+            def common(actual, label, stop_at=None, **kwargs):
+                if actual == seed:
+                    raise RuntimeError('appworld_seed_control_format_repair_exhausted')
+                events.append((actual, stop_at))
+                if stop_at == 'seed':
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS'), '1')
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS_FROM'), source.parent.name)
+                    self.assertNotIn('APPWORLD_REGENERATE_CONTROLS', os.environ)
+                    artifact = reproduce._read(source)
+                    artifact['agent']['revision'] = 'distinct-english-fixture'
+                    reproduce._APPWORLD_LAYOUT.save(actual, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(actual.with_name('manifest.json'), {'version': native(['artifact-version'], artifact)})
+                    return {'status': 'complete', 'phase': 'seed'}
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_common_all', side_effect=common), \
+                 patch.object(reproduce, '_active_output_processes', return_value=[]), \
+                 patch.object(sys, 'argv', ['reproduce.py', '--all', '--worker-checkpoint-resume']), \
+                 patch.object(reproduce, '_experiment_status'), patch.object(reproduce.time, 'sleep') as wait, \
+                 redirect_stdout(io.StringIO()):
+                result = reproduce.main()
+            self.assertEqual(result, 0)
+            self.assertEqual([row[1] for row in events], ['seed', None])
+            self.assertEqual(reproduce.seed_search()['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(reproduce._read(root / 'training/seed-compile-status.json'), diagnostic)
+            self.assertTrue(all(call.args and call.args[0] <= .01 for call in wait.call_args_list))
+
+    def test_spent_control_duplicate_continuation_retains_original_three_call_archive(self):
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            next_seed, label = reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state)
+            search = reproduce.seed_search()
+            search['automatic_seed_generation'].update(status='duplicate', duplicate_of=str(source))
+            reproduce._APPWORLD_LAYOUT.save(next_seed, reproduce._read(source))
+            reproduce._APPWORLD_LAYOUT.save(next_seed.with_name('manifest.json'), reproduce._read(source.with_name('manifest.json')))
+            reproduce._save_search(search)
+            third, label = reproduce._reserve_after_duplicate_generation()
+            latest = reproduce.seed_search()
+            self.assertNotEqual(third, next_seed)
+            self.assertEqual(reproduce._spent_control_reuse_source(latest['automatic_seed_generation'], latest), source)
+            self.assertEqual(latest['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(latest['automatic_seed_generation']['generation_feedback']['control_source_reuse']['candidate'], str(seed))
+
+    def test_spent_control_requires_exact_budget_authority_and_no_cited_fallback(self):
+        mutations = ('paid-two', 'paid-bool', 'valid-draft', 'no-attempts', 'unknown-fallback',
+                     'wrong-label', 'wrong-memory', 'unrefreshed', 'revoked', 'revision', 'missing-control', 'cancelled', 'source-error', 'unknown-stop', 'other-error')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+                original_source = source.read_bytes()
+                error = RuntimeError('appworld_seed_control_format_repair_exhausted')
+                control = diagnostic['control_learning']
+                if mutation == 'paid-two': control['model_calls'] = 2
+                elif mutation == 'paid-bool': control['model_calls'] = True
+                elif mutation == 'valid-draft': control['validated_model_draft'] = {'loop_rules': []}
+                elif mutation == 'no-attempts': control['attempts'] = []
+                elif mutation == 'unknown-fallback': control['evidence_fallback']['reason'] = 'native_source_revoked'
+                elif mutation == 'wrong-label': diagnostic['seed_label'] = 'wrong'
+                elif mutation == 'wrong-memory': diagnostic['memory_source'] = str(root / 'other-memory.json')
+                elif mutation == 'unrefreshed': diagnostic['evidence_refresh']['status'] = 'failed'
+                elif mutation in ('revoked', 'revision'):
+                    value = reproduce._read(memory)
+                    if mutation == 'revoked': value['entries'][0]['candidate']['support_evidence'][0]['verdict'] = 'SEMANTIC_VERDICT_UNASSESSED'
+                    else: value['entries'][0]['candidate']['proposed_change'] += ' changed'
+                    reproduce._APPWORLD_LAYOUT.save(memory, value)
+                elif mutation == 'missing-control':
+                    value = reproduce._read(source); value['policy']['options']['loop_rules'] = value['policy']['options']['loop_rules'][:1]
+                    reproduce._APPWORLD_LAYOUT.save(source, value)
+                elif mutation == 'cancelled': state['cancel_requested'] = True
+                elif mutation == 'source-error': state['last_error'] = 'source_authority_revoked'
+                elif mutation == 'unknown-stop': state['stop_reason'] = 'credential_missing'
+                else: error = RuntimeError('native_runtime_control-compile_failed')
+                reproduce._APPWORLD_LAYOUT.save(root / 'training/seed-compile-status.json', diagnostic)
+                self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, error, state))
+                source.write_bytes(original_source)
+
+
+    def test_spent_control_formal_gate_failure_retains_reuse_for_next_candidate(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            first, label = reproduce._continue_unavailable_seed_generation(seed, RuntimeError('appworld_seed_control_format_repair_exhausted'), state)
+            frozen = []
+            def common(actual, label, stop_at=None, **kwargs):
+                if stop_at == 'seed':
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS'), '1')
+                    self.assertNotIn('APPWORLD_REGENERATE_CONTROLS', os.environ)
+                    expected_source = source if not frozen else frozen[-1]
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS_FROM'), expected_source.parent.name)
+                    artifact = reproduce._read(expected_source)
+                    artifact['agent']['revision'] = 'different-english-fixture-' + str(len(frozen))
+                    reproduce._APPWORLD_LAYOUT.save(actual, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(actual.with_name('manifest.json'), {
+                        'version': native(['artifact-version'], artifact), 'validated_evidence_required': True})
+                    frozen.append(actual)
+                    return {'status': 'complete', 'phase': 'seed'}
+                if len(frozen) == 1:
+                    raise RuntimeError('stage_gate_not_passed:pilot32')
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_common_all', side_effect=common), \
+                 patch.object(reproduce, '_formal_seed_failure', return_value={'attempt': 2}), \
+                 patch.object(reproduce, '_experiment_status'):
+                result = reproduce._run_all_with_seed_search(first, label)
+            self.assertEqual(result['status'], 'published')
+            self.assertEqual(len(frozen), 2)
+            self.assertNotEqual(frozen[0], frozen[1])
+            current = reproduce.seed_search()
+            self.assertEqual(current['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(current['automatic_seed_generation']['generation_feedback']['control_source_reuse']['candidate'], str(seed))
+            self.assertEqual(reproduce._spent_control_reuse_source(current['automatic_seed_generation'], current), frozen[0])
+            # The most recent formally failed English source, rather than only
+            # the original archive source, must retain current native authority.
+            current_source = frozen[0]
+            original_artifact = current_source.read_bytes()
+            original_manifest = current_source.with_name('manifest.json').read_bytes()
+            for mutation in ('manifest-version', 'scope', 'identity', 'approval'):
+                with self.subTest(current_source_mutation=mutation):
+                    artifact = json.loads(original_artifact)
+                    manifest = json.loads(original_manifest)
+                    if mutation == 'manifest-version':
+                        manifest['version'] = 'foreign-version'
+                    else:
+                        if mutation == 'scope':
+                            artifact['policy']['snapshot']['options']['target_scopes'] = ['foreign-scope']
+                        elif mutation == 'identity':
+                            artifact['policy']['snapshot']['identity']['agent_id'] = 'foreign-agent'
+                        else:
+                            artifact['policy']['options']['approved_experiences'] = []
+                    reproduce._APPWORLD_LAYOUT.save(current_source, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(current_source.with_name('manifest.json'), manifest)
+                    try:
+                        self.assertIsNone(reproduce._spent_control_reuse_source(
+                            current['automatic_seed_generation'], current))
+                    finally:
+                        current_source.write_bytes(original_artifact)
+                        current_source.with_name('manifest.json').write_bytes(original_manifest)
+
+
+    def test_spent_control_two_empty_replies_reuse_legal_source_without_fabricating_third_call(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory, self.spent_control_fixture(directory) as (root, seed, source, state, diagnostic, memory, native):
+            reason = 'appworld_evidence_recovery_no_cited_failure_pair'
+            state['stage_results']['seed']['reason'] = 'RuntimeError:' + reason
+            control = diagnostic['control_learning']
+            control.update(model_calls=2, model_attempts=2, status='no_controls')
+            control['attempts'] = [dict(row, status='no_controls') for row in control['attempts'][:2]]
+            reproduce._APPWORLD_LAYOUT.save(root / 'gepa/lifecycle.json', state)
+            empty_attempts = control['attempts']
+            for mutation in ('mixed-format', 'one-empty'):
+                with self.subTest(two_reply_mutation=mutation):
+                    control['attempts'] = ([dict(empty_attempts[0], status='format_invalid'), empty_attempts[1]]
+                                           if mutation == 'mixed-format' else empty_attempts[:1])
+                    reproduce._APPWORLD_LAYOUT.save(root / 'training/seed-compile-status.json', diagnostic)
+                    self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, RuntimeError(reason), state))
+                    with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                        self.assertEqual(reproduce._worker_resume_check(), 0)
+            control['attempts'] = empty_attempts
+            reproduce._APPWORLD_LAYOUT.save(root / 'training/seed-compile-status.json', diagnostic)
+            with patch.object(reproduce, '_active_output_processes', return_value=[]):
+                self.assertEqual(reproduce._worker_resume_check(), 75)
+            next_seed, label = reproduce._continue_unavailable_seed_generation(seed, RuntimeError(reason), state)
+            search = reproduce.seed_search()
+            self.assertEqual(search['automatic_seed_generation']['generation_feedback']['model_calls'], 2)
+            self.assertEqual(search['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertEqual(reproduce._spent_control_reuse_source(search['automatic_seed_generation'], search), source)
+            observed = []
+            def common(actual, label, stop_at=None, **kwargs):
+                if stop_at == 'seed':
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS'), '1')
+                    self.assertEqual(os.environ.get('APPWORLD_ENGLISH_TRIGGERS_FROM'), source.parent.name)
+                    self.assertNotIn('APPWORLD_REGENERATE_CONTROLS', os.environ)
+                    artifact = reproduce._read(source)
+                    artifact['agent']['revision'] = 'english-from-two-empty'
+                    reproduce._APPWORLD_LAYOUT.save(actual, artifact)
+                    reproduce._APPWORLD_LAYOUT.save(actual.with_name('manifest.json'), {
+                        'version': native(['artifact-version'], artifact), 'validated_evidence_required': True})
+                    observed.append(actual)
+                    return {'status': 'complete', 'phase': 'seed'}
+                return {'status': 'published', 'phase': 'publish'}
+            with patch.object(reproduce, '_run_common_all', side_effect=common), \
+                 patch.object(reproduce, '_experiment_status'):
+                self.assertEqual(reproduce._run_all_with_seed_search(next_seed, label)['status'], 'published')
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(reproduce.seed_search()['generation_history'][0]['seed_generation_diagnostic'], diagnostic)
+            self.assertIsNone(reproduce._continue_unavailable_seed_generation(seed, RuntimeError(reason), state))

@@ -286,6 +286,92 @@ def appworld_observed_phase_experiences(artifact):
         seen.add(pair)
     return [dict(ref) for ref in refs]
 
+
+def appworld_prevention_sources(artifact):
+    """Bind child-policy prevention to changed, approved native overrides.
+
+    The native mutation compiler owns the versioned source list. This private
+    profile supplies matching anchors only; native retrieval still chooses and
+    injects the original approved override under its own context budget.
+    """
+    import re
+    if not isinstance(artifact, dict) or artifact.get('level') not in ('L1', 'L2', 'L3'):
+        return None
+    policy = artifact.get('policy') or {}
+    options = policy.get('options') or {}
+    ids = options.get('l1_prevention_sources')
+    if not ids:
+        return None
+    if (not isinstance(ids, list) or len(ids) > 16
+            or any(not isinstance(value, str) or not value or len(value) > 512 for value in ids)
+            or len(set(ids)) != len(ids)):
+        raise ValueError('appworld_prevention_sources_invalid')
+    approved = {(ref.get('memory_id'), ref.get('content_revision'))
+                for ref in options.get('approved_experiences', [])}
+    sources = {(item.get('memory_id'), item.get('content_revision')): item
+               for item in (policy.get('snapshot') or {}).get('experiences', [])}
+    disabled = {(ref.get('memory_id'), ref.get('content_revision'))
+                for ref in options.get('disabled_injections', [])}
+    overrides = {(item.get('source_experience') or {}).get('memory_id'): item
+                 for item in options.get('experience_overrides', [])}
+    scopes = set((policy.get('snapshot') or {}).get('options', {}).get('target_scopes', []))
+    # Credential and undisplayed-result cards keep their existing causal
+    # qualification, including token source and completed login checks.
+    app_options = (artifact.get('agent') or {}).get('appworld_options') or {}
+    dedicated = {ref.get('memory_id') for key in ('l1_auth_parameter_experiences',
+                 'l1_shape_error_auth_experiences', 'l1_saved_result_experiences')
+                 for ref in app_options.get(key, []) if isinstance(ref, dict)}
+    generic = {'api', 'apis', 'app', 'appworld', 'docs', 'show', 'get', 'read', 'search',
+               'list', 'create', 'add', 'remove', 'delete', 'update', 'to', 'from', 'of',
+               'the', 'and', 'in', 'id', 'name', 'type', 'error', 'status', 'code',
+               'result', 'value', 'state', 'token', 'access', 'auth', 'validation',
+               'positional', 'argument', 'arguments', 'parameter', 'parameters',
+               'description', 'descriptions', 'doc', 'key', 'required', 'call', 'method',
+               'skill', 'executor', 'default', 'actor', 'agent', 'operation', 'scope', 'runtime'}
+    result = []
+    for memory_id in ids:
+        override = overrides.get(memory_id)
+        ref = (override or {}).get('source_experience') or {}
+        pair = (ref.get('memory_id'), ref.get('content_revision'))
+        source = sources.get(pair)
+        if (pair not in approved or pair in disabled or source is None
+                or source.get('control_target_type') or source.get('target_scope') not in scopes
+                or not isinstance(override.get('content'), str) or not override['content']
+                or not (override['content'] != source.get('content')
+                        or (override.get('trigger_pattern') or source.get('trigger_pattern')) != source.get('trigger_pattern')
+                        or override.get('observed_operations'))):
+            raise ValueError('appworld_prevention_source_not_authorized')
+        if memory_id in dedicated:
+            continue
+        trigger = override.get('trigger_pattern') or source.get('trigger_pattern', '')
+        named = r'(?<![a-zA-Z0-9_])[a-zA-Z][a-zA-Z0-9]*_[a-zA-Z0-9_]+(?![a-zA-Z0-9_])'
+        anchors = sorted(set(re.findall(named, trigger.lower())))
+        operation_anchors = sorted({'apis.' + operation for operation in re.findall(
+            r'(?<![a-zA-Z0-9_])(?:apis\.)?([a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z][a-zA-Z0-9_]*)(?![a-zA-Z0-9_])',
+            trigger.lower())})
+        login_required = bool(re.search(r'(?<![a-zA-Z0-9_])login(?![a-zA-Z0-9_])', trigger.lower()))
+        identifiers = re.findall(named,
+                                 trigger.lower() + '\n' + override['content'].lower())
+        domains = sorted({word for value in identifiers for word in value.split('_')
+                          if len(word) >= 3 and word not in generic})
+        operations = override.get('observed_operations') or []
+        result.append({'ref': {'memory_id': pair[0], 'content_revision': pair[1]},
+                       'anchors': anchors[:64], 'domains': domains[:64],
+                       'operation_anchors': operation_anchors[:64], 'login_required': login_required,
+                       'observed_operations': list(operations)})
+    return result or None
+
+
+def _runtime_prevention_sources():
+    config = os.environ.get('TRAJECTORY_EVOLUTION_TRIAL_CONFIG', '')
+    if not config:
+        return None
+    try:
+        version = json.loads(Path(config).with_name('version.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return None
+    return appworld_prevention_sources(version.get('artifact'))
+
 def appworld_auth_parameter_experiences(artifact):
     """Validate the optional, approved sources for causal token recovery."""
     if not isinstance(artifact, dict) or artifact.get('level') not in ('L1', 'L2', 'L3'):
@@ -1623,6 +1709,90 @@ def office_observed_phase_state(policy, messages, instruction=None, project=None
                         for task_key, task_value, phase_key, phase_value in pairs) else None
 
 
+def office_prevention_override_state(policy, messages, instruction=None, project=None, *, sources=None):
+    """Open changed-card prevention after a matching successful public API.
+
+    A task word or a prospective model block cannot establish this window.
+    Actual source anchors must occur in public task/execution evidence; native
+    retrieval then independently enforces the full effective trigger.
+    """
+    import ast
+    import re
+    if not isinstance(sources, list) or not sources:
+        return None
+    state = office_observed_phase_state(policy, messages, instruction, project,
+                                        l1_window_mode='observed_phase_v3')
+    if state is None:
+        return None
+    task = state.get('instruction', '')
+    task_words = {word.rstrip('s') for word in re.findall(r'[a-z]+', task.lower())}
+    try:
+        tree = ast.parse(messages[-2]['content'])
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    calls = []
+    def evaluated_calls(value):
+        if isinstance(value, (ast.Lambda, ast.IfExp, ast.BoolOp, ast.ListComp,
+                              ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            return
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                and isinstance(value.func.value, ast.Attribute)
+                and isinstance(value.func.value.value, ast.Name)
+                and value.func.value.value.id == 'apis'):
+            calls.append(value)
+        for child in ast.iter_child_nodes(value):
+            evaluated_calls(child)
+    for statement in tree.body:
+        if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Expr)) and statement.value is not None:
+            evaluated_calls(statement.value)
+    operations = {ast.unparse(call.func) for call in calls}
+    documented_operations = set()
+    for call in calls:
+        if ast.unparse(call.func) != 'apis.api_docs.show_api_doc' or call.args:
+            continue
+        arguments = {keyword.arg: keyword.value.value for keyword in call.keywords
+                     if keyword.arg and isinstance(keyword.value, ast.Constant)
+                     and isinstance(keyword.value.value, str)}
+        app, method = arguments.get('app_name', ''), arguments.get('api_name', '')
+        if all(re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_]*', value) for value in (app, method)):
+            documented_operations.add('apis.' + app + '.' + method)
+    evidenced_operations = operations | documented_operations
+    login_operations = {operation for operation in evidenced_operations if operation.endswith('.login')}
+    authentication_domains = {'account', 'accounts', 'password', 'passwords', 'credential',
+                              'credentials', 'username', 'usernames', 'authentication', 'login'}
+    # A skipped branch or helper definition cannot lend an operation anchor.
+    # Successful API parameter names and returned public fields may supply it.
+    text = '\n'.join([task, state.get('observation', ''), *operations,
+                       *(keyword.arg for call in calls for keyword in call.keywords if keyword.arg)]).lower()
+    keywords = set(re.findall(r'[a-zA-Z][a-zA-Z0-9_]+', text))
+    refs = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        anchors, domains = source.get('anchors', []), source.get('domains', [])
+        operation_anchors = source.get('operation_anchors', [])
+        required_logins = {operation for operation in operation_anchors if operation.endswith('.login')}
+        login_match = bool(login_operations and (not required_logins or required_logins & login_operations))
+        # Credential vocabulary scopes a login/doc operation, not the user's
+        # business task. A return field or prospective login cannot supply it.
+        if source.get('login_required'):
+            if not login_match:
+                continue
+            domains = [word for word in domains if word not in authentication_domains]
+        required_operations = source.get('observed_operations', [])
+        if (not (any(anchor in keywords for anchor in anchors)
+                 or any(operation in evidenced_operations for operation in operation_anchors)
+                 or source.get('login_required') and login_match)
+                or domains and not any(word.rstrip('s') in task_words for word in domains)
+                or required_operations and not any(operation in operations
+                    or 'apis.' + operation in operations for operation in required_operations)):
+            continue
+        ref = source.get('ref')
+        if isinstance(ref, dict) and ref not in refs:
+            refs.append(dict(ref))
+    return (state, refs) if refs else None
+
+
 def saved_result_failure_prevention_state(policy, messages, instruction=None, project=None,
                                           *, public_contracts=None):
     """A real silent, successful read saved a public collection in a new Name.
@@ -1724,6 +1894,11 @@ def set_request(meta, policy, tools_schema, messages, turn, *, l1_window_mode=No
              "policy": policy, "messages": messages,
              "public_instruction": public_instruction_from_policy(policy),
              "native_advice_cache_limit": advice_cache_limit}
+    prevention_sources = _runtime_prevention_sources()
+    if prevention_sources is not None:
+        state['appworld_prevention_sources'] = prevention_sources
+        state['appworld_prevention_trial'] = os.environ.get('TRAJECTORY_EVOLUTION_TRIAL_CONFIG', '')
+        state['appworld_l1_count'] = 0
     if shape_error_auth_experiences is not None:
         state['appworld_shape_error_auth_experiences'] = copy.deepcopy(shape_error_auth_experiences)
     if saved_result_experiences is not None:
@@ -1765,6 +1940,12 @@ def set_request(meta, policy, tools_schema, messages, turn, *, l1_window_mode=No
             cached = previous.get("native_advice_cache")
             if isinstance(cached, list) and cached:
                 state["native_advice_cache"] = cached[:advice_cache_limit]
+            if (prevention_sources is not None and l1_window_mode is None
+                    and previous.get('appworld_prevention_sources') == prevention_sources
+                    and previous.get('appworld_prevention_trial') == state['appworld_prevention_trial']):
+                count = previous.get('appworld_l1_count', 0)
+                if type(count) is int and count >= 0:
+                    state['appworld_l1_count'] = min(3, count)
             if (l1_window_mode in ('observed_phase', 'observed_phase_v2', 'observed_phase_v3')
                     and previous.get('appworld_l1_window_mode') == l1_window_mode
                     and previous.get('appworld_l1_run_id') == native_run_id):
@@ -2204,6 +2385,7 @@ class NativeFrameworkObserver:
                                 and bool(outer.get('control_id')))
         l1_count = int(state.get('appworld_l1_count', 0) or 0)
         observed_phase = None
+        prevention_phase = None
         saved_result_phase = None
         saved_result_sources = state.get('appworld_saved_result_experiences')
         structured_auth = None
@@ -2232,10 +2414,19 @@ class NativeFrameworkObserver:
             saved_result_phase = saved_result_failure_prevention_state(
                 state.get('policy', ''), history, state.get('public_instruction'), self.project,
                 public_contracts=state.get('appworld_saved_result_contracts'))
+        if (state.get('appworld_prevention_sources') is not None
+                and self.runtime_level in ('L1', 'L2', 'L3') and round_number > 0
+                and actor == 'skill_executor' and meta.get('source') == 'skill_executor'
+                and meta.get('skill_name') == 'appworld-office' and l1_count < 3
+                and not has_execution_observation and not eligible_main_replan):
+            prevention_phase = office_prevention_override_state(
+                state.get('policy', ''), history, state.get('public_instruction'), self.project,
+                sources=state['appworld_prevention_sources'])
         apply_l1 = (meta.get('source') == 'skill_executor'
                     and meta.get('skill_name') == 'appworld-office'
                     and (has_execution_observation or eligible_main_replan or observed_phase is not None
-                         or structured_auth is not None or saved_result_phase is not None)
+                         or structured_auth is not None or saved_result_phase is not None
+                         or prevention_phase is not None)
                     and l1_count < 3)
         # A main-loop replan is consumed by the real office model, not by the
         # custom agent-turn wrapper. Keep its control identity for the native
@@ -2250,12 +2441,16 @@ class NativeFrameworkObserver:
         restricted = state.get('appworld_observed_phase_experiences')
         if observed_phase is not None and restricted is not None:
             packet['extensions']['runtime_experience_allowlist'] = restricted
+        if prevention_phase is not None:
+            refs = list(packet['extensions'].get('runtime_experience_allowlist', []))
+            refs.extend(ref for ref in prevention_phase[1] if ref not in refs)
+            packet['extensions']['runtime_experience_allowlist'] = refs
         if saved_result_phase is not None:
-            refs = list(restricted or []) if observed_phase is not None and restricted is not None else []
+            refs = list(packet['extensions'].get('runtime_experience_allowlist', []))
             refs += [ref for ref in saved_result_sources['refs'] if ref not in refs]
             packet['extensions']['runtime_experience_allowlist'] = refs
         if apply_l1:
-            packet['state'] = saved_result_phase if saved_result_phase is not None else observed_phase if observed_phase is not None else office_retrieval_state(
+            packet['state'] = saved_result_phase if saved_result_phase is not None else prevention_phase[0] if prevention_phase is not None else observed_phase if observed_phase is not None else office_retrieval_state(
                 state.get('policy', ''), state.get('messages') or [],
                 state.get('public_instruction'), self.project,
                 l1_window_mode=(None if restricted is not None else state.get('appworld_l1_window_mode')))
@@ -2276,7 +2471,7 @@ class NativeFrameworkObserver:
                         return None
                     packet['state'] = causal_auth
                     packet['extensions']['runtime_experience_allowlist'] = selected_refs
-                elif observed_phase is None and saved_result_phase is None:
+                elif observed_phase is None and saved_result_phase is None and prevention_phase is None:
                     fallback = state.get('appworld_auth_fallback_experiences')
                     if not isinstance(fallback, list):
                         self._gap('auth_parameter_fallback_missing')
@@ -2344,7 +2539,7 @@ class NativeFrameworkObserver:
             original = self.project(request).get('messages', [])
             candidate_cards = _advice_cards(original, selected,
                                              remove_text=replan if main_replan else '')
-            if not candidate_cards:
+            if not candidate_cards and prevention_phase is None:
                 candidate_cards = self._cached_cards(scope)
                 if shape_filter is not None:
                     candidate_cards = [card for card in candidate_cards if not any(
