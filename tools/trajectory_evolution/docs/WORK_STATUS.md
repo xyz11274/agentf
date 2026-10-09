@@ -1,4 +1,4 @@
-## 自动运行验收状态（北京时间 2026-10-09 09:28）
+## 自动运行验收状态（北京时间 2026-10-09 09:36）
 
 用户明确要求：一条命令持续自动迭代，无需外部补跑、补评或人工推进。取消连续五次失败停机；临时故障自动恢复，永久权限/来源/契约错误保留原因，不能伪造成功或无限空转。当前测试和实际运行只能证明已验证的恢复边界，尚不能宣称长期稳定性或达标节点已完成。
 
@@ -19,6 +19,10 @@
 北京时间09:22：自动恢复缺口修复已安装，生产10专项/29负子场景PASS，37相邻恢复/63子场景PASS，0模型/Agent测试。精确覆盖三稿拒绝或两次空稿提前fallback且缺cited TRAIN；当前不可变源必须依当前canonical TRAIN重新原生批准/完整card及controls核验。合法时旧真实2/3paid诊断归档、不同候选仅复用已有合法控制继续English/L1，duplicate与正式gatefail沿同账本继承，不重付原控制调用；取消、源撤销、未知错误保持明确失败。README原一键命令不变，退出后的新worker classifier可加载修复，当前健康A18不强停。A17最终32：L0 24/.750/.28125，父A13-2 26/.8125/.125，A17 24/.750/.3125，lat156.996秒、token133138.906、calls20.90625、L1/L2a/L2s/L3=59/0/0/2，全指标32/费用complete/extraAgent0/errors0，门禁失败后自动进入A18，control已2calls而English未开始。选优按TRAIN资格首个return而缺DEV机会排序、latest32遗失历史100热点两处确定缺陷正在TMP最窄修复；不宣称已安装或性能改善。
 
 北京时间09:28：选优修复已安装、生产23项PASS（7.11秒），独立peer通过。当前round来源一致、正式complete100可作为独立priority_evidence保留；32/100成绩与原公开模型packet不混合，500不进入提案。L1在控制优先之后按正式failed/高loop题完整时序Host/native机会软排序，0机会仅降序仍可探索，最后原TRAIN同artifact复验不变。真A17两个failed小run只读0.93秒/0模型Agent证明4b5机会0而其它来源有机会，不能称因果提升。A17全32最终正式L1=59、L3=2（原逐trace临时61混入两个loop边界，已撤回），exact4b5应用0/适用phase0，不能把A17退化归因于未注入的4b5。A18原控制3580822尚在健康生成，control已2paid、English已2paid且第二37草案保存，本地验证中；运行解释器待最终健康闭合/无请求且费用已保存的部署窗口加载新学习代码，不重跑健康Agent。
+
+北京时间09:33：两组修复已commit/push b370ea38并完成开发部署加载。31:46在A18控制generated/paid2、English3且三批36/37/1 compiled/complete已保存、全线程child0/socket0、未冻结/无Agent边界SIGINT旧3580822，旧主正常退出；32:05原--resume --gepa-max-model-calls1024恢复，新3630155运行同A18，32:46确认原2+3 paid和三批草案/usage仍保留、当次无新增付费。healthy Agent中断/重跑0，原TRAIN/L0无重跑；最新源码已加载，正常实验阶段仍由程序自动补评和续代，无额外人工推进。最终候选仍在本地重验，未宣称排序已产生收益或长期绝不崩溃。
+
+北京时间09:34–09:36：新A18诊断已实证proposal_priority_sources同时latest=A17同32、complete100=A13-2同100，source/anchor与正式指标仍各自独立，最新学习代码实际加载。控制原2稿/usage保存后，正常剩余预算新增第3稿/43722tokens，无controls并0paid native evidence fallback；现在actual control/English=3/3，不声称整个恢复无新增费用，也未重付原2。英文原36/37/1三稿及usage全复用、最终override5。当前3630155纯本地最终选优，未冻结/无新32，暂无新性能结论。
 
 ## 当前修复状态（北京时间 2026-10-09 08:04）
 
