@@ -1864,6 +1864,47 @@ def loop_model_policy(policy, loop):
     return "continue", policy
 
 
+def appworld_request_log_ellipsis_compatible(world):
+    """Keep an unsupported Python literal out of JSON logs, not execution data."""
+    tracker = world.requester.request_tracker
+    original_save = tracker.save
+
+    def contains_ellipsis(value, depth=0):
+        if value is Ellipsis:
+            return True
+        if depth >= 32:
+            return False
+        if isinstance(value, dict):
+            return any(contains_ellipsis(item, depth + 1)
+                       for pair in value.items() for item in pair)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return any(contains_ellipsis(item, depth + 1) for item in value)
+        return False
+
+    def save(file_path):
+        try:
+            return original_save(file_path)
+        except ValueError as error:
+            failures = error.args[0] if len(error.args) == 1 else None
+            if (not isinstance(failures, list) or len(failures) != 2 or
+                    not all(isinstance(item, TypeError) for item in failures) or
+                    str(failures[0]) != "'ellipsis' object is not iterable" or
+                    str(failures[1]) != "vars() argument must have __dict__ attribute" or
+                    not contains_ellipsis(tracker.requests)):
+                raise
+            # AppWorld records a request before executing it. Its normal execute
+            # result already contains the original API/code failure, but saving
+            # that request may fail afterwards on Ellipsis. Serialize a separate
+            # log value; the real request, arguments and database remain intact.
+            from fastapi.encoders import jsonable_encoder
+            from appworld.common.utils import write_jsonl
+            requests = [jsonable_encoder(request, custom_encoder={
+                type(Ellipsis): lambda literal: {"_appworld_python_literal": "Ellipsis"}}) for request in tracker.requests]
+            return write_jsonl(requests, file_path, silent=True)
+
+    tracker.save = save
+
+
 class AppWorldCaptureBoundaryError(RuntimeError):
     """Offline native capture cannot proceed without an observed lifecycle."""
 
@@ -2111,6 +2152,25 @@ class Trial:
         except Exception as error:
             return self._point_gap(fields, error=error)
 
+    def execute_world(self, world, code, action):
+        try:
+            observation = world.execute(code)
+            if not isinstance(observation, str):
+                raise RuntimeError("appworld_execute_result_invalid")
+            return observation
+        except Exception:
+            # The World dispatcher was entered, even if it could not return an
+            # observation. Close this attempted action as failed before the run
+            # error is reported. This does not assert any individual API ran.
+            self.point({"phase": "after", "kind": "action",
+                "context": action.get("context", self.run_context),
+                "executed": True, "status": "failed",
+                "actual_input": {"code": code, "native_view_redacted": True},
+                "output": {"error_code": "appworld_execute_host_error"},
+                "error": {"code": "appworld_execute_host_error",
+                          "retryability": "unknown"}})
+            raise
+
     def account(self, usage):
         calls = int(usage.get("llm_calls", 0) or 0)
         self.calls += calls
@@ -2218,6 +2278,7 @@ class Trial:
                              raise_on_unsafe_syntax=True, null_patch_unsafe_execution=True,
                              timeout_seconds=int(os.environ.get("APPWORLD_CODE_TIMEOUT", "30")),
                              **({'load_ground_truth': False} if synthetic_goal else {}))
+            appworld_request_log_ellipsis_compatible(world)
             synthetic_before = None
             synthetic_execution_outcomes = []
             if synthetic_goal:
@@ -2496,9 +2557,7 @@ class Trial:
                         reason = "bounded_recovery_exhausted"
                         break
                     continue
-                observation = world.execute(code)
-                if not isinstance(observation, str):
-                    raise RuntimeError("appworld_execute_result_invalid")
+                observation = self.execute_world(world, code, action)
                 failed = observation.lstrip().startswith(("Execution failed", "Traceback"))
                 if synthetic_goal and (synthetic_goal.get('reproduce_container_error') or
                                        synthetic_goal['kind'] == 'cross_app_auth_recovery_summary'):

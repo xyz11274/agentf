@@ -2206,3 +2206,190 @@ def test_point_gap_diagnostic_failure_never_changes_gap_or_capture_notification(
     assert trial.degraded_points == trial.framework_capture['failures'] == len(client.gaps) == 1
     assert client.gaps[0][0] == 'capture.gap' and client.gaps[0][1]['run_id'] == 'verified-run'
     assert (path.read_bytes() if path.is_file() else None) == before
+
+def _world_log_encoder_fixture(monkeypatch, tracker):
+    import types
+    from appworld_host import appworld_request_log_ellipsis_compatible
+    utils = types.ModuleType('appworld.common.utils')
+    def write_jsonl(values, path, silent=False):
+        Path(path).write_text(''.join(json.dumps(value) + '\n' for value in values))
+    utils.write_jsonl = write_jsonl
+    monkeypatch.setitem(sys.modules, 'appworld.common.utils', utils)
+    world = types.SimpleNamespace(requester=types.SimpleNamespace(request_tracker=tracker))
+    appworld_request_log_ellipsis_compatible(world)
+    return world
+
+
+def test_world_request_log_preserves_ellipsis_arguments_and_next_healthy_log(tmp_path, monkeypatch):
+    import types
+    from fastapi.encoders import jsonable_encoder
+    original = [{'method': 'post', 'url': '/fixture', 'data': {'value': Ellipsis}}]
+    tracker = types.SimpleNamespace(requests=original, calls=0)
+    def save(path):
+        tracker.calls += 1
+        values = [jsonable_encoder(request) for request in tracker.requests]
+        Path(path).write_text(''.join(json.dumps(value) + '\n' for value in values))
+    tracker.save = save
+    _world_log_encoder_fixture(monkeypatch, tracker)
+    path = tmp_path / 'api_calls.jsonl'
+    tracker.save(path)
+    logged = [json.loads(line) for line in path.read_text().splitlines()]
+    assert logged[0]['data']['value'] == {'_appworld_python_literal': 'Ellipsis'}
+    assert tracker.requests is original and original[0]['data']['value'] is Ellipsis
+    original.append({'method': 'get', 'url': '/fixture', 'data': {'value': 'healthy'}})
+    tracker.save(path)
+    assert len(path.read_text().splitlines()) == 2 and tracker.calls == 2
+    assert original[0]['data']['value'] is Ellipsis
+
+
+def test_world_request_log_healthy_save_is_unchanged(tmp_path, monkeypatch):
+    import types
+    original = [{'data': {'value': '...'}}]
+    calls = []
+    tracker = types.SimpleNamespace(requests=original, save=lambda path: calls.append(path))
+    _world_log_encoder_fixture(monkeypatch, tracker)
+    tracker.save(tmp_path / 'log')
+    assert calls == [tmp_path / 'log'] and tracker.requests is original
+    assert tracker.requests[0]['data']['value'] == '...'
+
+
+@pytest.mark.parametrize('kind', ['wrong_type', 'wrong_message', 'no_literal', 'secondary_object'])
+def test_world_request_log_does_not_swallow_other_errors(tmp_path, monkeypatch, kind):
+    import types
+    from fastapi.encoders import jsonable_encoder
+    original = [{'data': {'value': Ellipsis if kind != 'no_literal' else 'normal'}}]
+    failure = ValueError([TypeError("'ellipsis' object is not iterable"),
+                          TypeError('vars() argument must have __dict__ attribute')])
+    if kind == 'wrong_type': failure = RuntimeError('fixture_authority_denied')
+    if kind == 'wrong_message': failure = ValueError([TypeError('different'), TypeError('different')])
+    if kind == 'secondary_object': original[0]['data']['unsupported'] = object()
+    def save(path): raise failure
+    tracker = types.SimpleNamespace(requests=original, save=save)
+    _world_log_encoder_fixture(monkeypatch, tracker)
+    with pytest.raises(type(failure)) as caught:
+        tracker.save(tmp_path / 'log')
+    if kind != 'secondary_object': assert caught.value is failure
+    assert tracker.requests is original and not (tmp_path / 'log').exists()
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('fixture_permission_denied'),
+                                      ValueError('fixture_storage_failure')])
+def test_world_execute_exception_closes_failed_action_and_preserves_error(failure):
+    import types
+    from appworld_host import Trial
+    points = []
+    trial = Trial.__new__(Trial)
+    trial.run_context = {'run_id': 'fixture-run'}
+    trial.point = lambda fields: points.append(fields) or {}
+    calls = []
+    def execute(code):
+        calls.append(code)
+        raise failure
+    with pytest.raises(type(failure)) as caught:
+        trial.execute_world(types.SimpleNamespace(execute=execute), 'fixture-code',
+                            {'context': {'activity_id': 'fixture-action', 'run_id': 'fixture-run'}})
+    assert caught.value is failure and calls == ['fixture-code']
+    assert len(points) == 1 and points[0]['phase'] == 'after' and points[0]['kind'] == 'action'
+    assert points[0]['status'] == 'failed' and points[0]['executed'] is True
+    assert points[0]['context']['activity_id'] == 'fixture-action'
+    assert points[0]['error']['retryability'] == 'unknown'
+
+
+def test_world_execute_normal_failure_remains_visible_without_extra_after():
+    import types
+    from appworld_host import Trial
+    trial = Trial.__new__(Trial)
+    trial.run_context = {'run_id': 'fixture-run'}
+    points = []
+    trial.point = lambda fields: points.append(fields) or {}
+    observation = 'Execution failed. Traceback:\nTypeError: Object of type ellipsis is not JSON serializable'
+    result = trial.execute_world(types.SimpleNamespace(execute=lambda code: observation),
+                                 'fixture-code', {'context': {'activity_id': 'fixture-action'}})
+    assert result == observation and points == []
+
+
+def test_world_request_log_matches_official_tracker_locally(tmp_path):
+    import ast
+    import subprocess
+    import appworld_host
+    runtime_python = ADAPTER / 'runtime/venv/bin/python'
+    if not runtime_python.is_file(): pytest.skip('official local AppWorld runtime unavailable')
+    source = Path(appworld_host.__file__).read_text()
+    helper = next(node for node in ast.parse(source).body
+                  if isinstance(node, ast.FunctionDef) and node.name == 'appworld_request_log_ellipsis_compatible')
+    script = ast.unparse(helper) + '''
+from pathlib import Path
+from types import SimpleNamespace
+from appworld.requester import RequestTracker
+import json
+tracker = RequestTracker()
+tracker.add_request('post', '/fixture', {'value': Ellipsis})
+original = tracker.requests
+try:
+    tracker.save(str(log_path))
+except ValueError as error:
+    assert len(str(error)) == 107
+else:
+    raise AssertionError('expected original official serialization failure')
+world = SimpleNamespace(requester=SimpleNamespace(request_tracker=tracker))
+appworld_request_log_ellipsis_compatible(world)
+tracker.save(str(log_path))
+assert tracker.requests is original and tracker.requests[0]['data']['value'] is Ellipsis
+assert json.loads(log_path.read_text())['data']['value'] == {'_appworld_python_literal': 'Ellipsis'}
+print('official_tracker_local_exact_exception_and_logging_copy=PASS')
+'''
+    result = subprocess.run([str(runtime_python), '-c',
+        'from pathlib import Path\nlog_path = Path(' + repr(str(tmp_path / 'official-log.jsonl')) + ')\n' + script],
+        capture_output=True, text=True, check=True, timeout=30)
+    assert result.stdout.strip() == 'official_tracker_local_exact_exception_and_logging_copy=PASS'
+
+
+def test_world_execute_exception_closes_real_local_native_capture(tmp_path, monkeypatch):
+    import subprocess
+    import types
+    from appworld_host import Trial
+    sys.path.insert(0, str(ROOT / 'tools/trajectory_evolution/clients/python'))
+    from evolution_local import LocalEvolution
+    build = ROOT / 'tools/trajectory_evolution/build-v4'
+    binary, library = build / 'test_integration_service', build / 'libtrajectory_evolution_local.so'
+    if not binary.is_file() or not library.is_file(): pytest.skip('native local fixture unavailable')
+    folder = tmp_path / 'native'
+    subprocess.run([str(binary), '--fixture', str(folder)], check=True, capture_output=True)
+    config_path = folder / 'service.json'
+    config = json.loads(config_path.read_text())
+    config.update(auto_evaluate=False, auto_approve_experiences=False)
+    config_path.write_text(json.dumps(config))
+    monkeypatch.setenv('INTEGRATION_TEST_A', 'fixture-principal-alpha-00000001')
+    monkeypatch.setenv('INTEGRATION_TEST_B', 'fixture-principal-bravo-00000002')
+    client = LocalEvolution(library, config_path, 'fixture-principal-alpha-00000001')
+    # Trial's strict run envelope normally uses the HTTP transport signature.
+    # Adapt only that signature to the actual in-process ABI for this fixture.
+    def invoke(operation, fields, request_id, timeout, retries):
+        result = client.invoke(operation, fields, request_id=request_id)
+        assert not result.get('degraded'), result.get('reason')
+        return result
+    client._invoke = invoke
+    try:
+        trial = Trial.__new__(Trial)
+        trial.evo = client; trial.run_context = None; trial.boundary_diagnostics = []
+        trial.degraded_points = 0; trial.evidence_dir = tmp_path / 'evidence'
+        trial.framework_capture = {'calls': 0, 'transport_attempts': 0, 'failures': 0}
+        trial.evidence_dir.mkdir()
+        started = trial.point({'phase': 'before', 'kind': 'run', 'level': 'L0',
+            'conversation_id': 'local-world-failure', 'capabilities': ['model', 'actions', 'loop'],
+            'input': {'instruction': 'Public local fixture'}})
+        trial.run_context = started['context']
+        action = trial.point({'phase': 'before', 'kind': 'action', 'name': 'appworld.execute',
+                              'context': trial.run_context, 'input': {'code': 'fixture-code'}})
+        failure = ValueError('fixture_world_failure')
+        def execute(code): raise failure
+        with pytest.raises(ValueError) as caught:
+            trial.execute_world(types.SimpleNamespace(execute=execute), 'fixture-code', action)
+        assert caught.value is failure
+        ended = trial.point({'phase': 'after', 'kind': 'run', 'context': trial.run_context,
+            'status': 'failed', 'output': {'evaluation_status': 'errored'},
+            'error': {'code': 'appworld_host_error', 'retryability': 'unknown'}})
+        assert ended['closed'] is True and ended['capture_complete'] is True
+        assert trial.degraded_points == 0
+    finally:
+        client.close()
