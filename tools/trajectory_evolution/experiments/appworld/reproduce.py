@@ -26,7 +26,7 @@ for _common_path in (COMMON_EXPERIMENTS,
     if (_common_path / 'common_lifecycle.py').is_file() and str(_common_path) not in sys.path:
         sys.path.insert(0, str(_common_path))
 OUTPUT = ROOT / 'trace_output/appworld'
-SEED = OUTPUT / 'published/strategy/strategy.json'
+SEED = OUTPUT / 'published/seed0/strategy.json'
 PYTHON = sys.executable
 _EXPERIMENT_TRACKING = False
 _EXPERIMENT_LABEL = ''
@@ -185,50 +185,7 @@ def ensure_search_allowed(gepa_root: Path | None = None) -> None:
         raise RuntimeError('appworld_five_failed_seeds_review_required')
 
 
-def _retain_seed_generation_receipt(attempt: dict, seed: Path) -> bool:
-    """Reference immutable safe drafts; retain only fee detail in the attempt."""
-    manifest_path = seed.with_name('manifest.json')
-    manifest = _read(manifest_path)
-    receipt = manifest.get('generation_receipt')
-    if receipt is None:
-        return False
-    if (not seed.resolve().is_relative_to((OUTPUT / 'published').resolve())
-            or not isinstance(receipt, dict) or receipt.get('schema_version') != 1
-            or receipt.get('seed_label') != seed.parent.name
-            or not isinstance(manifest.get('version'), str) or not manifest['version']
-            or _APPWORLD_LAYOUT.version(_read(seed)) != manifest['version']):
-        raise RuntimeError('appworld_frozen_seed_generation_receipt_mismatch')
-    summary = {'manifest_ref': str(manifest_path.resolve()), 'seed_label': receipt['seed_label'],
-        'available_detail': 'paid_calls_and_recorded_usage_only_drafts_in_manifest'}
-    for name in ('control_learning', 'english_trigger_learning'):
-        stage = receipt.get(name)
-        if not isinstance(stage, dict) or type(stage.get('model_calls')) is not int or stage['model_calls'] < 0:
-            raise RuntimeError('appworld_frozen_seed_generation_receipt_mismatch')
-        value = {key: stage[key] for key in ('status', 'model_calls', 'inherited_model_calls') if key in stage}
-        value['attempts'] = [{key: row[key] for key in ('attempt', 'status', 'usage') if key in row}
-                             for row in stage.get('attempts', []) if isinstance(row, dict)]
-        generation = stage.get('incremental_generation')
-        if isinstance(generation, dict):
-            value['incremental_generation'] = {key: generation[key] for key in ('model_calls', 'model_attempts')
-                                               if key in generation}
-            value['incremental_generation']['batches'] = [
-                {key: row[key] for key in ('attempt', 'status', 'usage') if key in row}
-                for row in generation.get('batches', []) if isinstance(row, dict)]
-        summary[name] = value
-    attempt.setdefault('seed_generation_receipt', summary)
-    return True
-
-
-def _retain_seed_generation_diagnostic(attempt: dict, seed: Path) -> None:
-    """Keep the existing paid-call receipt before another label replaces it."""
-    if _retain_seed_generation_receipt(attempt, seed):
-        return
-    diagnostic = _read(OUTPUT / 'training/seed-compile-status.json')
-    if diagnostic.get('seed_label') == seed.parent.name:
-        attempt.setdefault('seed_generation_diagnostic', diagnostic)
-
-
-def restart_search_after_review(summary: str, *, candidate_seed: Path | None = None) -> None:
+def restart_search_after_review(summary: str) -> None:
     """Start a reviewed repair round while retaining every failed candidate."""
     summary = summary.strip()
     if len(summary) < 20 or len(summary) > 2000:
@@ -236,33 +193,6 @@ def restart_search_after_review(summary: str, *, candidate_seed: Path | None = N
     search = seed_search()
     if search.get('status') != 'review_required':
         raise RuntimeError('appworld_seed_review_not_required')
-    failed = [item for item in search.get('attempts', [])
-              if item.get('round', 1) == search.get('round', 1)
-              and item.get('status') == 'failed']
-    source = search.get('current_seed') or (failed[-1].get('seed') if failed else None)
-    if not isinstance(source, str) or not Path(source).is_file():
-        raise RuntimeError('appworld_seed_review_source_missing')
-    source_seed = Path(source).resolve()
-    if candidate_seed is not None:
-        from learning import validate_seed_label
-        candidate_seed = candidate_seed.resolve()
-        label = validate_seed_label(candidate_seed.parent.name)
-        if candidate_seed != (OUTPUT / 'published' / label / 'strategy.json').resolve():
-            raise RuntimeError('appworld_seed_artifact_must_match_publish_label')
-        if candidate_seed.exists():
-            raise RuntimeError('appworld_seed_unchanged_after_review')
-        next_seed = candidate_seed
-    else:
-        index = max([0] + [item.get('attempt', 0) for item in search.get('attempts', [])]) + 1
-        base = f"seed-auto-r{search.get('round', 1) + 1}-a{index}"
-        label, suffix = base, 1
-        while (OUTPUT / 'published' / label).exists():
-            suffix += 1
-            label = f'{base}-{suffix}'
-        next_seed = (OUTPUT / 'published' / label / 'strategy.json').resolve()
-    for attempt in search.get('attempts', []):
-        if attempt.get('seed') == str(source_seed):
-            _retain_seed_generation_diagnostic(attempt, source_seed)
     search.setdefault('reviews', []).append({
         'round': search.get('round', 1), 'summary': summary,
         'reviewed_at_ns': time.time_ns(),
@@ -271,33 +201,7 @@ def restart_search_after_review(summary: str, *, candidate_seed: Path | None = N
                             and item.get('status') == 'failed']})
     search.update(round=search.get('round', 1) + 1, status='searching',
                   consecutive_failures=0)
-    search.update(current_seed=str(next_seed), automatic_seed_generation={
-        'round': search['round'], 'status': 'pending', 'seed': str(next_seed),
-        'seed_label': label, 'source_seed': str(source_seed),
-        'source_attempt': failed[-1]['attempt'] if failed else None,
-        'method': 'approved_training_native_seed'})
     _save_search(search)
-
-
-def _resume_withdrawn_failed_seed_count_policy(*, candidate_seed: Path | None = None) -> bool:
-    """Migrate only the exact retired five-failure checkpoint, not other reviews."""
-    search = seed_search()
-    failed = [item for item in search.get('attempts', [])
-              if item.get('round', 1) == search.get('round', 1)
-              and item.get('status') == 'failed']
-    requirement = ('Review actual failure traces, then verify new training import or '
-                   'implementation fix and targeted tests before explicitly starting a new round.')
-    if (search.get('status') != 'review_required'
-            or search.get('review_requirement') != requirement
-            or search.get('consecutive_failures', 0) < 5 or len(failed) < 5):
-        return False
-    restart_search_after_review('The user withdrew the fixed five-failure stop; continue '
-                                'with retained formal failures and a new approved TRAIN candidate.',
-                                candidate_seed=candidate_seed)
-    search = seed_search()
-    search['reviews'][-1]['reason'] = 'failed_seed_count_policy_withdrawn'
-    _save_search(search)
-    return True
 
 
 def _matching_attempt(seed: Path, search: dict, *, current_round_only: bool = False) -> dict | None:
@@ -464,7 +368,6 @@ def begin_seed_attempt(seed: Path) -> dict:
     matching = _matching_attempt(seed, search, current_round_only=True)
     if matching:
         search['current_seed'] = str(seed.resolve())
-        _retain_seed_generation_receipt(matching, seed)
         _save_search(search)
         return matching
     artifact = _read(seed)
@@ -489,8 +392,6 @@ def begin_seed_attempt(seed: Path) -> dict:
             for field in ('pilot_comparison', 'validation_comparison') if item.get(field))), None)
     if pending:
         pending['seed'] = str(seed.resolve())
-        pending.pop('seed_generation_receipt', None)
-        _retain_seed_generation_receipt(pending, seed)
         _save_search(search)
         return pending
     index = max([len(attempts)] + [item['attempt'] for item in attempts
@@ -514,7 +415,6 @@ def begin_seed_attempt(seed: Path) -> dict:
                 attempt[field] = historical[field]
                 attempt['reused_from_attempt'] = historical['attempt']
     attempts.append(attempt)
-    _retain_seed_generation_receipt(attempt, seed)
     _save_search(search)
     return attempt
 
@@ -535,7 +435,6 @@ def record_seed_gate(seed: Path, count: int, comparison: Path, result: dict) -> 
     attempt['last_stage'] = count
     attempt['gate_policy'] = INTERIM_GATE_POLICY
     attempt['goal_checks'] = result.get('goal_checks', {})
-    _retain_seed_generation_diagnostic(attempt, seed)
     rows = _read(comparison).get('items') or []
     failed = [row for row in rows if row.get('verdict') == 'failed']
     groups = {}
@@ -582,6 +481,9 @@ def record_seed_gate(seed: Path, count: int, comparison: Path, result: dict) -> 
             if item.get('status') == 'failed':
                 failures += 1
         search['consecutive_failures'] = failures
+        if failures >= 5:
+            search.update(status='review_required', review_required_at_ns=time.time_ns(),
+                review_requirement='Review actual failure traces, then verify new training import or implementation fix and targeted tests before explicitly starting a new round.')
     _save_search(search)
 
 
@@ -781,42 +683,6 @@ def _inherit_pilot_capture(seed: Path, attempt: dict, task_ids: list[str]) -> bo
     return True
 
 
-def _stage_projection_repaired(source: Path, row: dict) -> bool:
-    """Verify this exact saved row locally before permitting a judge-only retry."""
-    import importlib.util
-    evidence = row.get('evidence') or {}
-    projection = evidence.get('evidence_projection') or {}
-    model = [check for check in row.get('checks') or []
-             if check.get('check_id') == 'model']
-    if (len(model) != 1 or model[0].get('status') != 'error'
-            or model[0].get('reason') != 'evaluation_evidence_projection_unavailable'
-            or projection.get('status') != 'error'
-            or projection.get('error_code') != 'evaluation_evidence_projection_unavailable'):
-        return False
-    try:
-        import re
-        trial = row.get('trial_id')
-        if not isinstance(trial, str) or not re.fullmatch(r'[a-f0-9]{32}', trial):
-            return False
-        atomic = source.parent / 'trials' / (trial + '.json')
-        if (atomic.resolve().parent != source.resolve().parent / 'trials'
-                or json.dumps(_read(atomic), sort_keys=True, allow_nan=False)
-                    != json.dumps(row, sort_keys=True, allow_nan=False)):
-            return False
-        spec = importlib.util.spec_from_file_location('_appworld_recovery_projection', _APPWORLD_LAYOUT.HOST)
-        host = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(host)
-        reply = host.project_official_code_request({
-            'schema_version': 1, 'source_report': str(source.resolve()),
-            'trial_id': row.get('trial_id'), 'task_id': row.get('task_id'),
-            'execution_run_id': evidence.get('execution_run_id')}, evidence_root=OUTPUT)
-        return (reply.get('status') == 'complete' and reply.get('schema_version') == 1
-                and reply.get('trial_id') == row.get('trial_id')
-                and reply.get('execution_run_id') == evidence.get('execution_run_id'))
-    except (OSError, ValueError, TypeError, AttributeError, ImportError):
-        return False
-
-
 def _stage_review_recovery_state(output: Path, count: int, *, baseline: bool) -> str | None:
     """Inspect retained native evidence before retrying a transport-only judge failure."""
     import compare
@@ -840,7 +706,7 @@ def _stage_review_recovery_state(output: Path, count: int, *, baseline: bool) ->
             sources = [Path(s['source_report']) for s in shards if s.get('source_report')]
             if len(sources) != len(shards):
                 return None
-        seen, missing, cached, repaired_projection = set(), False, False, False
+        seen, missing, cached = set(), False, False
         for source in sources:
             observed = compare._report_judge_projection(source)
             if observed is None and not baseline:
@@ -879,14 +745,12 @@ def _stage_review_recovery_state(output: Path, count: int, *, baseline: bool) ->
                 reasons = ' '.join(str(check.get('reason') or '')
                                    for check in row.get('checks') or [])
                 import re
-                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|500|502|503|504)|transport_(?:6|7|18|28|52|55|56|exhausted))\b', reasons):
-                    if baseline or not _stage_projection_repaired(source, row):
-                        return None
-                    repaired_projection = True
+                if not re.search(r'evaluation_judge_(?:http_(?:408|429|502|503|504)|transport_(?:6|7|28|52|55|56|exhausted))\b', reasons):
+                    return None
                 missing = True
         if len(seen) != count:
             return None
-        return 'projection' if repaired_projection else 'transport' if missing else 'cached' if cached else 'ready'
+        return 'transport' if missing else 'cached' if cached else 'ready'
     except (OSError, ValueError, TypeError, KeyError):
         return None
 
@@ -1204,68 +1068,6 @@ def _delivery_rank(manifest: dict) -> tuple:
             -number('latency_ms', float('inf')))
 
 
-def _historical_compact_delivery(target: Path, current: dict, right: dict) -> dict:
-    """Validate retained scores for comparison, without claiming native proof."""
-    import compare
-    texts = {name: (target / name).read_text() for name in
-             ('strategy.json', 'comparison.json', 'baseline.json', 'manifest.json')}
-    artifact, comparison, baseline = (json.loads(texts[name]) for name in
-                                     ('strategy.json', 'comparison.json', 'baseline.json'))
-    ids = current.get('task_ids') or []
-    version = current.get('version')
-    projection = current.get('judge_projection')
-    historical_versions = current.get('holdout_task_versions')
-    if historical_versions is None:
-        historical_versions = ((current.get('historical_scope') or {}).get('identity') or {}).get('task_versions')
-    if (len(ids) != 500 or len(set(ids)) != 500 or set(ids) != set(right.get('task_ids') or [])
-            or not version or _APPWORLD_LAYOUT.version(artifact) != version
-            or artifact.get('level') != 'L3' or current.get('published') is not True
-            or projection != right.get('judge_projection') or projection != _APPWORLD_LAYOUT.judge_projection()
-            or not current.get('judge_fingerprint')
-            or current['judge_fingerprint'] != right.get('judge_fingerprint')
-            or not current.get('host_version') or current['host_version'] != right.get('host_version')
-            or not current.get('dataset_version') or current['dataset_version'] != right.get('dataset_version')
-            or not current.get('baseline_version') or current['baseline_version'] != right.get('baseline_version')
-            or not isinstance(historical_versions, dict) or len(historical_versions) != 500
-            or historical_versions != right.get('holdout_task_versions')
-            or comparison.get('status') != 'complete' or baseline.get('status') != 'complete'):
-        raise RuntimeError('appworld_delivery_historical_scope_unverified')
-    values = {}
-    for role, source in (('candidate', comparison), ('baseline', baseline)):
-        rows = source.get('items') or []
-        if (source.get('host_version') != current.get('host_version')
-                or source.get('judge_projection') != projection or len(rows) != 500
-                or {row.get('task_id') for row in rows} != set(ids)):
-            raise RuntimeError('appworld_delivery_historical_rows_unverified')
-        for row in rows:
-            numbers = [row.get('quality'), row.get('avg_invalid_loop')]
-            if (row.get('execution_status') != 'completed' or row.get('quality_status') != 'complete'
-                    or row.get('verdict') not in ('passed', 'failed')
-                    or row.get('strict_passed') != (row['verdict'] == 'passed')
-                    or row.get('invalid_loop_basis') != 'model_review' or not row.get('loaded_version')
-                    or row['loaded_version'] != (version if role == 'candidate' else current['baseline_version'])
-                    or any(row.get(key) for key in ('error_code', 'execution_error_code', 'judge_error_code'))
-                    or any(isinstance(value, bool) or not isinstance(value, (int, float))
-                           or not math.isfinite(value) or value < 0 for value in numbers)
-                    or numbers[0] > 1):
-                raise RuntimeError('appworld_delivery_historical_metrics_unverified')
-        values[role] = compare.summarize(rows, 500)
-        if any(values[role].get(key) != (current.get('goal_checks', {}).get(role) or {}).get(key)
-               for key in ('strict_passed', 'quality', 'avg_invalid_loop')):
-            raise RuntimeError('appworld_delivery_historical_summary_changed')
-    return {'manifest': dict(current, goal_checks=dict(current['goal_checks'], **values)), 'texts': texts}
-
-
-def _delivery_core_improved(candidate: dict, previous: dict) -> bool:
-    left = (previous.get('goal_checks') or {}).get('candidate') or {}
-    right = (candidate.get('goal_checks') or {}).get('candidate') or {}
-    pairs = [(right.get(key), left.get(key), 1) for key in ('strict_passed', 'quality')]
-    return (all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-                for newer, older, _ in pairs for value in (newer, older))
-            and all(direction * (newer - older) >= 0 for newer, older, direction in pairs)
-            and _delivery_rank(candidate) > _delivery_rank(previous))
-
-
 def deliver_best_available(seed: Path, comparison: Path) -> dict:
     """Both publication paths share source validation, selection and atomic files."""
     import fcntl
@@ -1284,48 +1086,20 @@ def deliver_best_available(seed: Path, comparison: Path) -> dict:
         fcntl.flock(lock, fcntl.LOCK_EX)
         bundle = _validated_best_available_delivery(seed, comparison)
         current = _read(target / 'manifest.json')
-        history = None
         if current:
-            right = bundle['manifest']
-            def not_published(reason):
-                return dict(current, publication_status='not_published', publication_reason=reason,
-                            requested_version=right.get('version'), requested_goal_passed=right.get('goal_passed'),
-                            selected_version=current.get('version'))
-            raw_references = [current.get('baseline_source_report'),
-                              *(current.get('native_source_reports') or [])]
-            references = [current.get('source_comparison'), *raw_references]
-            missing_native = bool(raw_references) and all(isinstance(path, str) and path
-                and Path(path).resolve().is_relative_to((OUTPUT / 'gepa').resolve())
-                and not Path(path).is_file() for path in raw_references)
-            if missing_native and right.get('source_kind') == 'native_gepa_final':
-                try:
-                    history = _historical_compact_delivery(target, current, right)
-                except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
-                    reason = (str(error) if isinstance(error, RuntimeError)
-                              and str(error).startswith('appworld_delivery_historical_')
-                              else 'appworld_delivery_historical_compact_unavailable')
-                    return not_published(reason)
-                left = history['manifest']
-            else:
-                if (right.get('source_kind') == 'native_gepa_final'
-                        and any(isinstance(path, str) and path and not Path(path).is_file()
-                                for path in references)):
-                    return not_published('appworld_delivery_historical_source_incomplete')
-                previous = _validated_best_available_delivery(
-                    Path(current.get('source_strategy') or ''),
-                    Path(current.get('source_comparison') or ''))
-                if (_read(target / 'strategy.json') != previous['artifact']
-                        or _read(target / 'comparison.json') != previous['comparison']
-                        or current.get('version') != previous['manifest']['version']):
-                    raise RuntimeError('appworld_delivery_existing_source_changed')
-                left = previous['manifest']
+            previous = _validated_best_available_delivery(
+                Path(current.get('source_strategy') or ''),
+                Path(current.get('source_comparison') or ''))
+            if (_read(target / 'strategy.json') != previous['artifact']
+                    or _read(target / 'comparison.json') != previous['comparison']
+                    or current.get('version') != previous['manifest']['version']):
+                raise RuntimeError('appworld_delivery_existing_source_changed')
+            left, right = previous['manifest'], bundle['manifest']
             if (set(left['task_ids']) != set(right['task_ids'])
                     or left['judge_projection'] != right['judge_projection']
                     or left['judge_fingerprint'] != right['judge_fingerprint']
-                    or (history is None and left['goal_checks']['baseline'] != right['goal_checks']['baseline'])):
+                    or left['goal_checks']['baseline'] != right['goal_checks']['baseline']):
                 raise RuntimeError('appworld_delivery_existing_scope_changed')
-            if not _delivery_core_improved(right, left):
-                return not_published('appworld_delivery_not_better_than_previous_scores')
             if right.get('goal_passed') is not True or _delivery_rank(right) <= _delivery_rank(left):
                 return dict(current, selected_version=current['version'])
         elif bundle['manifest'].get('source_kind') == 'native_gepa_final' and not bundle['manifest']['goal_passed']:
@@ -1333,20 +1107,8 @@ def deliver_best_available(seed: Path, comparison: Path) -> dict:
         # Each save replaces its file atomically; the manifest is the commit
         # receipt and is written last while the publication lock is held.
         layout = _APPWORLD_LAYOUT
-        if history is not None:
-            path = OUTPUT / 'gepa/previous-results.json'
-            records = _read(path).get('records', [])
-            if not isinstance(records, list):
-                raise RuntimeError('appworld_delivery_history_shape_invalid')
-            record = {'version': current['version'], 'source_kind': 'historical_compact_only',
-                      'native_proof_available': False, 'goal_passed': current.get('goal_passed'),
-                      'original_json': history['texts']}
-            if record not in records:
-                records.append(record)
-            layout.save(path, {'records': records})
         layout.save(target / 'strategy.json', bundle['artifact'])
         layout.save(target / 'comparison.json', bundle['comparison'])
-        layout.save(target / 'baseline.json', _read(Path(bundle['comparison']['source_l0'])))
         layout.save(target / 'manifest.json', bundle['manifest'])
         return dict(bundle['manifest'], selected_version=bundle['manifest']['version'])
 
@@ -1605,56 +1367,6 @@ def status(seed: Path | None = None) -> dict:
     return result
 
 
-def _status_display(value: dict) -> dict:
-    """Bound CLI output; full receipts remain in their existing source files."""
-    metric_keys = ('planned', 'completed', 'scored', 'strict_passed', 'quality',
-        'avg_invalid_loop', 'invalid_loop_coverage', 'latency_ms', 'tokens',
-        'token_covered_trials', 'model_calls', 'model_call_covered_trials',
-        'execution_costs_complete', 'levels', 'intent_f1', 'intent_measured')
-    def metrics(data):
-        if not isinstance(data, dict):
-            return data
-        if any(key in data for key in metric_keys):
-            return {key: data[key] for key in metric_keys if key in data}
-        return {name: {key: row[key] for key in metric_keys if key in row}
-                for name, row in data.items() if isinstance(row, dict)}
-    result = {}
-    for name in ('training', 'seed', 'pilot32', 'validation100', 'gepa', 'published', 'delivery'):
-        entry = dict(value.get(name) or {})
-        if 'metrics' in entry:
-            entry['metrics'] = metrics(entry['metrics'])
-        if isinstance(entry.get('nodes'), list):
-            entry['nodes'] = len(entry['nodes'])
-        result[name] = entry
-    experiment = dict(value.get('native_experiment') or value.get('experiment') or {})
-    pid = experiment.get('pid')
-    alive = False
-    if type(pid) is int and pid > 0:
-        try:
-            args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-            alive = any(arg.endswith(b'/reproduce.py') for arg in args)
-        except OSError:
-            pass
-    experiment['controller_alive'] = alive
-    if experiment.get('status') == 'running' and not alive:
-        experiment['status'] = 'not_running'
-    result['experiment'] = experiment
-    if experiment.get('status') in ('interrupted', 'stage_failed', 'not_running'):
-        result['gepa']['status'] = experiment['status']
-    search = value.get('seed_search') or {}
-    attempts = search.get('attempts') or []
-    result['seed_search'] = {key: search[key] for key in ('round', 'status', 'current_seed') if key in search}
-    result['seed_search']['attempts_count'] = len(attempts)
-    result['seed_search']['recent_attempts'] = [{key: row[key] for key in
-        ('attempt', 'round', 'seed', 'status', 'last_stage', 'goal_checks', 'pilot_comparison', 'validation_comparison')
-        if key in row} for row in attempts[-3:]]
-    generation = search.get('automatic_seed_generation') or {}
-    result['seed_search']['automatic_seed_generation'] = {key: generation[key] for key in
-        ('round', 'status', 'seed_label', 'seed', 'source_seed', 'method') if key in generation}
-    result['details'] = str(OUTPUT / 'gepa/status.json')
-    return result
-
-
 def _active_output_processes() -> list[int]:
     """Find real writers to this output tree without contacting a service."""
     entries = {str((HERE / name).resolve()) for name in (
@@ -1707,89 +1419,6 @@ def assert_idle_for_fresh() -> None:
     if any(job.get('status') in ('pending', 'running') for job in
            (state.get('jobs') or {}).values() if isinstance(job, dict)):
         raise RuntimeError('appworld_fresh_stale_running_state_requires_review')
-
-
-def restart_gepa(seed: Path) -> dict:
-    """Reset only the search, retaining the published result and its sources."""
-    import shutil
-    from collections import Counter
-    from copy import deepcopy
-    layout = _APPWORLD_LAYOUT
-    assert_idle_for_fresh()
-    if layout.GEPA.is_symlink():
-        raise RuntimeError('appworld_gepa_reset_symlink_refused')
-    root = layout.GEPA.resolve()
-    if root.exists() and not root.is_dir():
-        raise RuntimeError('appworld_gepa_reset_directory_required')
-    entries = list(root.iterdir()) if root.is_dir() else []
-    # After an explicit data cleanup there is no old search to reset. The
-    # command's own phase receipt may already exist; it is not a seed proof.
-    # Let the shared prefix produce missing 32/100 evidence normally rather
-    # than requiring those deleted proofs before the prefix can run.
-    if (not entries or (len(entries) == 1 and entries[0].name == 'status.json'
-                        and set(_read(entries[0])) == {'experiment'})):
-        return {'status': 'old_gepa_already_cleared', 'removed': [],
-                'retained_evidence': [], 'seed': str(seed.resolve())}
-    # An explicit restart never fabricates a passed seed prefix or re-runs
-    # healthy Agent executions. Verify the retained native proofs first.
-    verify(seed, 32)
-    verify(seed, 100)
-    old_status = _read(root / 'status.json')
-    lifecycle = _read(root / 'lifecycle.json')
-    submission = _read(root / 'submission.json')
-    job_id = submission.get('job_id')
-    tree = _read(root / 'workspace/agent-evaluation' / str(job_id) / 'search/tree.json')
-    protected = {'official-evidence', 'previous-results.json'}
-
-    def protect(path: str | Path) -> None:
-        candidate = Path(path).resolve()
-        if candidate.is_relative_to(root):
-            relative = candidate.relative_to(root)
-            if relative.parts:
-                protected.add(relative.parts[0])
-
-    for count in (32, 100):
-        comparison = stage_path(seed, count)
-        protect(comparison)
-        protect(_stage_l0_source(count, comparison))
-    for count in (32, 100, 500):
-        protect(layout.baseline_result(count))
-    published = _read(layout.PUBLISHED / 'strategy/manifest.json')
-    for key in ('source_comparison', 'source_progress', 'source_l0', 'baseline_source_report'):
-        if published.get(key):
-            protect(published[key])
-    for path in published.get('native_source_reports') or []:
-        protect(path)
-    # A published native GEPA result still owns evidence in its workspace.
-    # Refuse to erase that evidence; the seed-only restart used here does not.
-    if 'workspace' in protected:
-        raise RuntimeError('appworld_published_native_gepa_source_requires_preservation')
-    retired = {'job_id': job_id, 'rounds': tree.get('rounds'),
-               'model_calls': tree.get('model_calls'),
-               'node_states': dict(Counter(
-                   item.get('status') for item in tree.get('nodes', [])[1:])),
-               'reset_at_ns': time.time_ns()}
-    removed = []
-    for path in sorted(root.iterdir()):
-        if path.name in protected:
-            continue
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-        removed.append(path.name)
-    retained_prefix = {key: deepcopy(value) for key, value in
-                       (lifecycle.get('stage_results') or {}).items()
-                       if key in {'prepare', 'train', 'seed', 'pilot32', 'validation100'}}
-    lifecycle['stage_results'] = retained_prefix
-    lifecycle.pop('completed_at', None)
-    lifecycle['status'] = 'pending'
-    layout.save(root / 'lifecycle.json', lifecycle)
-    layout.save(root / 'status.json', {
-        'status': 'restarting', 'seed_search': old_status.get('seed_search', {}),
-        'prior_search': retired})
-    return {'status': 'old_gepa_removed', 'removed': removed,
-            'retained_evidence': sorted(protected), 'prior_search': retired}
 
 
 def prepare() -> None:
@@ -2035,7 +1664,7 @@ def _comparison_review_pending(value: dict, seed: Path, count: int) -> bool:
                 and candidate.get('missing') == 0
                 and candidate.get('execution_errors') == 0
                 and candidate.get('judge_errors', 0) > 0
-                and (reviews.get('uncertain', 0) > 0 or reviews.get('missing', 0) > 0))
+                and reviews.get('uncertain', 0) > 0)
 
 
 def _resume_pending_comparison_receipts(lifecycle: dict, seed: Path,
@@ -2113,22 +1742,6 @@ def _native_gepa_service_active() -> bool:
         except (OSError, ValueError, IndexError):
             continue
     return False
-
-
-def _native_gepa_no_new_candidate(seed: Path) -> bool:
-    """Recognize a completed same-seed search with no holdout candidate."""
-    root = _APPWORLD_LAYOUT.GEPA
-    native = _read(root / 'status.json')
-    job_id = native.get('job_id')
-    planned_seed = _read(root / 'plan.json').get('seed')
-    if (native.get('job_status') != 'rejected' or not isinstance(job_id, str) or not job_id
-            or not isinstance(planned_seed, str) or not planned_seed
-            or Path(planned_seed).resolve() != seed.resolve()):
-        return False
-    tree = _read(root / 'workspace/agent-evaluation' / job_id / 'search/tree.json')
-    return bool(tree.get('status') == 'validation_rejected'
-                and tree.get('holdout_started') is not True
-                and not (tree.get('final_holdout') or {}).get('candidates'))
 
 
 def _refresh_training_scope_receipts(state: dict, seed: Path, stop_at: str | None) -> bool:
@@ -2488,16 +2101,8 @@ def _run_common_all(seed: Path, label: str, *, stop_at: str | None = None,
         if stage_name == 'gepa_prepare':
             verify(seed, 32); verify(seed, 100)
             prepare_arguments = ['--prepare', '--seed-artifact', seed]
-            effective_calls = gepa_max_model_calls
-            if effective_calls is None:
-                plan = _read(layout.GEPA / 'plan.json')
-                if plan.get('seed') == str(seed.resolve()):
-                    effective_calls = (plan.get('search') or {}).get('max_model_calls')
-                    extension = plan.get('budget_extension') or {}
-                    if extension.get('seed') == str(seed.resolve()):
-                        effective_calls = (extension.get('requested_limits') or {}).get('max_model_calls', effective_calls)
-            if effective_calls is not None:
-                prepare_arguments.extend(['--max-model-calls', str(effective_calls)])
+            if gepa_max_model_calls is not None:
+                prepare_arguments.extend(['--max-model-calls', str(gepa_max_model_calls)])
             run('offline_gepa.py', *prepare_arguments)
             return StageResult('complete', data={'callback': 'appworld.offline_gepa.prepare'})
         if stage_name == 'gepa_run':
@@ -2517,9 +2122,6 @@ def _run_common_all(seed: Path, label: str, *, stop_at: str | None = None,
                 return StageResult('pending', reason=reason, data=data)
             return StageResult('complete', data=data)
         if stage_name == 'comparison500':
-            if _native_gepa_no_new_candidate(seed):
-                return StageResult('blocked', reason='appworld_gepa_no_new_qualified_candidate',
-                                   data={'goal_status': 'goal_not_met', 'holdout_status': 'not_run'})
             # Comparison500 creates only a proof. The common lifecycle's
             # final publish callback is the sole writer of published/.
             run('offline_gepa.py', '--proof')
@@ -2546,1384 +2148,26 @@ def _run_common_all(seed: Path, label: str, *, stop_at: str | None = None,
                                      'selected_node': selected})
         if stage_name == 'publish':
             run('offline_gepa.py', '--publish')
-            publication = (_read(layout.GEPA / 'status.json').get('publication') or {})
-            if publication.get('publication_status') == 'not_published':
-                return StageResult('blocked', reason=publication['publication_reason'],
-                                   data={'publication_status': 'not_published',
-                                         'requested_goal_passed': publication.get('requested_goal_passed')})
             manifest = OUTPUT / 'published/strategy/manifest.json'
             return StageResult('complete', artifact=str(manifest),
                                data={'callback': 'publication_receipt'})
         raise RuntimeError('appworld_unknown_common_stage')
 
     result = LifecycleController(_AppWorldDatasetAdapter(), callback, state_path).run(stop_at=stop_at)
-    unpublished = (result.get('stage_results', {}).get('publish') or {})
-    if result.get('phase') == 'publish' and unpublished.get('data', {}).get('publication_status') == 'not_published':
-        result.update(status='not_published', publication_status='not_published',
-                      stop_reason=unpublished['reason'])
-        result.pop('last_error', None)
-        layout.save(state_path, result)
-        return result
-    if (result.get('phase') in ('gepa_run', 'comparison500')
-            and (result.get('stage_results', {}).get('gepa_run') or {}).get('status') == 'complete'
-            and _native_gepa_no_new_candidate(seed)):
-        result.update(status='not_qualified', phase='gepa_run', goal_status='goal_not_met',
-                      holdout_status='not_run', publication_status='unchanged',
-                      stop_reason='appworld_gepa_no_new_qualified_candidate')
-        result.pop('last_error', None)
-        layout.save(state_path, result)
-        return result
     if result.get('status') not in ('complete', 'published'):
         raise RuntimeError(result.get('last_error', 'appworld_common_lifecycle_failed'))
     return result
-
-
-def _formal_seed_failure(seed: Path, error: RuntimeError) -> dict | None:
-    """Advance only a native-verified, complete failure of this exact seed."""
-    state = _read(_controller_gepa_root() / 'lifecycle.json')
-    phase = state.get('phase')
-    if phase not in ('pilot32', 'validation100'):
-        return None
-    if str(error) != f'stage_gate_not_passed:{phase}':
-        return None
-    receipt = (state.get('stage_results') or {}).get(phase) or {}
-    if (state.get('candidate') != _candidate_identity(seed, seed.parent.name)
-            or receipt.get('status') != 'complete' or receipt.get('gate_passed') is not False):
-        return None
-    attempt = _matching_attempt(seed, seed_search(), current_round_only=True)
-    count = 32 if phase == 'pilot32' else 100
-    field = 'pilot_comparison' if count == 32 else 'validation_comparison'
-    comparison = (receipt.get('data') or {}).get('comparison')
-    if (not attempt or attempt.get('status') != 'failed'
-            or attempt.get('last_stage') != count or not comparison
-            or Path(comparison).resolve() != Path(attempt[field]).resolve()
-            or _read(Path(comparison)).get('status') != 'complete'):
-        return None
-    # A known quality shortfall alone may mark the seed ledger failed while
-    # loop/judge evidence is still pending. It cannot spend another seed slot.
-    import stage_gate
-    _, verified = stage_gate.verify_stage(str(count), Path(comparison),
-        _stage_l0_source(count, Path(comparison)), seed)
-    if (verified.get('seed_match') is not True or verified.get('coverage_pass') is not True
-            or verified.get('status') != 'fail'):
-        return None
-    return attempt
-
-
-def _duplicate_seed_source(seed: Path, search: dict, source: Path) -> str | None:
-    """Labels are not new strategies; compare retained full artifacts/versions."""
-    artifact = _read(seed)
-    version = _read(seed.with_name('manifest.json')).get('version')
-    references = [(source, {})] + [(Path(item['seed']), item)
-        for item in search.get('attempts', []) if isinstance(item.get('seed'), str)]
-    for previous, attempt in references:
-        if previous.resolve() == seed.resolve():
-            continue
-        pilot = attempt.get('pilot_comparison')
-        recorded = (_read(Path(pilot).with_name('progress.json')).get('artifact')
-                    if pilot else None)
-        prior = recorded if isinstance(recorded, dict) and recorded else _read(previous)
-        prior_version = _read(previous.with_name('manifest.json')).get('version')
-        if (artifact and artifact == prior) or (isinstance(version, str) and version
-                and version == prior_version and (not recorded or _read(previous) == recorded)):
-            return str(previous.resolve())
-    return None
-
-
-def _run_all_with_seed_search(seed: Path, label: str, **budget_arguments) -> dict:
-    """Reuse the shared prefix, generating a new TRAIN-only seed after a gate failure."""
-    global _EXPERIMENT_LABEL
-    state_path = _controller_gepa_root() / 'lifecycle.json'
-
-    def stop(status: str, reason: str) -> dict:
-        result = _read(state_path)
-        result.update(status=status, phase='seed_search', stop_reason=reason,
-                      goal_status='goal_not_met', holdout_status='not_run',
-                      publication_status='unchanged')
-        result.pop('last_error', None)
-        _APPWORLD_LAYOUT.save(state_path, result)
-        return result
-
-    _resume_withdrawn_failed_seed_count_policy()
-    search = seed_search()
-    if search.get('status') == 'review_required':
-        return stop('review_required', 'appworld_five_failed_seeds_review_required')
-    generation = search.get('automatic_seed_generation') or {}
-    # An interrupted freeze can have no artifact yet. Its reserved label is
-    # durable before the first model call, and must not move on a 429/cancel.
-    if (generation.get('round') == search.get('round', 1)
-            and generation.get('status') in ('pending', 'frozen', 'duplicate')
-            and str(seed.resolve()) in (generation.get('source_seed'), generation.get('seed'))
-            and not (_controller_gepa_root() / 'plan.json').is_file()):
-        seed = Path(generation['seed'])
-        label = generation['seed_label']
-    while True:
-        from learning import validate_seed_label
-        validate_seed_label(label)
-        seed = seed.resolve()
-        if seed != (OUTPUT / 'published' / label / 'strategy.json').resolve():
-            raise RuntimeError('appworld_seed_artifact_must_match_publish_label')
-        _EXPERIMENT_LABEL = label
-        if generation.get('seed') == str(seed.resolve()):
-            if generation.get('status') == 'duplicate':
-                return stop('not_qualified', 'appworld_seed_generation_duplicate')
-            if generation.get('status') == 'pending':
-                # Regenerate approved TRAIN sources through the existing
-                # native compiler. Derivation flags from an earlier manual
-                # command cannot silently reuse its frozen controls here.
-                keys = ('APPWORLD_AUTH_PHASE_FROM', 'APPWORLD_INCREMENTAL_TRAINING_FROM',
-                        'APPWORLD_ENGLISH_TRIGGERS', 'APPWORLD_ENGLISH_TRIGGERS_FROM',
-                        'APPWORLD_REPLAY_ENGLISH_DRAFTS_ONLY', 'APPWORLD_REGENERATE_CONTROLS')
-                previous = {key: os.environ.get(key) for key in keys}
-                try:
-                    for key in keys:
-                        os.environ.pop(key, None)
-                    reuse = (generation.get('generation_feedback') or {}).get('control_source_reuse')
-                    if reuse is not None:
-                        source = _spent_control_reuse_source(generation, search)
-                        if source is None:
-                            raise RuntimeError('appworld_spent_control_reuse_source_invalid')
-                        os.environ['APPWORLD_ENGLISH_TRIGGERS'] = '1'
-                        os.environ['APPWORLD_ENGLISH_TRIGGERS_FROM'] = source.parent.name
-                    else:
-                        os.environ['APPWORLD_REGENERATE_CONTROLS'] = '1'
-                    _run_common_all(seed, label, stop_at='seed', **budget_arguments)
-                finally:
-                    for key, value in previous.items():
-                        if value is None:
-                            os.environ.pop(key, None)
-                        else:
-                            os.environ[key] = value
-                search = seed_search()
-                duplicate = _duplicate_seed_source(seed, search, Path(generation['source_seed']))
-                generation.update(status='duplicate' if duplicate else 'frozen',
-                                  seed_version=_candidate_identity(seed, label).get('seed_version'))
-                if duplicate:
-                    generation['duplicate_of'] = duplicate
-                search['automatic_seed_generation'] = generation
-                _save_search(search)
-                if duplicate:
-                    return stop('not_qualified', 'appworld_seed_generation_duplicate')
-        try:
-            return _run_common_all(seed, label, stop_at=None, **budget_arguments)
-        except RuntimeError as error:
-            failed = _formal_seed_failure(seed, error)
-            if failed is None:
-                raise
-            search = seed_search()
-            if search.get('status') == 'review_required':
-                return stop('review_required', 'appworld_five_failed_seeds_review_required')
-            # Reserve an immutable unused label. Previous searches may leave
-            # publications behind after their GEPA directory was cleared.
-            base = f"seed-auto-r{search.get('round', 1)}-a{failed['attempt'] + 1}"
-            next_label, suffix = base, 1
-            while (OUTPUT / 'published' / next_label).exists():
-                suffix += 1
-                next_label = f'{base}-{suffix}'
-            next_seed = (OUTPUT / 'published' / next_label / 'strategy.json').resolve()
-            generation = {'round': search.get('round', 1), 'status': 'pending',
-                          'seed': str(next_seed), 'seed_label': next_label,
-                          'source_seed': str(seed.resolve()), 'source_attempt': failed['attempt'],
-                          'method': 'approved_training_native_seed'}
-            prior = (search.get('automatic_seed_generation') or {}).get('generation_feedback') or {}
-            if prior.get('control_source_reuse') is not None:
-                if _spent_control_reuse_source(search['automatic_seed_generation'], search) is None:
-                    raise RuntimeError('appworld_spent_control_reuse_source_invalid')
-                generation['generation_feedback'] = {'control_source_reuse': prior['control_source_reuse']}
-            search.update(current_seed=str(next_seed), automatic_seed_generation=generation)
-            _save_search(search)
-            seed, label = next_seed, next_label
-
-
-def _request_native_gepa_budget_extension(seed: Path) -> dict | None:
-    """Expand a completed search's actual cumulative budget, retaining its job."""
-    import offline_gepa
-    plan = _read(offline_gepa.PLAN)
-    if not _native_gepa_no_new_candidate(seed):
-        return None
-    job_id = offline_gepa._recorded_job(_read(seed))
-    status = _read(offline_gepa.STATUS)
-    tree_path = offline_gepa.WORKSPACE / 'agent-evaluation' / str(job_id) / 'search/tree.json'
-    tree = _read(tree_path)
-    job = ((_read(offline_gepa.WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {})
-           .get(job_id) or {})
-    if (not job_id or status.get('job_id') != job_id or job.get('status') != 'rejected'
-            or job.get('published') is True or job.get('cancel_requested') is True
-            or tree.get('active') is not None or tree.get('batch') is not None
-            or tree.get('final_holdout') or tree.get('holdout_started') is True):
-        return None
-    old = _read(offline_gepa.CONFIG / 'gepa.json')
-    previous = {key: old.get(key) for key in ('max_rounds', 'max_model_calls', 'max_trials', 'timeout_ms')}
-    caps = {'max_rounds': 256, 'max_model_calls': 1024, 'max_trials': 20000,
-            'timeout_ms': 7 * 24 * 3600000}
-    if any(type(previous[key]) is not int or not 0 < previous[key] <= cap
-           for key, cap in caps.items()):
-        raise RuntimeError('appworld_gepa_previous_budget_invalid')
-    search_plan = plan.get('search') or {}
-    if any(search_plan.get(key) != previous[key] for key in ('max_rounds', 'max_model_calls')):
-        raise RuntimeError('appworld_gepa_previous_budget_unverified')
-    stop = tree.get('stop_reason')
-    stop_key = {'model_budget': 'max_model_calls', 'max_rounds': 'max_rounds',
-                'gepa_search_time_reserved': 'timeout_ms'}.get(stop)
-    if not stop_key or previous[stop_key] >= caps[stop_key]:
-        return None
-    # Native COMBEE may stop while calls_used is still below its old limit.
-    # The original plan/config is the budget basis; never infer it from usage.
-    history = tree.get('budget_extensions') or []
-    if tree.get('reflection_exhausted') is True and not (
-            isinstance(history, list) and history and
-            history[-1].get('max_model_calls') == previous['max_model_calls']):
-        return None
-    requested = dict(previous)
-    for key in ('max_rounds', 'max_model_calls', 'max_trials'):
-        requested[key] = min(caps[key], previous[key] * 2)
-    if stop_key == 'timeout_ms':
-        requested['timeout_ms'] = min(caps['timeout_ms'], previous['timeout_ms'] * 2)
-    receipt = {'job_id': job_id, 'seed': str(seed.resolve()), 'stop_reason': stop,
-               'previous_limits': previous, 'requested_limits': requested,
-               'rounds_used': tree.get('rounds'), 'model_calls_used': tree.get('model_calls')}
-    plan['budget_extension'] = receipt
-    offline_gepa.save(offline_gepa.PLAN, plan)
-    state_path = _controller_gepa_root() / 'lifecycle.json'
-    lifecycle = _read(state_path)
-    stages = lifecycle.get('stage_results') or {}
-    for name in ('gepa_prepare', 'gepa_run', 'comparison500', 'publish'):
-        if name in stages:
-            stages[name] = dict(stages[name], status='pending', gate_passed=None,
-                reason='appworld_gepa_cumulative_budget_extension')
-    lifecycle.update(stage_results=stages, status='pending', phase='gepa_prepare')
-    lifecycle.pop('last_error', None)
-    _APPWORLD_LAYOUT.save(state_path, lifecycle)
-    return requested
-
-
-def _retire_native_search_pointer(search: dict, receipt: dict) -> None:
-    """Retire only the active pointers after their complete receipts are saved."""
-    import offline_gepa
-    if _native_gepa_service_active():
-        raise RuntimeError('appworld_native_gepa_writer_active')
-    saved = next((item for item in search.get('native_job_history') or []
-                  if item.get('job_id') == receipt['job_id']), None)
-    if not saved or saved.get('submission', {}).get('job_id') != receipt['job_id']:
-        raise RuntimeError('appworld_gepa_terminal_history_missing')
-    plan = _read(offline_gepa.PLAN)
-    if plan:
-        if plan != saved.get('plan'):
-            raise RuntimeError('appworld_gepa_active_plan_changed')
-        offline_gepa.PLAN.unlink()
-    submission = _read(offline_gepa.GEPA / 'submission.json')
-    if submission:
-        if submission != saved.get('submission'):
-            raise RuntimeError('appworld_gepa_active_submission_changed')
-        (offline_gepa.GEPA / 'submission.json').unlink()
-    state_path = _controller_gepa_root() / 'lifecycle.json'
-    state = _read(state_path)
-    state['stage_results'] = {name: value for name, value in
-        (state.get('stage_results') or {}).items() if name in {'prepare', 'train'}}
-    state.update(status='pending', phase='seed')
-    state.pop('last_error', None)
-    _APPWORLD_LAYOUT.save(state_path, state)
-
-
-def _completed_failed_final_checkpoint(state: dict) -> dict | None:
-    """Read-only full final proof: a business rejection is not an execution fault."""
-    if (state.get('phase') != 'comparison500' or state.get('cancel_requested')
-            or state.get('status') not in ('running', 'pending', 'failed', 'blocked')):
-        return None
-    stage = (state.get('stage_results') or {}).get('comparison500') or {}
-    if stage.get('status') != 'complete' or stage.get('gate_passed') is not False:
-        return None
-    failure = 'stage_gate_not_passed:comparison500'
-    if any(value not in (None, '', failure, 'RuntimeError:' + failure)
-           for value in (state.get('last_error'), stage.get('reason'))):
-        return None
-    import offline_gepa
-    try:
-        candidate = state.get('candidate') or {}
-        seed = Path(candidate['seed_artifact']).resolve()
-        if (candidate != _candidate_identity(seed, seed.parent.name)
-                or offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
-                or _read(offline_gepa.PLAN).get('seed') != str(seed)):
-            return None
-        job_id = offline_gepa._recorded_job(_read(seed))
-        status = _read(offline_gepa.STATUS)
-        root = offline_gepa.WORKSPACE / 'agent-evaluation' / str(job_id)
-        tree = _read(root / 'search/tree.json')
-        job = (_read(offline_gepa.WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {}).get(job_id) or {}
-        if (not job_id or status.get('job_id') != job_id or status.get('retry_error')
-                or job.get('status') not in ('passed', 'rejected') or job.get('error')
-                or job.get('cancel_requested') or job.get('final_holdout_replay')
-                or tree.get('status') != 'completed' or tree.get('error')
-                or tree.get('holdout_started') is not True or tree.get('active') is not None
-                or tree.get('batch') is not None
-                or tree.get('seed_version') != offline_gepa.controller.version(_read(seed))
-                or any(not tree.get(k) or tree[k] != job.get(k)
-                       for k in ('evaluation_context', 'candidate_evaluation_context'))
-                or (job.get('search') or {}).get('final_holdout') != tree.get('final_holdout')):
-            return None
-        prepared = offline_gepa.publish(proof_only=True, source_tree=root / 'search/tree.json', prepare_only=True)
-        proof = prepared['manifest']
-        checks = proof.get('candidate_goal_checks') or []
-        if (proof != _read(offline_gepa.GEPA / 'final-comparison/manifest.json')
-                or proof.get('source_job') != job_id or proof.get('goal_passed') is not False
-                or not checks or any(item.get('goal_passed') is not False
-                    or (item.get('gate') or {}).get('coverage_pass') is not True for item in checks)):
-            return None
-        if prepared['comparison'] != _read(Path(proof['source_comparison'])):
-            return None
-        import hashlib
-        for item in checks:
-            comparison = _read(Path(item['comparison']))
-            report = Path(comparison['source_report']).resolve()
-            if not report.is_relative_to((root / 'search').resolve()):
-                return None
-            entries = [entry for entry in (tree.get('evaluations') or {}).values()
-                       if (root / 'search' / str(entry.get('report') or '')).resolve() == report
-                       and entry.get('version') == item.get('version')
-                       and entry.get('status') == 'complete' and entry.get('split') == 'holdout']
-            if len(entries) != 1:
-                return None
-            entry = entries[0]
-            digest = entry.get('report_hash')
-            if (not digest or hashlib.sha256(report.read_bytes()).hexdigest() != digest
-                    or (_read(report.with_name('manifest.json')).get('files') or {}).get('report.json') != digest
-                    or any(entry.get(k) != tree[k] for k in
-                           ('evaluation_context', 'candidate_evaluation_context'))):
-                return None
-        # Retain only the existing immutable proof. No holdout task diagnostics
-        # enter automatic_seed_generation: the next model sees TRAIN/32/100 only.
-        return {'job_id': job_id, 'seed': str(seed), 'proof': proof}
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-        return None
-
-
-def _reserve_after_unqualified_native_search(seed: Path, *, final_rejection: dict | None = None) -> tuple[Path, str]:
-    """Retain a terminal native tree before selecting a distinct TRAIN seed."""
-    import offline_gepa
-    if final_rejection is None and not _native_gepa_no_new_candidate(seed):
-        raise RuntimeError('appworld_gepa_terminal_receipt_invalid')
-    if final_rejection is not None and final_rejection != _completed_failed_final_checkpoint(
-            _read(_controller_gepa_root() / 'lifecycle.json')):
-        raise RuntimeError('appworld_gepa_terminal_receipt_invalid')
-    job_id = offline_gepa._recorded_job(_read(seed))
-    tree_path = offline_gepa.WORKSPACE / 'agent-evaluation' / str(job_id) / 'search/tree.json'
-    tree = _read(tree_path)
-    job = ((_read(offline_gepa.WORKSPACE / 'agent-evaluation/state.json').get('jobs') or {})
-           .get(job_id) or {})
-    if (not job_id or job.get('cancel_requested') is True or tree.get('active') is not None
-            or tree.get('batch') is not None
-            or (final_rejection is None and (job.get('status') != 'rejected'
-                or job.get('published') is True or tree.get('holdout_started') is True
-                or tree.get('final_holdout')))
-            or (final_rejection is not None and (final_rejection['job_id'] != job_id
-                or final_rejection['seed'] != str(seed.resolve())))):
-        raise RuntimeError('appworld_gepa_terminal_receipt_invalid')
-    search = seed_search()
-    receipt = {'job_id': job_id, 'seed': str(seed.resolve()), 'tree': str(tree_path),
-               'stop_reason': tree.get('stop_reason'), 'rounds': tree.get('rounds'),
-               'model_calls': tree.get('model_calls'), 'trials_used': tree.get('trials_used'),
-               'submission': _read(offline_gepa.GEPA / 'submission.json'),
-               'plan': _read(offline_gepa.PLAN),
-               'lifecycle': _read(_controller_gepa_root() / 'lifecycle.json')}
-    if final_rejection is not None:
-        receipt.update(stop_reason='appworld_gepa_final_goal_not_met',
-                       final_proof=final_rejection['proof'])
-    history = search.setdefault('native_job_history', [])
-    if not any(item.get('job_id') == job_id for item in history):
-        history.append(receipt)
-    attempt = next((item for item in reversed(search.get('attempts') or [])
-                    if item.get('seed') == str(seed.resolve())), None)
-    if attempt:
-        _retain_seed_generation_diagnostic(attempt, seed)
-    generation = search.get('automatic_seed_generation') or {}
-    if generation.get('seed') == str(seed.resolve()):
-        generations = search.setdefault('generation_history', [])
-        if not any(item.get('seed') == generation['seed'] for item in generations):
-            generations.append(dict(generation))
-    pending = search.get('automatic_seed_generation') or {}
-    if (pending.get('status') == 'pending' and pending.get('source_seed') == str(seed.resolve())
-            and (pending.get('native_search_feedback') or {}).get('job_id') == job_id):
-        _retire_native_search_pointer(search, receipt)
-        return Path(pending['seed']), pending['seed_label']
-    index = max((item.get('attempt', 0) for item in search.get('attempts') or []), default=0) + 1
-    base = f"seed-auto-r{search.get('round', 1)}-a{index}"
-    label, suffix = base, 1
-    while (OUTPUT / 'published' / label).exists():
-        suffix += 1
-        label = f'{base}-{suffix}'
-    candidate = (OUTPUT / 'published' / label / 'strategy.json').resolve()
-    generation = {'round': search.get('round', 1), 'status': 'pending',
-        'seed': str(candidate), 'seed_label': label, 'source_seed': str(seed.resolve()),
-        'source_attempt': attempt.get('attempt') if attempt else None,
-        'method': 'approved_training_native_seed', 'native_search_feedback': {
-            key: receipt[key] for key in ('job_id', 'tree', 'stop_reason', 'rounds', 'model_calls', 'trials_used')}}
-    search.update(current_seed=str(candidate), automatic_seed_generation=generation)
-    _save_search(search)
-    _retire_native_search_pointer(search, receipt)
-    return candidate, label
-
-
-def _rate_limited_native_resume_progress(state: dict, seed: Path | None = None) -> dict | None:
-    """Allow only the recorded, unchanged seed's unfinished native rate checkpoint."""
-    if state.get('phase') != 'gepa_run':
-        return None
-    reference = (state.get('candidate') or {}).get('seed_artifact')
-    if not isinstance(reference, str):
-        return None
-    candidate = Path(reference).resolve()
-    if seed is not None and candidate != Path(seed).resolve():
-        return None
-    import offline_gepa
-    if offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve():
-        return None
-    try:
-        artifact = _read(candidate)
-        if not artifact or _read(offline_gepa.PLAN).get('seed') != str(candidate):
-            return None
-        job_id = offline_gepa._recorded_job(artifact)
-        if not job_id:
-            return None
-        receipt_job = _read(offline_gepa.STATUS).get('job_id')
-        lifecycle_job = (((state.get('stage_results') or {}).get('gepa_run') or {})
-                         .get('data') or {}).get('job_id')
-        if ((receipt_job is not None and receipt_job != job_id)
-                or (lifecycle_job is not None and lifecycle_job != job_id)):
-            return None
-        native_state = _read(offline_gepa.WORKSPACE / 'agent-evaluation/state.json')
-        job = (native_state.get('jobs') or {}).get(job_id) or {}
-        tree = _read(offline_gepa.WORKSPACE / 'agent-evaluation' / job_id / 'search/tree.json')
-        progress = offline_gepa.progress(job_id)
-        if (progress.get('job_id') != job_id or progress.get('job_status') != 'error'
-                or progress.get('job_error') != 'gepa_model_rate_limited'
-                or progress.get('cancel_requested') or job.get('published')
-                or job.get('final_holdout_replay') or tree.get('holdout_started')
-                or tree.get('final_holdout') or tree.get('status') != 'error'
-                or tree.get('error') != 'gepa_model_rate_limited'):
-            return None
-        return progress
-    except (OSError, ValueError, TypeError, RuntimeError, AttributeError):
-        return None
-
-
-def _initial_native_review_progress(state: dict, seed: Path | None = None) -> dict | None:
-    if state.get('phase') != 'gepa_run' or state.get('cancel_requested'):
-        return None
-    reference = (state.get('candidate') or {}).get('seed_artifact')
-    if not isinstance(reference, str):
-        return None
-    candidate = Path(reference).resolve()
-    if seed is not None and candidate != Path(seed).resolve():
-        return None
-    import offline_gepa
-    try:
-        if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
-                or _read(offline_gepa.PLAN).get('seed') != str(candidate)):
-            return None
-        artifact = _read(candidate)
-        job_id = offline_gepa._recorded_job(artifact)
-        receipt = _read(offline_gepa.STATUS).get('job_id')
-        lifecycle = ((((state.get('stage_results') or {}).get('gepa_run') or {}).get('data') or {}).get('job_id'))
-        if not job_id or any(value is not None and value != job_id for value in (receipt, lifecycle)):
-            return None
-        return offline_gepa.progress(job_id) if offline_gepa.initial_review_recovery(artifact, job_id) else None
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-        return None
-
-
-def _final_native_review_progress(state: dict, seed: Path | None = None) -> dict | None:
-    if state.get('phase') != 'gepa_run' or state.get('cancel_requested'):
-        return None
-    reference = (state.get('candidate') or {}).get('seed_artifact')
-    if not isinstance(reference, str):
-        return None
-    candidate = Path(reference).resolve()
-    if seed is not None and candidate != Path(seed).resolve():
-        return None
-    import offline_gepa
-    try:
-        if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
-                or _read(offline_gepa.PLAN).get('seed') != str(candidate)):
-            return None
-        artifact = _read(candidate)
-        job_id = offline_gepa._recorded_job(artifact)
-        receipt = _read(offline_gepa.STATUS).get('job_id')
-        lifecycle = ((((state.get('stage_results') or {}).get('gepa_run') or {}).get('data') or {}).get('job_id'))
-        if not job_id or any(value is not None and value != job_id for value in (receipt, lifecycle)):
-            return None
-        return offline_gepa.progress(job_id) if offline_gepa.final_holdout_review_recovery(artifact, job_id) else None
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-        return None
-
-
-def _autonomous_retry_reason(error: Exception, state: dict) -> str | None:
-    """Classify saved temporary faults without relaxing a source or score gate."""
-    import re
-    temporary = _temporary_seed_error(error)
-    if temporary:
-        return temporary
-    reason = str(error)
-    if reason.startswith('RuntimeError:'):
-        reason = reason[len('RuntimeError:'):]
-    transport = re.fullmatch(r'appworld_seed_recovery_exhausted:(model_http_(?:408|429|500|502|503|504)|model_transport_(?:timeout|interrupted|temporary)|native_writer_busy)', reason)
-    if transport:
-        return transport.group(1)
-    if re.fullmatch(r'offline_gepa\.py_failed:[0-9]+', reason):
-        if (_rate_limited_native_resume_progress(state) is not None
-                or _initial_native_review_progress(state) is not None
-                or _final_native_review_progress(state) is not None):
-            return 'appworld_native_gepa_checkpoint_requires_resume'
-    if (re.fullmatch(r'compare\.py_failed:[0-9]+', reason)
-            or reason == f"stage_gate_not_passed:{state.get('phase')}"
-            or reason == 'appworld_stage_review_pending'):
-        count = {'pilot32': 32, 'validation100': 100}.get(state.get('phase'))
-        reference = (state.get('candidate') or {}).get('seed_artifact')
-        if count and isinstance(reference, str):
-            seed = Path(reference).resolve()
-            output = stage_path(seed, count).parent.resolve()
-            progress = _read(output / 'progress.json')
-            artifact = _read(seed)
-            if count == 100 and not progress and not state.get('cancel_requested'):
-                if _baseline100_worker_checkpoint(seed, state) == 'transport':
-                    return 'appworld_stage_review_pending'
-            if (artifact and output.is_relative_to(_controller_gepa_root().resolve())
-                    and progress.get('artifact') == artifact
-                    and _stage_review_recovery_state(output, count, baseline=False)
-                        in ('transport', 'cached', 'projection')):
-                return 'appworld_stage_review_pending'
-        return None
-    if reason in {'appworld_native_gepa_writer_active',
-                  'appworld_native_gepa_checkpoint_requires_resume',
-                  'appworld_training_recovery_exhausted',
-                  'offline_gepa_management_start_timeout'}:
-        return reason
-    return None
-
-
-def _reserve_after_duplicate_generation() -> tuple[Path, str]:
-    """Keep the duplicate and its paid receipt; compile the next immutable label."""
-    search = seed_search()
-    generation = search.get('automatic_seed_generation') or {}
-    source = Path(generation['source_seed']).resolve()
-    candidate = Path(generation['seed']).resolve()
-    if (generation.get('status') != 'duplicate'
-            or not _duplicate_seed_source(candidate, search, source)):
-        raise RuntimeError('appworld_duplicate_generation_receipt_invalid')
-    history = search.setdefault('generation_history', [])
-    if not any(item.get('seed') == str(candidate) for item in history):
-        record = dict(generation)
-        _retain_seed_generation_diagnostic(record, candidate)
-        history.append(record)
-    index = max([0] + [item.get('attempt', 0) for item in search.get('attempts', [])]) + 1
-    base = f"seed-auto-r{search.get('round', 1)}-a{index}"
-    label, suffix = base, 1
-    while (OUTPUT / 'published' / label).exists():
-        suffix += 1
-        label = f'{base}-{suffix}'
-    candidate = (OUTPUT / 'published' / label / 'strategy.json').resolve()
-    search.update(current_seed=str(candidate), automatic_seed_generation={
-        'round': search.get('round', 1), 'status': 'pending', 'seed': str(candidate),
-        'seed_label': label, 'source_seed': str(source),
-        'source_attempt': generation.get('source_attempt'),
-        'method': 'approved_training_native_seed',
-        'duplicate_feedback': {'candidate': generation['seed'],
-                               'duplicate_of': generation.get('duplicate_of')}})
-    reuse = (generation.get('generation_feedback') or {}).get('control_source_reuse')
-    if reuse is not None:
-        if _spent_control_reuse_source(generation, search) is None:
-            raise RuntimeError('appworld_spent_control_reuse_source_invalid')
-        search['automatic_seed_generation']['generation_feedback'] = {'control_source_reuse': reuse}
-    _save_search(search)
-    return candidate, label
-
-
-def _qualified_spent_control_source(source: Path, diagnostic: dict) -> bool:
-    """Prove the existing frozen controls against current TRAIN, without a model."""
-    from learning import _readiness
-    try:
-        artifact = _read(source)
-        policy = artifact.get('policy') or {}
-        snapshot = policy.get('snapshot') or {}
-        options = policy.get('options') or {}
-        manifest = _read(source.with_name('manifest.json'))
-        identity = snapshot.get('identity') or {}
-        shadow = snapshot.get('options') or {}
-        if (artifact.get('schema_version') != 1 or artifact.get('level') != 'L3'
-                or artifact.get('user_id') != _APPWORLD_LAYOUT.OWNER
-                or (artifact.get('agent') or {}).get('name') != _APPWORLD_LAYOUT.AGENT
-                or identity.get('user_id') != _APPWORLD_LAYOUT.OWNER
-                or identity.get('agent_id') != _APPWORLD_LAYOUT.AGENT
-                or shadow.get('require_validated_evidence') is not True
-                or shadow.get('target_scopes') != [_APPWORLD_LAYOUT.SCOPE]
-                or manifest.get('validated_evidence_required') is not True
-                or not isinstance(manifest.get('version'), str)
-                or _APPWORLD_LAYOUT.version(artifact) != manifest['version']
-                or diagnostic.get('scope') != _APPWORLD_LAYOUT.SCOPE
-                or diagnostic.get('published') is not False
-                or (diagnostic.get('evidence_refresh') or {}).get('status') != 'completed'
-                or (diagnostic.get('evidence_refresh') or {}).get('model_calls') != 0):
-            return False
-        memory = _readiness(_APPWORLD_LAYOUT).resolve()
-        if (not memory.is_file() or diagnostic.get('canonical_memory_source') != str(memory)
-                or diagnostic.get('memory_source') != str(memory)):
-            return False
-        approved = {(row['memory_id'], row['content_revision']) for row in options.get('approved_experiences', [])}
-        cards = {(row['memory_id'], row['content_revision']): row for row in snapshot.get('experiences', [])}
-        learned = [rule for name in ('action_rules', 'loop_rules', 'schedule_rules')
-                   for rule in options.get(name, []) if rule.get('source_experience')]
-        if (not approved or not learned or not approved.issubset(cards)
-                or any((rule['source_experience'].get('memory_id'),
-                        rule['source_experience'].get('content_revision')) not in approved for rule in learned)):
-            return False
-        current = json.loads(_APPWORLD_LAYOUT.native(_APPWORLD_LAYOUT.BINARY, _APPWORLD_LAYOUT.ROOT,
-            ['runtime', 'compile'], {'memory_path': str(memory), 'identity': identity,
-                                    'shadow_options': shadow, 'options': options}))
-        actual = {(row['memory_id'], row['content_revision']): row
-                  for row in current.get('snapshot', {}).get('experiences', [])}
-        return (current.get('options') == options and all(actual.get(ref) == cards[ref] for ref in approved))
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-        return False
-
-
-def _spent_control_model_calls(control: dict) -> int | None:
-    """A fixed local rejection can spend three replies, or two empty replies."""
-    if not isinstance(control, dict):
-        return None
-    calls, attempts = control.get('model_calls'), control.get('attempts')
-    if (type(calls) is not int or calls not in (2, 3)
-            or control.get('validated_model_draft') is not None
-            or control.get('status') not in {'format_repair_exhausted', 'pending', 'no_controls'}
-            or not isinstance(attempts, list)
-            or any(not isinstance(row, dict) or row.get('status') not in
-                   {'format_invalid', 'native_contract_rejected', 'no_controls'} for row in attempts)
-            or control.get('evidence_fallback') != {
-                'status': 'insufficient_evidence',
-                'reason': 'appworld_evidence_recovery_no_cited_failure_pair', 'model_calls': 0}):
-        return None
-    if calls == 2:
-        if (control.get('status') != 'no_controls' or len(attempts) != 2
-                or any(row.get('status') != 'no_controls' for row in attempts)):
-            return None
-    elif len(attempts) < 3:
-        return None
-    return calls
-
-
-def _spent_control_reuse_source(generation: dict, search: dict) -> Path | None:
-    """An archived rejection grants only reuse of its still-authorized controls."""
-    reuse = (generation.get('generation_feedback') or {}).get('control_source_reuse')
-    if not isinstance(reuse, dict) or set(reuse) != {'candidate', 'source_seed'}:
-        return None
-    source = generation.get('source_seed')
-    records = [row for row in search.get('generation_history', [])
-               if row.get('seed') == reuse.get('candidate')]
-    if (not isinstance(source, str) or not isinstance(reuse.get('source_seed'), str) or len(records) != 1):
-        return None
-    original = records[0]
-    diagnostic = original.get('seed_generation_diagnostic') or {}
-    control = diagnostic.get('control_learning') or {}
-    calls = _spent_control_model_calls(control)
-    if (original.get('status') != 'unsupported' or original.get('source_seed') != reuse['source_seed']
-            or original.get('reason') not in {'appworld_seed_control_format_repair_exhausted',
-                                             'appworld_evidence_recovery_no_cited_failure_pair'}
-            or diagnostic.get('seed_label') != Path(reuse['candidate']).parent.name
-            or calls is None
-            or calls == 2 and original.get('reason') != 'appworld_evidence_recovery_no_cited_failure_pair'
-            or not _qualified_spent_control_source(Path(source).resolve(), diagnostic)):
-        return None
-    current = Path(source).resolve()
-    from learning import validate_seed_label
-    try:
-        validate_seed_label(current.parent.name)
-    except ValueError:
-        return None
-    if current != (OUTPUT / 'published' / current.parent.name / 'strategy.json').resolve():
-        return None
-    # A formally failed English candidate still owns the same legal control
-    # bottom layer. Scores do not invalidate its source or grant new controls.
-    before = (_read(Path(reuse['source_seed'])).get('policy') or {}).get('options') or {}
-    after = (_read(current).get('policy') or {}).get('options') or {}
-    if any(before.get(name, []) != after.get(name, [])
-           for name in ('action_rules', 'loop_rules', 'schedule_rules')):
-        return None
-    return Path(source).resolve()
-
-
-def _unavailable_seed_generation_checkpoint(error: Exception, state: dict) -> dict | None:
-    """Read-only authority for a spent local rejection of this exact pending seed."""
-    reason = str(error)
-    if reason.startswith('RuntimeError:'):
-        reason = reason[len('RuntimeError:'):]
-    saved = (state.get('stage_results') or {}).get('seed') or {}
-    saved_reason = str(saved.get('reason', ''))
-    if saved_reason.startswith('RuntimeError:'):
-        saved_reason = saved_reason[len('RuntimeError:'):]
-    if (reason not in {'appworld_english_trigger_no_evidence_supported_fallback',
-                      'appworld_seed_control_format_repair_exhausted',
-                      'appworld_evidence_recovery_no_cited_failure_pair'}
-            or state.get('phase') != 'seed' or state.get('cancel_requested')
-            or state.get('status') == 'cancelled' or saved.get('status') != 'failed'
-            or saved_reason != reason):
-        return None
-    # The inner seed-search loop can advance several labels before failing;
-    # its saved candidate is authoritative, while the outer seed may be old.
-    reference = (state.get('candidate') or {}).get('seed_artifact')
-    if not isinstance(reference, str):
-        return None
-    seed = Path(reference).resolve()
-    search = seed_search()
-    generation = search.get('automatic_seed_generation') or {}
-    label = seed.parent.name
-    from learning import validate_seed_label
-    try:
-        validate_seed_label(label)
-    except ValueError:
-        return None
-    if (seed != (OUTPUT / 'published' / label / 'strategy.json').resolve()
-            or seed.exists() or generation.get('status') != 'pending'
-            or generation.get('method') != 'approved_training_native_seed'
-            or generation.get('round') != search.get('round', 1)
-            or generation.get('seed') != str(seed) or generation.get('seed_label') != label
-            or search.get('current_seed') != str(seed)
-            or (state.get('candidate') or {}).get('seed_artifact') != str(seed)
-            or (_controller_gepa_root() / 'plan.json').is_file()):
-        return None
-    diagnostic = _read(OUTPUT / 'training/seed-compile-status.json')
-    english = diagnostic.get('english_trigger_learning') or {}
-    fallback = english.get('evidence_fallback') or {}
-    if (diagnostic.get('seed_label') != label
-            or diagnostic.get('validated_evidence_required') is not True):
-        return None
-    import re
-    spent_control = reason != 'appworld_english_trigger_no_evidence_supported_fallback'
-    if spent_control:
-        last_error = state.get('last_error')
-        stop = state.get('stop_reason')
-        if (last_error not in (None, reason, 'RuntimeError:' + reason)
-                or stop not in (None, 'appworld_stage_failed', reason, 'RuntimeError:' + reason)
-                and not re.fullmatch(r'stage_gate_not_passed:(?:pilot32|validation100)', str(stop))):
-            return None
-        control = diagnostic.get('control_learning') or {}
-        calls = _spent_control_model_calls(control)
-        if (calls is None or calls == 2
-                and reason != 'appworld_evidence_recovery_no_cited_failure_pair'):
-            return None
-    elif (type(english.get('model_calls')) is not int or english['model_calls'] != 3
-            or fallback.get('status') != 'no_native_valid_trigger'
-            or fallback.get('model_calls') != 0):
-        return None
-    reference = generation.get('source_seed')
-    if not isinstance(reference, str):
-        return None
-    source = Path(reference).resolve()
-    try:
-        validate_seed_label(source.parent.name)
-    except ValueError:
-        return None
-    if (source == seed or source != (OUTPUT / 'published' / source.parent.name / 'strategy.json').resolve()
-            or not _read(source)):
-        return None
-    if spent_control and not _qualified_spent_control_source(source, diagnostic):
-        return None
-    return {'seed': str(seed), 'source_seed': str(source), 'generation': generation,
-            'search': search, 'reason': reason, 'spent_control': spent_control,
-            'model_calls': calls if spent_control else english['model_calls']}
-
-
-def _continue_unavailable_seed_generation(seed: Path, error: Exception, state: dict) -> tuple[Path, str] | None:
-    """Main owns advancement; the worker only checks the same saved authority."""
-    checkpoint = _unavailable_seed_generation_checkpoint(error, state)
-    if checkpoint is None:
-        return None
-    seed = Path(checkpoint['seed'])
-    source = Path(checkpoint['source_seed'])
-    generation, search, reason = (checkpoint[key] for key in ('generation', 'search', 'reason'))
-    history = search.setdefault('generation_history', [])
-    if not any(item.get('seed') == str(seed) for item in history):
-        record = dict(generation, status='unsupported', reason=reason)
-        _retain_seed_generation_diagnostic(record, seed)
-        history.append(record)
-    index = max([0] + [item.get('attempt', 0) for item in search.get('attempts', [])]) + 1
-    base = f"seed-auto-r{search.get('round', 1)}-a{index}"
-    used = {Path(item['seed']).parent.name for item in history if isinstance(item.get('seed'), str)}
-    next_label, suffix = base, 1
-    while next_label in used or (OUTPUT / 'published' / next_label).exists():
-        suffix += 1
-        next_label = f'{base}-{suffix}'
-    candidate = (OUTPUT / 'published' / next_label / 'strategy.json').resolve()
-    search.update(current_seed=str(candidate), automatic_seed_generation={
-        'round': search.get('round', 1), 'status': 'pending', 'seed': str(candidate),
-        'seed_label': next_label, 'source_seed': str(source),
-        'source_attempt': generation.get('source_attempt'), 'method': 'approved_training_native_seed',
-        'generation_feedback': {'candidate': str(seed), 'reason': reason,
-                                'model_calls': checkpoint['model_calls']}})
-    reuse = ({'candidate': str(seed), 'source_seed': str(source)} if checkpoint['spent_control']
-             else (generation.get('generation_feedback') or {}).get('control_source_reuse'))
-    if reuse is not None:
-        search['automatic_seed_generation']['generation_feedback']['control_source_reuse'] = reuse
-    _save_search(search)
-    return candidate, next_label
-
-
-def _autonomous_native_seed(seed: Path, state: dict) -> tuple[Path, str]:
-    """Synchronize a progressed inner prefix only to its immutable native job."""
-    candidate = state.get('candidate') or {}
-    reference = candidate.get('seed_artifact')
-    if not isinstance(reference, str) or Path(reference).resolve() == seed.resolve():
-        return seed, seed.parent.name  # The existing same-seed guards remain authoritative.
-    active = Path(reference).resolve()
-    label = active.parent.name
-    from learning import validate_seed_label
-    validate_seed_label(label)
-    if (active != (OUTPUT / 'published' / label / 'strategy.json').resolve()
-            or not active.is_file() or candidate != _candidate_identity(active, label)):
-        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
-    artifact = _read(active)
-    version = candidate.get('seed_version')
-    if not isinstance(version, str) or not version:
-        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
-    import offline_gepa
-    if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
-            or _read(offline_gepa.PLAN).get('seed') != str(active)):
-        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
-    job_id = offline_gepa._recorded_job(artifact)
-    status_job = _read(offline_gepa.STATUS).get('job_id')
-    stage_job = (((state.get('stage_results') or {}).get('gepa_run') or {}).get('data') or {}).get('job_id')
-    search = seed_search()
-    if (not job_id or status_job != job_id or stage_job not in (None, job_id)
-            or search.get('current_seed') != str(active)):
-        raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
-    return active, label
-
-
-def _run_all_autonomously(seed: Path, label: str, **budget_arguments) -> dict:
-    """Resume the same native-backed prefix until it finishes or needs a repair."""
-    state_path = _controller_gepa_root() / 'lifecycle.json'
-    retries = 0
-
-    def blocked(reason: str, *, cancelled: bool = False) -> dict:
-        state = _read(state_path)
-        state.update(status='cancelled' if cancelled else 'blocked', phase=state.get('phase') or 'starting',
-                     stop_reason=reason, goal_status='goal_not_met', publication_status='unchanged')
-        _APPWORLD_LAYOUT.save(state_path, state)
-        return state
-
-    native_resume_checked = False
-    while True:
-        try:
-            if not native_resume_checked:
-                native_resume_checked = True
-                final_rejection = _completed_failed_final_checkpoint(_read(state_path))
-                if final_rejection is not None:
-                    seed, label = _reserve_after_unqualified_native_search(
-                        Path(final_rejection['seed']), final_rejection=final_rejection)
-                native_status = _read(_controller_gepa_root() / 'status.json')
-                native_plan = _read(_controller_gepa_root() / 'plan.json')
-                if (native_status.get('job_status') == 'rejected'
-                        and native_plan.get('seed') == str(seed.resolve())
-                        and _native_gepa_no_new_candidate(seed)):
-                    requested = _request_native_gepa_budget_extension(seed)
-                    if requested:
-                        budget_arguments['gepa_max_model_calls'] = requested['max_model_calls']
-                    else:
-                        seed, label = _reserve_after_unqualified_native_search(seed)
-            result = _run_all_with_seed_search(seed, label, **budget_arguments)
-            if (result.get('status') == 'not_qualified'
-                    and result.get('stop_reason') == 'appworld_seed_generation_duplicate'):
-                seed, label = _reserve_after_duplicate_generation()
-                continue
-            if (result.get('status') == 'not_qualified'
-                    and result.get('stop_reason') == 'appworld_gepa_no_new_qualified_candidate'):
-                state = _read(state_path)
-                if result.get('candidate') and result['candidate'] != state.get('candidate'):
-                    raise RuntimeError('appworld_autonomous_native_seed_binding_invalid')
-                seed, label = _autonomous_native_seed(seed, state)
-                requested = _request_native_gepa_budget_extension(seed)
-                if requested:
-                    budget_arguments['gepa_max_model_calls'] = requested['max_model_calls']
-                else:
-                    seed, label = _reserve_after_unqualified_native_search(seed)
-                continue
-            if (result.get('status') == 'pending'
-                    and (_initial_native_review_progress(_read(state_path)) is not None
-                         or _final_native_review_progress(_read(state_path)) is not None)):
-                raise RuntimeError('appworld_native_gepa_checkpoint_requires_resume')
-            return result
-        except Exception as error:
-            state = _read(state_path)
-            final_rejection = _completed_failed_final_checkpoint(state)
-            if (str(error) == 'stage_gate_not_passed:comparison500'
-                    and final_rejection is not None):
-                seed, label = _reserve_after_unqualified_native_search(
-                    Path(final_rejection['seed']), final_rejection=final_rejection)
-                continue
-            continuation = _continue_unavailable_seed_generation(seed, error, state)
-            if continuation is not None:
-                seed, label = continuation
-                continue
-            reason = _autonomous_retry_reason(error, state)
-            if reason is None:
-                return blocked(_stage_failure_reason(error))
-            rate_limited_resume = None
-            initial_review_resume = None
-            final_review_resume = None
-            if state.get('phase') == 'gepa_run' or reason.startswith('appworld_native_gepa_'):
-                import offline_gepa
-                try:
-                    seed, label = _autonomous_native_seed(seed, state)
-                except (RuntimeError, ValueError) as binding_error:
-                    return blocked(_stage_failure_reason(binding_error))
-                rate_limited_resume = _rate_limited_native_resume_progress(state, seed)
-                initial_review_resume = _initial_native_review_progress(state, seed)
-                final_review_resume = _final_native_review_progress(state, seed)
-                progress = rate_limited_resume or initial_review_resume or final_review_resume or offline_gepa.progress()
-                if progress.get('cancel_requested') or progress.get('job_status') == 'cancelled':
-                    return blocked('appworld_native_gepa_cancelled', cancelled=True)
-                used, limit = progress.get('model_calls'), progress.get('max_model_calls')
-                if (rate_limited_resume is None and final_review_resume is None
-                        and isinstance(used, (int, float)) and isinstance(limit, (int, float))
-                        and used >= limit):
-                    return blocked('appworld_gepa_model_budget_exhausted')
-                deadline = progress.get('deadline_ms')
-                if (rate_limited_resume is None and final_review_resume is None
-                        and isinstance(deadline, (int, float)) and time.time() * 1000
-                        >= deadline - progress.get('holdout_reserve_ms', 0)):
-                    return blocked('appworld_gepa_deadline_exhausted')
-                if (progress.get('job_status') == 'error'
-                        and progress.get('job_error') != 'gepa_model_rate_limited'
-                        and initial_review_resume is None):
-                    return blocked('appworld_native_gepa_unclassified_error')
-            retries += 1
-            delay = (15, 30, 60)[min(retries - 1, 2)]
-            # A validated rate checkpoint must resume its own frozen seed.
-            if rate_limited_resume is None and initial_review_resume is None and final_review_resume is None:
-                search = seed_search()
-                generation = search.get('automatic_seed_generation') or {}
-                if (generation.get('round') == search.get('round', 1)
-                        and generation.get('status') in ('pending', 'frozen', 'duplicate')):
-                    seed, label = Path(generation['seed']).resolve(), generation['seed_label']
-                elif isinstance(search.get('current_seed'), str):
-                    seed = Path(search['current_seed']).resolve()
-                    label = seed.parent.name
-            state.update(status='retry_wait', autonomous_recovery={
-                'retry': retries, 'reason': reason, 'delay_seconds': delay,
-                'seed_label': label, 'updated_at_ns': time.time_ns()})
-            _APPWORLD_LAYOUT.save(state_path, state)
-            _experiment_status('retry_wait', state.get('phase') or 'seed', reason=reason)
-            print(json.dumps({'phase': 'automatic_checkpoint_recovery', 'retry': retries,
-                              'seed_label': label, 'reason': reason,
-                              'delay_seconds': delay}), flush=True)
-            time.sleep(delay)
-
-
-def _worker_checkpoint_seed(state: dict) -> Path | None:
-    """Resolve the existing shared checkpoint, including a reserved new label."""
-    search = seed_search()
-    generation = search.get('automatic_seed_generation') or {}
-    reference = (state.get('candidate') or {}).get('seed_artifact')
-    if (generation.get('round') == search.get('round', 1)
-            and generation.get('status') in ('pending', 'frozen', 'duplicate')
-            and generation.get('seed') == search.get('current_seed')
-            and reference in (generation.get('seed'), generation.get('source_seed'))):
-        reference = generation.get('seed')
-    if not isinstance(reference, str):
-        return None
-    seed = Path(reference).resolve()
-    from learning import validate_seed_label
-    try:
-        validate_seed_label(seed.parent.name)
-    except ValueError:
-        return None
-    return seed if seed == (OUTPUT / 'published' / seed.parent.name / 'strategy.json').resolve() else None
-
-
-def _baseline100_worker_checkpoint(seed: Path, state: dict) -> str | None:
-    """Bind the pre-candidate L0 stage to its exact pilot and saved capture."""
-    import compare
-    import stage_gate
-    import re
-    try:
-        candidate = state.get('candidate') or {}
-        stage = (state.get('stage_results') or {}).get('validation100') or {}
-        if (state.get('phase') != 'validation100' or state.get('cancel_requested')
-                or state.get('last_error') or stage.get('gate_passed') is False
-                or (stage.get('reason') and not re.fullmatch(
-                    r'(?:RuntimeError:)?compare\.py_failed:[0-9]+', str(stage['reason'])))
-                or not stage_path(seed, 100).parent.resolve().is_relative_to(_controller_gepa_root().resolve())
-                or candidate != _candidate_identity(seed, seed.parent.name)
-                or seed_search().get('current_seed') != str(seed)
-                or _APPWORLD_LAYOUT.version(_read(seed)) != candidate.get('seed_version')):
-            return None
-        pilot = stage_path(seed, 32).resolve()
-        pilot_value = _read(pilot)
-        l0_reference = pilot_value.get('source_l0')
-        if (not pilot.is_relative_to(_controller_gepa_root().resolve())
-                or pilot_value.get('host_version') != _host_version()
-                or not isinstance(l0_reference, str)
-                or not Path(l0_reference).resolve().is_relative_to(_controller_gepa_root().resolve())):
-            return None
-        passed, proof = stage_gate.verify_stage('32', pilot, Path(l0_reference), seed)
-        if not passed or any(proof.get(key) is not True
-                for key in ('coverage_pass', 'goal_passed', 'seed_match')):
-            return None
-        output = _APPWORLD_LAYOUT.baseline_result(100, output_root=OUTPUT).parent.resolve()
-        if not output.is_relative_to(_controller_gepa_root().resolve()):
-            return None
-        config = _read(output / 'capture.config.json')
-        # Use the same public dataset order as compare.baseline_main; no 500
-        # result, task answer or compact score enters this qualification.
-        dataset_rows = [json.loads(line) for line in
-            (compare.DATASET / 'holdout.jsonl').read_text().splitlines() if line.strip()]
-        tasks = sorted(row['task_id'] for row in dataset_rows)[:100]
-        revisions = {row['task_id']: row['task_version'] for row in dataset_rows
-                     if row['task_id'] in tasks}
-        baseline = _read(OUTPUT / 'published/L0.json')
-        variants = config.get('variants') or []
-        if (len(tasks) != 100 or len(set(tasks)) != 100 or config.get('task_ids') != tasks
-                or config.get('splits') != ['holdout'] or config.get('repetitions') != 1
-                or config.get('max_trials') != 100 or len(variants) != 1
-                or variants[0].get('id') != 'candidate' or baseline.get('level') != 'L0'
-                or baseline.get('policy') is not None
-                or variants[0].get('version') != (baseline.get('agent') or {}).get('revision')
-                or variants[0].get('instrumentation_config') != str(_APPWORLD_LAYOUT.RUNTIME / 'l0-evaluation-service.json')
-                or _APPWORLD_LAYOUT.judge_projection(config) != _APPWORLD_LAYOUT.judge_projection()
-                or (output / 'capture.host-version').read_text().strip() != _host_version()):
-            return None
-        folders = [output / 'capture', *sorted(
-            (p for p in output.glob('capture-retry-*') if p.is_dir() and p.name.rsplit('-', 1)[-1].isdigit()),
-            key=lambda p: int(p.name.rsplit('-', 1)[-1]))]
-        # Normal recovery resumes the most recent attempt, never an older
-        # healthy folder selected to hide a later permanent failure.
-        folder = folders[-1]
-        started = _read(folder / 'started.json')
-        if (started.get('planned_trials') != 100 or not started.get('run_id')
-                or not started.get('dataset_version')):
-            return None
-        expected = _APPWORLD_LAYOUT.version(baseline)
-        healthy, temporary, seen = False, False, set()
-        for path in sorted((folder / 'trials').glob('*.json')):
-            row = _read(path)
-            task = row.get('task_id')
-            evidence = row.get('evidence') or {}
-            if (not path.resolve().is_relative_to(folder) or task not in revisions or task in seen
-                    or row.get('task_version') != revisions[task] or row.get('variant_id') != 'candidate'
-                    or evidence.get('loaded_version') != expected
-                    or not _APPWORLD_LAYOUT.framework_capture_complete(row)
-                    or _APPWORLD_LAYOUT._execution_error_code(row)):
-                return None
-            seen.add(task)
-            traces = evidence.get('traces') if isinstance(evidence.get('traces'), list) else [evidence.get('trace')]
-            if not traces or any(not isinstance(trace, dict)
-                    or not any(event.get('kind') == 'run.start' for event in trace.get('events') or [])
-                    or not any(event.get('kind') == 'run.end' for event in trace.get('events') or [])
-                    for trace in traces):
-                return None
-            if _APPWORLD_LAYOUT._judge_error_code(row) is not None:
-                reasons = ' '.join(str(check.get('reason') or '') for check in row.get('checks') or [])
-                if not re.search(r'evaluation_judge_(?:reason_conflict|http_(?:408|429|500|502|503|504)|transport_(?:6|7|18|28|52|55|56|exhausted))\b', reasons):
-                    return None
-                temporary = True
-            healthy = True
-        reviews = [output / 'regrade', *sorted(
-            (p for p in (output / 'regrade').glob('retry-*') if p.is_dir()
-             and p.name.rsplit('-', 1)[-1].isdigit()),
-            key=lambda p: int(p.name.rsplit('-', 1)[-1]))]
-        existing = [p / 'report.json' for p in reviews if (p / 'report.json').is_file()]
-        if existing:
-            latest = existing[-1]
-            report = _read(latest)
-            rows = report.get('trials') or []
-            if (compare._report_judge_projection(latest) != _APPWORLD_LAYOUT.judge_projection()
-                    or len(rows) != 100 or {row.get('task_id') for row in rows} != set(tasks)
-                    or any(row.get('task_version') != revisions.get(row.get('task_id'))
-                           or row.get('variant_id') != 'candidate'
-                           or (row.get('evidence') or {}).get('loaded_version') != expected for row in rows)):
-                return None
-            # A newer completed judge failure owns recovery. Never fall back
-            # to healthy execution-only rows to hide schema/auth/uncertainty.
-            review = _stage_review_recovery_state(output, 100, baseline=True)
-            return review if review in {'transport', 'cached', 'ready'} else None
-        return 'transport' if temporary else 'ready' if healthy else 'waiting'
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-        return None
-
-
-def _interrupted_worker_checkpoint(state: dict) -> str | None:
-    """Authorize an interrupted stage from its own receipt, never an old fault."""
-    import re
-    phase = state.get('phase')
-    if (state.get('status') not in {'running', 'pending'}
-            or state.get('cancel_requested') or phase not in {'seed', 'pilot32', 'validation100'}):
-        return None
-    stage = (state.get('stage_results') or {}).get(phase) or {}
-    frozen_seed = (phase == 'seed' and stage.get('status') == 'complete'
-                   and stage.get('artifact') == (state.get('candidate') or {}).get('seed_artifact'))
-    stale_baseline_exit = (phase == 'validation100' and stage.get('status') == 'failed'
-        and stage.get('gate_passed') is None and state.get('stop_reason') == 'appworld_stage_failed'
-        and bool(re.fullmatch(r'(?:RuntimeError:)?compare\.py_failed:[0-9]+', str(stage.get('reason') or ''))))
-    if ((stage.get('status') not in (None, 'pending', 'running') and not frozen_seed and not stale_baseline_exit)
-            or stage.get('gate_passed') is False or state.get('last_error')
-            or (stage.get('reason') and not stale_baseline_exit)):
-        return None
-    # A previous gate's stop reason may survive entering a new stage. It is
-    # advisory only; any other unexplained stop remains a real boundary.
-    stop = state.get('stop_reason')
-    stale_duplicate = stop == 'appworld_seed_generation_duplicate'
-    if stop and not stale_duplicate and not stale_baseline_exit and not re.fullmatch(r'stage_gate_not_passed:(?:pilot32|validation100)', str(stop)):
-        return None
-    seed = _worker_checkpoint_seed(state)
-    candidate = state.get('candidate') or {}
-    if seed is None or candidate.get('seed_artifact') != str(seed):
-        return None
-    if phase != 'seed':
-        artifact = _read(seed)
-        if not artifact or candidate != _candidate_identity(seed, seed.parent.name):
-            return None
-        count = 32 if phase == 'pilot32' else 100
-        output = stage_path(seed, count).parent.resolve()
-        progress = _read(output / 'progress.json')
-        if phase == 'validation100' and not progress:
-            baseline = _baseline100_worker_checkpoint(seed, state)
-            return 'ready' if baseline == 'transport' else baseline
-        if stale_duplicate or stale_baseline_exit or not output.is_relative_to(_controller_gepa_root().resolve()) or progress.get('artifact') != artifact:
-            return None
-        configs = list((output / 'shards').glob('shard-*/config.json'))
-        if not configs or progress.get('planned_tasks') != count:
-            return None
-        for path in configs:
-            config = _read(path)
-            variants = [row for row in config.get('variants', []) if row.get('id') == 'candidate']
-            if (not path.resolve().is_relative_to(output) or len(variants) != 1
-                    or variants[0].get('artifact') != artifact
-                    or _APPWORLD_LAYOUT.judge_projection(config) != _APPWORLD_LAYOUT.judge_projection()):
-                return None
-        for shard in (progress.get('shards') or {}).values():
-            reference = shard.get('source_report')
-            if not isinstance(reference, str) or not Path(reference).resolve().is_relative_to(output):
-                return None
-        review = _stage_review_recovery_state(output, count, baseline=False)
-        return 'ready' if review in {'transport', 'cached', 'projection', 'ready'} else 'waiting'
-    if stale_duplicate:
-        return None
-    search = seed_search()
-    generation = search.get('automatic_seed_generation') or {}
-    if (generation.get('status') not in {'pending', 'frozen'}
-            or generation.get('method') != 'approved_training_native_seed'
-            or generation.get('round') != search.get('round', 1)
-            or generation.get('seed') != str(seed) or generation.get('seed_label') != seed.parent.name
-            or search.get('current_seed') != str(seed) or (_controller_gepa_root() / 'plan.json').is_file()):
-        return None
-    reference = generation.get('source_seed')
-    if not isinstance(reference, str):
-        return None
-    source = Path(reference).resolve()
-    from learning import validate_seed_label
-    try:
-        validate_seed_label(source.parent.name)
-    except ValueError:
-        return None
-    if source == seed or source != (OUTPUT / 'published' / source.parent.name / 'strategy.json').resolve():
-        return None
-    artifact = _read(source)
-    policy = artifact.get('policy') or {}
-    snapshot = policy.get('snapshot') or {}
-    identity = snapshot.get('identity') or {}
-    options = snapshot.get('options') or {}
-    if (artifact.get('level') != 'L3' or options.get('require_validated_evidence') is not True
-            or identity.get('user_id') != _APPWORLD_LAYOUT.OWNER
-            or identity.get('agent_id') != _APPWORLD_LAYOUT.AGENT
-            or options.get('target_scopes') != [_APPWORLD_LAYOUT.SCOPE]):
-        return None
-    cards = {(row.get('memory_id'), row.get('content_revision'))
-             for row in snapshot.get('experiences', []) if row.get('target_scope') == _APPWORLD_LAYOUT.SCOPE}
-    manifest = _read(source.with_name('manifest.json'))
-    if (not cards or manifest.get('validated_evidence_required') is not True
-            or not isinstance(manifest.get('version'), str)
-            or _APPWORLD_LAYOUT.version(artifact) != manifest['version']):
-        return None
-    if seed.is_file():
-        frozen, manifest = _read(seed), _read(seed.with_name('manifest.json'))
-        if (frozen.get('level') == 'L3' and manifest.get('validated_evidence_required') is True
-                and isinstance(manifest.get('version'), str)
-                and _APPWORLD_LAYOUT.version(frozen) == manifest['version']):
-            return 'ready'
-        return None
-    diagnostic = _read(OUTPUT / 'training/seed-compile-status.json')
-    if diagnostic.get('seed_label') != seed.parent.name or diagnostic.get('validated_evidence_required') is not True:
-        return None
-    english = diagnostic.get('english_trigger_learning') or {}
-    if (not english or (english.get('status') == 'pending'
-            and type(english.get('model_calls')) is int and english['model_calls'] == 0
-            and not english.get('incremental_generation'))):
-        control = diagnostic.get('control_learning') or {}
-        draft = control.get('validated_model_draft')
-        generated = control.get('generated_rules') or {}
-        if (control.get('status') != 'generated' or type(control.get('model_calls')) is not int
-                or not 1 <= control['model_calls'] <= 3 or not isinstance(draft, dict)
-                or not any(type(value) is int and value > 0 for value in generated.values())):
-            return None
-        from learning import _parse_control_draft, compile_seed_controls
-        from copy import deepcopy
-        try:
-            draft = _parse_control_draft(json.dumps(draft))
-            ids = {row['memory_id'] for rules in draft.values() for row in rules}
-            if not ids or not ids.issubset({mid for mid, revision in cards}):
-                return None
-            # Fresh TRAIN generation uses the whole validated shadow snapshot,
-            # while the published parent's deployed approval set may be smaller.
-            current = deepcopy(policy)
-            current_options = deepcopy(policy['options'])
-            current_options['approved_experiences'] = [
-                {'memory_id': mid, 'content_revision': revision} for mid, revision in sorted(cards)]
-            current = json.loads(_APPWORLD_LAYOUT.native(_APPWORLD_LAYOUT.BINARY, _APPWORLD_LAYOUT.ROOT,
-                ['runtime', 'recompile'], {'policy': current, 'options': current_options}))
-            controls = deepcopy(_read(_APPWORLD_LAYOUT.RUNTIME / 'service.json').get('control_learning') or {})
-            controls['enabled'] = True
-            compiled = compile_seed_controls(_APPWORLD_LAYOUT, current, controls, draft, {})
-            refs = [rule['source_experience'] for name in ('action_rules', 'loop_rules', 'schedule_rules')
-                    for rule in compiled.get('options', {}).get(name, []) if rule.get('source_experience')]
-            return ('ready' if ids.issubset({row.get('memory_id') for row in refs})
-                    and all((row.get('memory_id'), row.get('content_revision')) in cards for row in refs)
-                    else None)
-        except (OSError, ValueError, TypeError, KeyError, RuntimeError):
-            return None
-    incremental = english.get('incremental_generation') or {}
-    refs = incremental.get('source_experiences') or []
-    if (english.get('status') not in {'pending', 'draft_ready', 'compiled'}
-            or type(english.get('model_calls')) is not int or not 0 <= english['model_calls'] <= 3
-            or not refs or any(not isinstance(row, dict) or set(row) != {'memory_id', 'content_revision'}
-                or (row['memory_id'], row['content_revision']) not in cards for row in refs)):
-        return None
-    bound = {row['memory_id'] for row in refs}
-    pending = any(isinstance(row, dict) and row.get('status') in {'pending', 'draft_ready', 'compiled'}
-        and row.get('memory_ids') and set(row['memory_ids']).issubset(bound)
-        and (row.get('draft') or row.get('usage') or row.get('status') == 'pending')
-        for row in incremental.get('batches', []))
-    return 'ready' if pending else None
-
-
-def _legacy_terminal_worker_checkpoint(state: dict, fault: object) -> bool:
-    """Recover only an old outer seed error from a bound terminal native job."""
-    if (fault != 'appworld_gepa_terminal_receipt_invalid'
-            or state.get('status') != 'blocked' or state.get('phase') != 'gepa_run'
-            or state.get('stop_reason') != fault or state.get('last_error')
-            or state.get('cancel_requested')):
-        return False
-    seed = _worker_checkpoint_seed(state)
-    candidate = state.get('candidate') or {}
-    if seed is None or not seed.is_file() or candidate != _candidate_identity(seed, seed.parent.name):
-        return False
-    artifact = _read(seed)
-    version = candidate.get('seed_version')
-    if (artifact.get('level') != 'L3' or not isinstance(version, str) or not version
-            or _APPWORLD_LAYOUT.version(artifact) != version):
-        return False
-    search = seed_search()
-    if search.get('current_seed') != str(seed):
-        return False
-    stages = state.get('stage_results') or {}
-    if any((stages.get(name) or {}).get('status') != 'complete'
-           or (stages.get(name) or {}).get('gate_passed') is not True
-           for name in ('pilot32', 'validation100')):
-        return False
-    native_stage = stages.get('gepa_run') or {}
-    if native_stage.get('status') != 'complete' or native_stage.get('reason'):
-        return False
-    import offline_gepa
-    if (offline_gepa.GEPA.resolve() != _controller_gepa_root().resolve()
-            or _read(offline_gepa.PLAN).get('seed') != str(seed)):
-        return False
-    # The same authority used by normal resumption binds owner, level,
-    # submission and the original immutable native seed, without new hashes.
-    try:
-        job_id = offline_gepa._recorded_job(artifact)
-    except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError):
-        return False
-    native = _read(offline_gepa.STATUS)
-    if (not isinstance(job_id, str) or not job_id
-            or native.get('job_id') != job_id or native.get('job_status') != 'rejected'
-            or (native_stage.get('data') or {}).get('job_id') != job_id):
-        return False
-    job_root = (offline_gepa.WORKSPACE / 'agent-evaluation').resolve()
-    job_path = (job_root / job_id).resolve()
-    if not job_path.is_relative_to(job_root) or job_path.parent != job_root:
-        return False
-    tree = _read(job_path / 'search/tree.json')
-    job = ((_read(job_root / 'state.json').get('jobs') or {}).get(job_id) or {})
-    return bool(job.get('status') == 'rejected' and not job.get('error')
-                and job.get('published') is not True and not job.get('cancel_requested')
-                and tree.get('status') == 'validation_rejected' and not tree.get('error')
-                and not tree.get('cancel_requested') and tree.get('active') is None
-                and tree.get('batch') is None and tree.get('holdout_started') is not True
-                and not tree.get('final_holdout'))
-
-
-def _worker_resume_check() -> int:
-    """Read-only qualification: 75 resumes, 76 waits, 0 preserves a terminal."""
-    import re
-    state = _read(_controller_gepa_root() / 'lifecycle.json')
-    experiment = _read(_search_path()).get('experiment') or {}
-    if (state.get('status') in ('complete', 'published', 'cancelled', 'not_published', 'review_required')
-            or experiment.get('reason') == 'user_interrupt'):
-        return 0
-    if _worker_checkpoint_seed(state) is None:
-        return 0
-    phase = state.get('phase')
-    stage = (state.get('stage_results') or {}).get(phase) or {}
-    fault = (experiment.get('reason') if experiment.get('status') in ('stage_failed', 'blocked')
-             else None) or state.get('stop_reason') or state.get('last_error') or stage.get('reason')
-    recovery = state.get('autonomous_recovery') or {}
-    if not fault and state.get('status') == 'retry_wait':
-        fault = recovery.get('reason')
-        if isinstance(fault, str) and re.fullmatch(r'model_http_(?:408|429|500|502|503|504)|model_transport_(?:timeout|interrupted|temporary)|native_writer_busy', fault):
-            fault = 'appworld_seed_recovery_exhausted:' + fault
-    reason = _autonomous_retry_reason(RuntimeError(str(fault)), state) if fault else None
-    if not reason and phase == 'seed':
-        # An older worker can have flattened the experiment's reason. The
-        # failed saved stage, paid receipt and exact pending source still
-        # provide read-only authority; checking must never reserve a label.
-        saved_fault = stage.get('reason') or state.get('last_error')
-        if saved_fault and _unavailable_seed_generation_checkpoint(RuntimeError(str(saved_fault)), state):
-            reason = 'appworld_seed_generation_unavailable'
-    if not reason and _completed_failed_final_checkpoint(state) is not None:
-        reason = 'appworld_completed_final_goal_requires_next_candidate'
-    if not reason and _legacy_terminal_worker_checkpoint(state, fault):
-        reason = 'appworld_legacy_terminal_checkpoint_requires_resume'
-    if not reason:
-        interrupted = _interrupted_worker_checkpoint(state)
-        if interrupted:
-            if _active_output_processes():
-                return 76
-            if interrupted == 'ready':
-                reason = 'appworld_interrupted_stage_checkpoint_requires_resume'
-    if not reason:
-        return 0
-    if phase == 'gepa_run':
-        import offline_gepa
-        native = offline_gepa.progress()
-        if (native.get('cancel_requested') or native.get('job_status') == 'cancelled'
-                or native.get('job_status') == 'error'
-                and native.get('job_error') != 'gepa_model_rate_limited'
-                and _initial_native_review_progress(state) is None):
-            return 0
-    if _active_output_processes():
-        return 76
-    return 75
 
 
 def main() -> int:
     global _EXPERIMENT_TRACKING, _EXPERIMENT_LABEL, _CANDIDATE_STATE_LABEL
     _CANDIDATE_STATE_LABEL = None
     parser = argparse.ArgumentParser(description=__doc__)
-    actions = parser.add_mutually_exclusive_group()
-    action_names = ('status', 'plan', 'prepare', 'train', 'seed', 'pilot32', 'gate32',
-                    'validation100', 'gate100', 'gepa-prepare', 'gepa-run', 'publish', 'all',
-                    'deliver-best-available', 'assert-idle-for-fresh')
-    for action in action_names:
+    actions = parser.add_mutually_exclusive_group(required=True)
+    for action in ('status', 'plan', 'prepare', 'train', 'seed', 'pilot32', 'gate32',
+                   'validation100', 'gate100', 'gepa-prepare', 'gepa-run', 'publish', 'all',
+                   'deliver-best-available', 'assert-idle-for-fresh'):
         actions.add_argument('--' + action, action='store_true')
-    parser.add_argument('--worker-resume-check', action='store_true', help=argparse.SUPPRESS)
-    parser.add_argument('--worker-checkpoint-resume', action='store_true', help=argparse.SUPPRESS)
-    parser.add_argument('--restart-gepa', action='store_true',
-                        help='reset an idle search and run the full shared lifecycle with the publication')
     parser.add_argument('--seed-artifact', type=Path)
     parser.add_argument('--seed-label', help='immutable candidate folder under published; default seed0')
     parser.add_argument('--gepa-max-model-calls', type=_gepa_model_call_budget,
@@ -3934,33 +2178,8 @@ def main() -> int:
                         help='derive English applicability conditions from this frozen source seed')
     parser.add_argument('--comparison', type=Path)
     parser.add_argument('--restart-search-after-review', metavar='SUMMARY',
-                        help='record a completed failure review and verified repairs before an explicit new search round')
+                        help='after five failed seeds, record completed failure review and verified repairs before a new search round')
     args = parser.parse_args()
-    if args.worker_resume_check:
-        try:
-            return _worker_resume_check()
-        except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError):
-            return 0
-    if args.worker_checkpoint_resume:
-        try:
-            eligibility = _worker_resume_check()
-        except (OSError, ValueError, RuntimeError, TypeError, KeyError, AttributeError):
-            return 0
-        if eligibility != 75:
-            return eligibility
-        state = _read(_controller_gepa_root() / 'lifecycle.json')
-        seed = _worker_checkpoint_seed(state)
-        if seed is None:
-            print(json.dumps({'status': 'blocked', 'reason': 'appworld_worker_checkpoint_missing'}))
-            return 0
-        args.seed_artifact, args.seed_label = seed, seed.parent.name
-    selected_action = any(getattr(args, action.replace('-', '_')) for action in action_names)
-    if args.restart_gepa:
-        if selected_action and not args.all:
-            parser.error('--restart-gepa can only be combined with --all')
-        args.all = True
-    elif not selected_action:
-        parser.error('one stage action is required')
     if args.assert_idle_for_fresh:
         try:
             assert_idle_for_fresh()
@@ -3970,7 +2189,7 @@ def main() -> int:
             return 1
     if args.deliver_best_available and (not (args.seed_label or args.seed_artifact) or args.comparison is None):
         parser.error('--deliver-best-available requires --seed-label or --seed-artifact, and --comparison')
-    if args.gepa_max_model_calls is not None and not (args.gepa_prepare or args.gepa_run or args.all or args.restart_gepa):
+    if args.gepa_max_model_calls is not None and not (args.gepa_prepare or args.gepa_run or args.all):
         parser.error('--gepa-max-model-calls requires --gepa-prepare, --gepa-run or --all')
     if args.restart_search_after_review:
         if not (args.all or args.seed):
@@ -3979,45 +2198,19 @@ def main() -> int:
         from learning import validate_seed_label
         os.environ['APPWORLD_ENGLISH_TRIGGERS'] = '1'
         os.environ['APPWORLD_ENGLISH_TRIGGERS_FROM'] = validate_seed_label(args.english_triggers_from)
-    # The retained publication is the fresh long-running search's seed. A
-    # historical GEPA plan still wins below when explicitly resuming that job.
-    published_label = ('strategy' if (OUTPUT / 'published/strategy/strategy.json').is_file()
-                       and not args.seed else 'seed0')
-    label = args.seed_label or (args.seed_artifact.parent.name if args.seed_artifact else published_label)
+    label = args.seed_label or (args.seed_artifact.parent.name if args.seed_artifact else 'seed0')
     if args.candidate_state:
-        if any(getattr(args, option) for option in ('gepa_prepare', 'gepa_run', 'restart_gepa', 'publish', 'all',
+        if any(getattr(args, option) for option in ('gepa_prepare', 'gepa_run', 'publish', 'all',
                                                   'deliver_best_available')):
             parser.error('--candidate-state only supports stages through validation100')
         from learning import validate_seed_label
         _CANDIDATE_STATE_LABEL = validate_seed_label(label)
     seed = (args.seed_artifact or OUTPUT / 'published' / label / 'strategy.json').resolve()
-    if not (args.seed or args.seed_artifact or args.seed_label):
-        recorded_seed = None
-        if (args.gepa_run or args.publish or args.all) and not args.restart_gepa:
-            # Resume the seed bound to this GEPA job. Seed-search history may
-            # point to a different candidate whose pilot was considered later.
-            planned_seed = _read(OUTPUT / 'gepa/plan.json').get('seed')
-            if isinstance(planned_seed, str) and planned_seed and Path(planned_seed).is_file():
-                recorded_seed = planned_seed
-        if not recorded_seed and not args.restart_gepa:
-            search = seed_search()
-            searched_seed = search.get('current_seed')
-            generation = search.get('automatic_seed_generation') or {}
-            automatic_resume = (args.all and generation.get('round') == search.get('round', 1)
-                and generation.get('seed') == searched_seed
-                and generation.get('status') in ('pending', 'frozen', 'duplicate'))
-            if (isinstance(searched_seed, str) and (not args.all or automatic_resume)
-                    and (Path(searched_seed).is_file() or automatic_resume)):
-                recorded_seed = searched_seed
-        seed = Path(recorded_seed or seed).resolve()
-        # Fresh --all uses the retained publication; a normal resume with an
-        # existing plan stays bound to its seed. An explicit search restart
-        # uses the selected publication instead of that retired plan.
-        # Keep label and path together for the existing publication guard.
-        label = seed.parent.name
+    if not (args.seed or args.all or args.seed_artifact or args.seed_label):
+        seed = Path(seed_search().get('current_seed') or seed).resolve()
     requires_candidate = any(getattr(args, option) for option in (
         'seed', 'all', 'pilot32', 'validation100', 'gepa_prepare', 'gepa_run', 'publish',
-        'deliver_best_available', 'restart_gepa'))
+        'deliver_best_available'))
     if requires_candidate and not args.deliver_best_available:
         from learning import validate_seed_label
         validate_seed_label(label)
@@ -4025,7 +2218,7 @@ def main() -> int:
             raise RuntimeError('appworld_seed_artifact_must_match_publish_label')
     if args.status:
         selected = seed if args.seed_artifact or args.seed_label else None
-        print(json.dumps(_status_display(status(selected)), ensure_ascii=False, indent=2)); return 0
+        print(json.dumps(status(selected), ensure_ascii=False, indent=2)); return 0
     if args.plan:
         print(json.dumps({'order': ['training', 'memory', 'seed', 'pilot32', 'validation100', 'GEPA', 'top3-comparison500', 'publish'], 'parallelism': 16, 'gepa_rounds': 30, 'model_calls_started': False}, ensure_ascii=False, indent=2)); return 0
     if args.deliver_best_available:
@@ -4038,24 +2231,11 @@ def main() -> int:
                   file=sys.stderr)
             return 1
     if args.restart_search_after_review:
-        restart_search_after_review(args.restart_search_after_review,
-            candidate_seed=seed if args.seed_artifact or args.seed_label else None)
-    elif args.all:
-        _resume_withdrawn_failed_seed_count_policy(
-            candidate_seed=seed if args.seed_artifact or args.seed_label else None)
-    if (args.all or args.restart_search_after_review) and not (args.seed_artifact or args.seed_label):
-        search = seed_search()
-        generation = search.get('automatic_seed_generation') or {}
-        if (generation.get('round') == search.get('round', 1)
-                and generation.get('status') in ('pending', 'frozen', 'duplicate')):
-            seed = Path(generation['seed']).resolve()
-            label = generation['seed_label']
+        restart_search_after_review(args.restart_search_after_review)
     _EXPERIMENT_TRACKING, _EXPERIMENT_LABEL = True, label
     phase = 'starting'
     try:
         _experiment_status('running', phase)
-        if args.restart_gepa:
-            print(json.dumps(restart_gepa(seed), ensure_ascii=False), flush=True)
         # Every mutating flag is a prefix request against the one shared
         # lifecycle.  The controller reuses valid completed dependencies and
         # refuses to cross an unmet gate; there is no second direct branch.
@@ -4063,17 +2243,13 @@ def main() -> int:
             ('prepare', 'prepare'), ('train', 'train'), ('seed', 'seed'),
             ('pilot32', 'pilot32'), ('validation100', 'validation100'),
             ('gepa_prepare', 'gepa_prepare'), ('gepa_run', 'gepa_run'),
-            ('restart_gepa', 'gepa_run'),
             ('publish', 'publish')) if getattr(args, option)), None)
         if args.all or selected_stop is not None:
             budget_arguments = ({'gepa_max_model_calls': args.gepa_max_model_calls}
                                 if args.gepa_max_model_calls is not None else {})
-            result = (_run_all_autonomously(seed, label, **budget_arguments) if args.all
-                      else _run_common_all(seed, label, stop_at=selected_stop, **budget_arguments))
-            if result.get('status') in ('not_qualified', 'not_published', 'review_required', 'blocked', 'cancelled'):
-                _experiment_status(result['status'], result['phase'], reason=result['stop_reason'])
-            else:
-                _experiment_status('complete', selected_stop or 'publish')
+            result = _run_common_all(seed, label, stop_at=None if args.all else selected_stop,
+                                     **budget_arguments)
+            _experiment_status('complete', selected_stop or 'publish')
             print(json.dumps(result, ensure_ascii=False))
             return 0
         if args.gate32:

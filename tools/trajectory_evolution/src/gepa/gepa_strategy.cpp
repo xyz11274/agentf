@@ -5,10 +5,8 @@
 // 搜索树的父子关系、节点融合和排序在此实现，不直接启动 Agent。
 #include "gepa_strategy.h"
 
-#include <cmath>
 #include <limits>
 #include <random>
-#include <tuple>
 
 namespace trajectory::evolution::integration::gepa {
 namespace {
@@ -19,81 +17,27 @@ double number(const Json &value, double fallback = 0) {
   return std::holds_alternative<double>(value.value) ? std::get<double>(value.value) : fallback;
 }
 
-bool same_tasks(const Json &a, const Json &b) {
-  if (!a.object() || !b.object() || a.fields().empty() || a.fields().size() != b.fields().size())
-    return false;
-  for (const auto &task : a.fields())
-    if (!b.has(task.first))
-      return false;
-  return true;
-}
-
-double strict_mean(const Json &scores) {
-  if (!scores.object() || scores.fields().empty())
-    return -1e9;
-  double total = 0;
-  for (const auto &task : scores.fields()) {
-    const auto &row = task.second;
-    if (row.has("strict_pass_rate")) {
-      const auto value = number(row["strict_pass_rate"], -1e9);
-      if (!std::isfinite(value) || value <= -1e9)
-        return -1e9;
-      total += value;
-    } else if (row.has("strict_passed")) {
-      if (std::holds_alternative<bool>(row["strict_passed"].value))
-        total += row.flag("strict_passed", false) ? 1 : 0;
-      else {
-        const auto value = number(row["strict_passed"], -1e9);
-        if (!std::isfinite(value) || value <= -1e9)
-          return -1e9;
-        total += value;
-      }
-    } else
-      return -1e9;
-  }
-  return total / scores.fields().size();
-}
-
-bool has_strict(const Json &scores) {
-  if (scores.object())
-    for (const auto &task : scores.fields())
-      if (task.second.has("strict_pass_rate") || task.second.has("strict_passed"))
-        return true;
-  return false;
-}
-
-bool core_no_worse(const Json &a, const Json &b) {
-  if (!same_tasks(a, b))
-    return false;
-  const auto aq = mean(a, "quality"), bq = mean(b, "quality");
-  if (aq <= -1e9 || bq <= -1e9 || aq < bq - 1e-12)
-    return false;
-  if (has_strict(a) || has_strict(b)) {
-    const auto as = strict_mean(a), bs = strict_mean(b);
-    if (as <= -1e9 || bs <= -1e9 || as < bs - 1e-12)
-      return false;
-  }
-  return true;
-}
-
-// 此字典序只用于同集合候选的稳定排序；替换 elite 还必须通过 core_no_worse。
+// 候选排序使用稳定的多目标字典序：质量和适应度优先，随后才比较循环与时延。
+// 这里仅决定搜索顺序，不等价于发布门禁；发布仍需独立留出集复核。
 bool better(const Json &a, const Json &b) {
-  if (!same_tasks(a, b))
-    return false;
-  const auto rank = [](const Json &scores) {
-    const auto loops = mean(scores, "invalid_loops");
-    // 排序不能按每一对跳过不同字段或把近似相等当等价关系，否则不具传递性。
-    // 缺失统一降到最低值；精确 tuple 次序与 elite 的容差扫描分开。
-    return std::make_tuple(mean(scores, "quality"), strict_mean(scores),
-                           loops > -1e9 ? -loops : -1e9,
-                           mean(scores, "fitness"), mean(scores, "feasible_score"),
-                           mean(scores, "goal_score"), mean(scores, "robustness_score"));
-  };
-  return rank(a) > rank(b);
+  const auto feasible = mean(a, "feasible_score") - mean(b, "feasible_score");
+  if (std::abs(feasible) > 1e-12 && mean(a, "feasible_score") > -1e9 &&
+      mean(b, "feasible_score") > -1e9)
+    return feasible > 0;
+  const auto goal = mean(a, "goal_score") - mean(b, "goal_score");
+  if (std::abs(goal) > 1e-12 && mean(a, "goal_score") > -1e9 && mean(b, "goal_score") > -1e9)
+    return goal > 0;
+  const auto robustness = mean(a, "robustness_score") - mean(b, "robustness_score");
+  if (std::abs(robustness) > 1e-12 && mean(a, "robustness_score") > -1e9 &&
+      mean(b, "robustness_score") > -1e9)
+    return robustness > 0;
+  const auto difference = mean(a, "quality") - mean(b, "quality");
+  return difference > 1e-12 ||
+         (std::abs(difference) <= 1e-12 && mean(a, "fitness") > mean(b, "fitness") + 1e-12);
 }
 }
 
-// 输入是 task_id -> 指标对象。缺失或无效指标不能被当成高分。
+// 输入是 task_id -> 指标对象。缺失字段按零处理，以免不完整评测被误当成高分。
 double mean(const Json &scores, const std::string &field) {
   if (!scores.object() || scores.fields().empty())
     return -1e9;
@@ -101,36 +45,9 @@ double mean(const Json &scores, const std::string &field) {
   for (const auto &item : scores.fields()) {
     if (!item.second.has(field))
       return -1e9;
-    const auto value = number(item.second[field], -1e9);
-    if (!std::isfinite(value) || value <= -1e9)
-      return -1e9;
-    total += value;
+    total += number(item.second[field], -1e9);
   }
   return total / scores.fields().size();
-}
-
-bool global_core_no_worse(const Json &candidate, const Json &reference) {
-  return core_no_worse(candidate, reference);
-}
-
-bool global_better(const Json &candidate, const Json &incumbent) {
-  if (!core_no_worse(candidate, incumbent))
-    return false;
-  const auto quality = mean(candidate, "quality") - mean(incumbent, "quality");
-  if (std::abs(quality) > 1e-12)
-    return quality > 0;
-  const auto a_strict = strict_mean(candidate), b_strict = strict_mean(incumbent);
-  if (a_strict > -1e9 && b_strict > -1e9 && std::abs(a_strict - b_strict) > 1e-12)
-    return a_strict > b_strict;
-  const auto a_loops = mean(candidate, "invalid_loops"), b_loops = mean(incumbent, "invalid_loops");
-  if (a_loops > -1e9 && b_loops > -1e9 && std::abs(a_loops - b_loops) > 1e-12)
-    return a_loops < b_loops;
-  for (const auto *field : {"fitness", "feasible_score", "goal_score", "robustness_score"}) {
-    const auto av = mean(candidate, field), bv = mean(incumbent, field);
-    if (av > -1e9 && bv > -1e9 && std::abs(av - bv) > 1e-12)
-      return av > bv;
-  }
-  return false;
 }
 
 // 循环目标采用逐题约束，而不是只比较均值。这样可避免少数任务的大幅改善
@@ -162,72 +79,41 @@ bool loops_no_worse(const Json &candidate, const Json &parent) {
 bool no_worse(const Json &candidate, const Json &parent) {
   if (!loops_no_worse(candidate, parent))
     return false;
-  return core_no_worse(candidate, parent) &&
+  return mean(candidate, "quality") >= mean(parent, "quality") - 1e-12 &&
          mean(candidate, "fitness") >= mean(parent, "fitness") - 1e-12;
 }
 
-// 调用方先按真实应用取同题子集；至少两题的净收益才能支持策略探索。
-// 一题改善不能抵消另一题退化后仍作为收益，资源波动也不能独立证明改进。
+// “局部专长”允许节点总体均值不占优，但至少在一个任务上形成超过阈值的改进。
+// 该信号用于保留多样分支，最终能否发布仍由全局验证与留出门禁决定。
 bool local_gain(const Json &candidate, const Json &parent, double minimum) {
-  if (!candidate.object() || !parent.object() || parent.fields().size() < 2 ||
+  if (!candidate.object() || !parent.object() || parent.fields().empty() ||
       candidate.fields().size() != parent.fields().size())
     return false;
-  double quality_delta = 0, strict_delta = 0, loop_delta = 0;
-  std::size_t strict_observations = 0, loop_observations = 0;
-  auto numeric = [](const Json &value) {
-    return std::holds_alternative<double>(value.value) &&
-           std::isfinite(std::get<double>(value.value));
-  };
-  auto strict = [](const Json &row) -> Json {
-    if (row.has("strict_pass_rate"))
-      return row["strict_pass_rate"];
-    if (row.has("strict_passed")) {
-      if (std::holds_alternative<bool>(row["strict_passed"].value))
-        return row.flag("strict_passed", false) ? 1 : 0;
-      return row["strict_passed"];
-    }
-    return nullptr;
-  };
+  bool gained = false;
   for (const auto &task : parent.fields()) {
     if (!candidate.has(task.first))
       return false;
     const auto &a = candidate[task.first];
     const auto &b = task.second;
     for (const auto *key : {"quality", "fitness"})
-      if (!a.has(key) || !b.has(key) || !numeric(a[key]) || !numeric(b[key]))
+      if (!a.has(key) || !b.has(key) || a[key].null() || b[key].null())
         return false;
-    quality_delta += number(a["quality"]) - number(b["quality"]);
-    const auto a_strict = strict(a), b_strict = strict(b);
-    if (!a_strict.null() || !b_strict.null()) {
-      if (!numeric(a_strict) || !numeric(b_strict))
+    if (a.has("invalid_loops") || b.has("invalid_loops"))
+      if (!a.has("invalid_loops") || !b.has("invalid_loops") || a["invalid_loops"].null() ||
+          b["invalid_loops"].null() || a.str("loop_method") != b.str("loop_method"))
         return false;
-      ++strict_observations;
-      strict_delta += number(a_strict) - number(b_strict);
-    }
-    if (a.has("critical_failures") || b.has("critical_failures")) {
-      if (!numeric(a["critical_failures"]) || !numeric(b["critical_failures"]) ||
-          number(a["critical_failures"]) > number(b["critical_failures"]) + 1e-12)
+    const auto quality = number(a["quality"]) - number(b["quality"]);
+    gained |= quality > minimum;
+    for (const auto *key : {"fitness", "loop_efficiency", "token_efficiency", "latency_efficiency",
+                            "goal_score", "robustness_score"}) {
+      if (a.has(key) != b.has(key) || (a.has(key) && (a[key].null() || b[key].null())))
         return false;
-    }
-    if (a.has("invalid_loops") || b.has("invalid_loops")) {
-      if (!numeric(a["invalid_loops"]) || !numeric(b["invalid_loops"]) ||
-          a.str("loop_method") != b.str("loop_method"))
-        return false;
-      ++loop_observations;
-      loop_delta += number(b["invalid_loops"]) - number(a["invalid_loops"]);
+      // 保留在特定任务上真正改进的专长节点，不能把同一任务失败换来的速度收益当作改进。
+      if (a.has(key) && quality >= -1e-12)
+        gained |= number(a[key]) > number(b[key]) + minimum;
     }
   }
-  const auto size = parent.fields().size();
-  if ((strict_observations && strict_observations != size) ||
-      (loop_observations && loop_observations != size))
-    return false;
-  quality_delta /= size;
-  strict_delta /= size;
-  loop_delta /= size;
-  if (quality_delta < -1e-12 || strict_delta < -1e-12)
-    return false;
-  return quality_delta > minimum || strict_delta > minimum ||
-         (loop_observations == size && loop_delta > minimum);
+  return gained;
 }
 
 // 统一读取单亲变异和双亲融合节点，调用方无需根据节点类型分支。
@@ -315,12 +201,12 @@ Json exploration_eligibility(const Json &nodes, std::size_t index, const Json &c
     return result(false, "node_unavailable");
   const auto &node = nodes.items()[index];
   if (node.str("status") == "accepted" &&
-      (!index || !node.has("validation_gain_attributed")))
+      (!index || !node.has("validation_gain_attributed") ||
+       node.flag("validation_gain_attributed", false)))
     return result(true, "accepted");
   // Pool 可以带着归因疑点进入独立 Val；探索父节点必须在 Val 中看到
   // 本次改动实际应用并产生局部收益，不能把批次整体随机改善当成策略效果。
-  if (node.str("status") != "unobserved_changes" &&
-      !(node.str("status") == "accepted" && node.flag("validation_gain_attributed", false)))
+  if (node.str("status") != "unobserved_changes")
     return result(false, "status_not_explorable");
   const auto ids = parents(node);
   if (ids.empty() || ids.size() > 2 ||
@@ -452,8 +338,6 @@ Json frontier_map(const Json &nodes, const std::vector<std::string> &tasks, cons
           (i && node.has("validation_gain_attributed") &&
            !node.flag("validation_gain_attributed", false)))
         continue;
-      if (!same_tasks(node["validation"], nodes.items().front()["validation"]))
-        continue;
       const auto value = task.empty() ? mean(node["validation"], field)
                                       : number(node["validation"][task][field], -1e9);
       if (value <= -1e9)
@@ -473,7 +357,7 @@ Json frontier_map(const Json &nodes, const std::vector<std::string> &tasks, cons
       add("task:" + task, task, "fitness");
   if (mode == "objective" || mode == "hybrid") {
     add("objective:quality", {}, "quality");
-    for (const auto *field : {"strict_pass_rate", "feasible_score", "goal_score", "robustness_score", "loop_efficiency",
+    for (const auto *field : {"feasible_score", "goal_score", "robustness_score", "loop_efficiency",
                               "token_efficiency", "latency_efficiency"})
       add(std::string("objective:") + field, {}, field);
   }
@@ -520,8 +404,7 @@ Json exploration_frontier_map(const Json &nodes, const std::vector<std::string> 
     auto &node = eligible.items()[i];
     if (!exploration_parent(node))
       continue;
-    if (!exploration_eligibility(nodes, i, config).flag("eligible", false) ||
-        !safe_exploration_candidate(eligible, i, config)) {
+    if (!safe_exploration_candidate(eligible, i, config)) {
       if (i)
         node["status"] = "exploration_ineligible";
       continue;
@@ -537,7 +420,7 @@ Json exploration_frontier_map(const Json &nodes, const std::vector<std::string> 
     if (nodes.items()[i].str("status") == "accepted" &&
         (!nodes.items()[i].has("validation_gain_attributed") ||
          nodes.items()[i].flag("validation_gain_attributed", false)) &&
-        global_better(nodes.items()[i]["validation"], nodes.items()[strict]["validation"]))
+        better(nodes.items()[i]["validation"], nodes.items()[strict]["validation"]))
       strict = i;
   mapping["anchor:strict_winner"] = Json::Array{strict};
   return mapping;
@@ -563,25 +446,15 @@ std::size_t select_parent(const Json &nodes, const Json &mapping, const Json &co
   const auto strategy = config.str("candidate_selection_strategy", "pareto");
   std::vector<std::size_t> accepted;
   for (const auto i : ids)
-    if (i < nodes.items().size() && exploration_parent(nodes.items()[i]) &&
-        exploration_eligibility(nodes, i, config).flag("eligible", false) &&
-        same_tasks(nodes.items()[i]["validation"], nodes.items().front()["validation"]))
+    if (i < nodes.items().size() && exploration_parent(nodes.items()[i]))
       accepted.push_back(i);
   require(!accepted.empty(), "gepa_frontier_empty");
-  ids = accepted;
   auto ranking = [&](auto a, auto b) {
     return better(nodes.items()[a]["validation"], nodes.items()[b]["validation"]);
   };
-  auto elite = std::find(accepted.begin(), accepted.end(), 0) != accepted.end()
-                   ? std::size_t(0) : accepted.front();
-  for (const auto id : accepted)
-    if (global_better(nodes.items()[id]["validation"], nodes.items()[elite]["validation"]))
-      elite = id;
   std::stable_sort(accepted.begin(), accepted.end(), ranking);
-  accepted.erase(std::find(accepted.begin(), accepted.end(), elite));
-  accepted.insert(accepted.begin(), elite);
   if (strategy == "current_best")
-    return elite;
+    return accepted.front();
   std::mt19937 random(static_cast<unsigned>(config.num("seed", 42) + round));
   if (strategy == "epsilon_greedy")
     return std::bernoulli_distribution(number(config["epsilon"], .1))(random)
@@ -589,7 +462,7 @@ std::size_t select_parent(const Json &nodes, const Json &mapping, const Json &co
                                                                      accepted.size() - 1)(random)]
                : accepted.front();
   if (strategy == "top_k_pareto") {
-    ids = accepted;
+    std::stable_sort(ids.begin(), ids.end(), ranking);
     ids.resize(std::min(ids.size(), config.num("top_k", 5)));
   }
   std::vector<double> weights;
@@ -618,19 +491,6 @@ std::size_t select_parent(const Json &nodes, const Json &mapping, const Json &co
     const auto freshness = 1.0 / (1.0 + 0.35 * nodes.items()[id].num("selections", 0));
     weights.push_back(std::max(1e-6, weight * quality_factor * loop_factor * freshness));
   }
-  // 已证局部收益的质量/strict 取舍仍能探索，但其前沿项数或 freshness
-  // 不能使它吞掉通用父版本预算。只限默认 Pareto 分布，不改变成员资格。
-  if (strategy == "pareto" || strategy == "top_k_pareto") {
-    double main_weight = 0, exploration_weight = 0;
-    for (std::size_t i = 0; i < ids.size(); ++i)
-      (core_no_worse(nodes.items()[ids[i]]["validation"], nodes.items()[elite]["validation"])
-           ? main_weight : exploration_weight) += weights[i];
-    if (main_weight > 0 && exploration_weight > 0)
-      for (std::size_t i = 0; i < ids.size(); ++i)
-        weights[i] *=
-            core_no_worse(nodes.items()[ids[i]]["validation"], nodes.items()[elite]["validation"])
-                ? .75 / main_weight : .25 / exploration_weight;
-  }
   return ids[std::discrete_distribution<std::size_t>(weights.begin(), weights.end())(random)];
 }
 
@@ -640,11 +500,7 @@ Json select_merge(const Json &nodes, const Json &mapping, const Json &attempts, 
   // 合并只能从前沿节点中选取：单亲扩张探索当前最优，双亲合并探索互补改进。
   // 双亲候选必须来自不同、互不为祖先的分支，并共享一个可追溯祖先。
   // attempts 记录已试组合，确保恢复后不会反复花费模型预算生成同一对子节点。
-  auto ids = pool(mapping);
-  ids.erase(std::remove_if(ids.begin(), ids.end(), [&](auto id) {
-              return id >= nodes.items().size() || !exploration_parent(nodes.items()[id]) ||
-                     !exploration_eligibility(nodes, id, config).flag("eligible", false);
-            }), ids.end());
+  const auto ids = pool(mapping);
   std::vector<std::array<std::size_t, 2>> pairs;
   for (std::size_t a = 0; a < ids.size(); ++a)
     for (std::size_t b = a + 1; b < ids.size(); ++b)
@@ -666,7 +522,18 @@ Json select_merge(const Json &nodes, const Json &mapping, const Json &attempts, 
       auto gain = [&](std::size_t id) {
         const auto &candidate = nodes.items()[id]["validation"];
         const auto &ancestor = nodes.items()[base]["validation"];
-        return local_gain(candidate, ancestor, number(config["min_improvement"], 0.000001));
+        if (config.str("acceptance") == "pareto")
+          return local_gain(candidate, ancestor, number(config["min_improvement"], 0.000001));
+        if (candidate.fields().size() != ancestor.fields().size())
+          return false;
+        bool improved = false;
+        for (const auto &task : ancestor.fields()) {
+          if (!candidate.has(task.first))
+            return false;
+          improved |=
+              better(Json{{task.first, candidate[task.first]}}, Json{{task.first, task.second}});
+        }
+        return improved;
       };
       if (!gain(pair[0]) || !gain(pair[1]))
         continue;
@@ -723,82 +590,7 @@ Json recombine(const Json &ancestor, const Json &first, const Json &second, std:
 
 // 选择本轮要修改的策略组件，避免一次改写所有能力而失去归因。
 Json select_components(const Json &components, const std::string &strategy, std::size_t cursor) {
-  constexpr const char *selection_key = "__gepa_selection_evidence";
   Json selected = Json::Array{};
-  const auto &evidence = components[selection_key];
-  auto include_control = [&](const char *name) {
-    if (!components.has(name))
-      return false;
-    if (!evidence["components"].object())
-      return true;
-    const auto &support = evidence["components"][name];
-    return (support["applied_task_ids"].array() &&
-            !support["applied_task_ids"].items().empty()) ||
-           (support["opportunity_task_ids"].array() &&
-            !support["opportunity_task_ids"].items().empty());
-  };
-  if (strategy == "round_robin" && evidence["components"].object()) {
-    auto ids = [](const Json &values) {
-      std::set<std::string> result;
-      if (values.array())
-        for (const auto &value : values.items())
-          if (value.string() && !value.text().empty())
-            result.insert(value.text());
-      return result;
-    };
-    struct Opportunity {
-      std::string component;
-      unsigned tier;
-      double weight;
-      std::size_t families;
-    };
-    std::vector<Opportunity> opportunities;
-    for (const auto &item : components.fields()) {
-      if (item.first == selection_key)
-        continue;
-      const auto &support = evidence["components"][item.first];
-      if (!support.object())
-        continue;
-      const auto failed = ids(support["failed_task_ids"]);
-      auto applicable = ids(support["applied_task_ids"]);
-      const auto retryable = ids(support["opportunity_task_ids"]);
-      applicable.insert(retryable.begin(), retryable.end());
-      if (applicable.empty())
-        continue;
-      std::vector<std::string> affected_failures;
-      std::set_intersection(failed.begin(), failed.end(), applicable.begin(), applicable.end(),
-                            std::back_inserter(affected_failures));
-      const auto families = ids(support["failure_families"]);
-      // loop=0 没有缩减空间；仍保留同题真实失败或重复代码的恢复机会。
-      if (item.first == "loop_rules" &&
-          std::holds_alternative<double>(evidence["parent_invalid_loops"].value) &&
-          number(evidence["parent_invalid_loops"]) <= 0 && affected_failures.empty() &&
-          retryable.empty())
-        continue;
-      const auto attempts = std::max(0.0, number(support["attempts"]));
-      const auto coverage = affected_failures.empty() ? applicable.size()
-                                                     : affected_failures.size();
-      opportunities.push_back({item.first, affected_failures.empty() ? 1u : 2u,
-                               coverage / (1.0 + attempts), families.size()});
-    }
-    if (!opportunities.empty()) {
-      std::stable_sort(opportunities.begin(), opportunities.end(), [](const auto &a, const auto &b) {
-        if (a.tier != b.tier)
-          return a.tier > b.tier;
-        if (std::abs(a.weight - b.weight) > 1e-12)
-          return a.weight > b.weight;
-        if (a.families != b.families)
-          return a.families > b.families;
-        return a.component < b.component;
-      });
-      std::size_t ties = 1;
-      while (ties < opportunities.size() && opportunities[ties].tier == opportunities[0].tier &&
-             std::abs(opportunities[ties].weight - opportunities[0].weight) <= 1e-12 &&
-             opportunities[ties].families == opportunities[0].families)
-        ++ties;
-      return Json::Array{opportunities[cursor % ties].component};
-    }
-  }
   if (strategy == "round_robin") {
     // 组件轮询将 L1 经验、L2 编排、L3 循环控制交错安排，防止经验条目数量较多时
     // 长期挤占控制策略的变异预算。
@@ -806,50 +598,29 @@ Json select_components(const Json &components, const std::string &strategy, std:
     // 探索 L2/L3 前耗尽所有有效轮次。
     std::vector<std::string> experiences;
     for (const auto &item : components.fields())
-      if (item.first != selection_key && item.first != "action_rules" && item.first != "loop_rules" &&
+      if (item.first != "action_rules" && item.first != "loop_rules" &&
           item.first != "schedule_rules")
         experiences.push_back(item.first);
     if (experiences.empty()) {
       for (const auto *name : {"schedule_rules", "action_rules", "loop_rules"})
-        if (components.has(name) &&
-            !(std::string(name) == "loop_rules" && evidence["components"].object() &&
-              std::holds_alternative<double>(evidence["parent_invalid_loops"].value) &&
-              number(evidence["parent_invalid_loops"]) <= 0))
+        if (components.has(name))
           selected.push(name);
-    } else if (experiences.size() <= 2) {
+    } else {
       for (std::size_t i = 0; i < experiences.size();) {
-        if (include_control("schedule_rules"))
+        if (components.has("schedule_rules"))
           selected.push("schedule_rules");
-        if (include_control("action_rules"))
+        if (components.has("action_rules"))
           selected.push("action_rules");
         selected.push(experiences[i++]);
-        if (include_control("loop_rules") &&
-            !(evidence["components"].object() &&
-              std::holds_alternative<double>(evidence["parent_invalid_loops"].value) &&
-              number(evidence["parent_invalid_loops"]) <= 0))
+        if (components.has("loop_rules"))
           selected.push("loop_rules");
         if (i < experiences.size())
           selected.push(experiences[i++]);
       }
-    } else {
-      std::vector<std::string> controls;
-      for (const auto *name : {"schedule_rules", "action_rules", "loop_rules"})
-        if (include_control(name) &&
-            !(std::string(name) == "loop_rules" && evidence["components"].object() &&
-              std::holds_alternative<double>(evidence["parent_invalid_loops"].value) &&
-              number(evidence["parent_invalid_loops"]) <= 0))
-          controls.push_back(name);
-      // 无触发证据时保留广度，但控制槽不能随每个经验重复扩张并占满预算。
-      for (std::size_t i = 0; i < experiences.size(); ++i) {
-        if (i % 4 == 0 && !controls.empty())
-          selected.push(controls[(i / 4) % controls.size()]);
-        selected.push(experiences[i]);
-      }
     }
   } else
     for (const auto &item : components.fields())
-      if (item.first != selection_key)
-        selected.push(item.first);
+      selected.push(item.first);
   require(!selected.items().empty(), "gepa_components_empty");
   if (strategy == "round_robin")
     return Json::Array{selected.items()[cursor % selected.items().size()]};
@@ -858,49 +629,20 @@ Json select_components(const Json &components, const std::string &strategy, std:
 
 // 从候选提案中选择本轮评测对象，保留搜索预算和组件覆盖限制。
 std::vector<std::size_t> select_proposals(const Json &nodes, const Json &ids, const Json &config) {
-  auto compared_scores = [&](std::size_t id) {
-    const auto &screening = nodes.items().at(id)["screening"];
-    const auto &changes = screening["causal_changes"].object()
-                              ? screening["causal_changes"]
-                              : screening["applied_changes"];
-    if (!changes.object())
-      return std::make_pair(screening["candidate"], screening["parent"]);
-    Json candidate = Json::Object{}, previous = Json::Object{};
-    for (const auto &task : changes.fields()) {
-      bool applied = false;
-      if (task.second.object())
-        for (const auto &boundary : task.second.fields())
-          applied |= number(boundary.second) > 0;
-      if (applied && screening["candidate"].has(task.first) &&
-          screening["parent"].has(task.first)) {
-        candidate[task.first] = screening["candidate"][task.first];
-        previous[task.first] = screening["parent"][task.first];
-      }
-    }
-    return std::make_pair(std::move(candidate), std::move(previous));
-  };
   std::vector<std::size_t> result;
   for (const auto &id : ids.items())
-    if (nodes.items().at(id.integer()).str("status") == "screened") {
-      const auto [candidate, previous] = compared_scores(id.integer());
-      if (local_gain(candidate, previous, number(config["min_improvement"], 0.000001)))
-        result.push_back(id.integer());
-    }
+    if (nodes.items().at(id.integer()).str("status") == "screened")
+      result.push_back(id.integer());
   // 预筛选只缩小需要做昂贵完整验证的集合；未通过筛选的节点仍保留在搜索树中，
   // 便于审计失败原因，但不会进入发布候选。
   const auto strategy = config.str("proposal_selection", "all_improvements");
   if (strategy != "all_improvements") {
     auto improvement = [&](auto id) {
-      const auto [candidate, previous] = compared_scores(id);
-      Json gain{{"quality", mean(candidate, "quality") - mean(previous, "quality")},
-                {"fitness", 0}};
-      if (mean(candidate, "strict_pass_rate") > -1e8 &&
-          mean(previous, "strict_pass_rate") > -1e8)
-        gain["strict_pass_rate"] = mean(candidate, "strict_pass_rate") -
-                             mean(previous, "strict_pass_rate");
-      if (mean(candidate, "invalid_loops") > -1e8 && mean(previous, "invalid_loops") > -1e8)
-        gain["fitness"] = mean(previous, "invalid_loops") - mean(candidate, "invalid_loops");
-      return Json{{"gain", gain}};
+      const auto &screening = nodes.items()[id]["screening"];
+      return Json{{"gain", Json{{"quality", mean(screening["candidate"], "quality") -
+                                                mean(screening["parent"], "quality")},
+                                {"fitness", mean(screening["candidate"], "fitness") -
+                                                mean(screening["parent"], "fitness")}}}};
     };
     std::stable_sort(result.begin(), result.end(),
                      [&](auto a, auto b) { return better(improvement(a), improvement(b)); });

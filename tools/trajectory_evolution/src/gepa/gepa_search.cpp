@@ -16,7 +16,6 @@
 #include "turn_contract.h"
 #include "goal_assessment.h"
 #include "evidence_fields.h"
-#include "retrieval_text.h"
 #include "code_projection.h"
 #include "local_support.h"
 #include "model_json.h"
@@ -37,8 +36,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <google/protobuf/util/json_util.h>
-#include <google/protobuf/io/coded_stream.h>
-#include <google/protobuf/io/zero_copy_stream_impl_lite.h>
 #include <google/protobuf/util/message_differencer.h>
 
 namespace trajectory::evolution::integration {
@@ -207,10 +204,8 @@ std::string diagnostic_excerpt(const std::string &value, std::size_t limit) {
 // 合法空提案保持弃权，不为了凑节点强行制造修改。
 Json noop_experience_repair_packet(const Json &input, const Json &draft, std::size_t limit) {
   const auto &selected = input["selected_components"];
-  if (!selected.array() || selected.items().empty() || selected.items().size() > 3 ||
-      std::any_of(selected.items().begin(), selected.items().end(), [](const Json &item) {
-        return item.text().rfind("experience:", 0) != 0;
-      }))
+  if (!selected.array() || selected.items().size() != 1 ||
+      selected.items().front().text().rfind("experience:", 0) != 0)
     return Json();
   const bool attempted = draft["experience"].object() ||
                          (draft["experiences"].array() && !draft["experiences"].items().empty());
@@ -226,8 +221,8 @@ Json noop_experience_repair_packet(const Json &input, const Json &draft, std::si
   // 当前正文、实际条件和应用点已经在原包内；不复制整份父策略或理由文字。
   while (repair.dump().size() > limit && repair["feedback"].items().size() > 2)
     repair["feedback"].items().pop_back();
-  // An optional no-op repair may abstain when it cannot retain the complete
-  // formal ledger; it must never hide scored TRAIN tasks to fit the envelope.
+  if (repair.dump().size() > limit)
+    repair.fields().erase("training_batch_summary");
   if (repair.dump().size() > limit)
     return Json();
   return repair;
@@ -578,49 +573,6 @@ Json observed_tool_failures(const Json &runs) {
 
 // 反思与选优共用已验证的评分结果。缺测保留缺测，不能把原始循环轮数或模型完成分
 // 当作正式无效循环或有效质量；覆盖标记明确说明哪些数字实际存在。
-bool reflection_metrics_complete(const Json &score) {
-  for (const auto *field : {"quality", "strict_pass_rate", "invalid_loops"})
-    if (!score.has(field) || score[field].null() || !std::holds_alternative<double>(score[field].value) ||
-        !std::isfinite(number(score[field])))
-      return false;
-  return true;
-}
-
-bool reflection_packet_metrics_complete(const Json &packet) {
-  bool observed = false;
-  for (const auto *field : {"training_batch_summary", "case_outcomes"})
-    if (packet[field].array())
-      for (const auto &row : packet[field].items()) {
-        observed = true;
-        if (!reflection_metrics_complete(row)) return false;
-      }
-  if (packet["feedback"].array())
-    for (const auto &row : packet["feedback"].items()) {
-      observed = true;
-      if (!reflection_metrics_complete(row["trial"]["metrics"])) return false;
-    }
-  return observed;
-}
-
-// Candidate protocol failures reject only that candidate. Transport, cancellation,
-// evaluation and input-budget failures remain infrastructure failures.
-bool reflection_candidate_error(const std::string &code) {
-  static const std::set<std::string> errors{
-      "control_binding_invalid", "control_argument_not_authorized", "control_argument_invalid",
-      "control_operation_not_authorized", "control_source_not_approved", "control_source_changed",
-      "control_arguments_required", "control_duplicate_loop_scope", "control_base_loop_required",
-      "control_loop_level_required", "control_loop_relaxes_limit", "control_loop_relaxes_condition",
-      "control_loop_condition_invalid", "control_loop_semantic_scope_required",
-      "control_failure_replan_not_authorized", "control_budget_rule_invalid",
-      "control_terminal_rule_invalid", "control_repeat_operation_required", "control_draft_limits_invalid",
-      "runtime_action_rule_invalid", "runtime_rule_match_mode_invalid", "schedule_rule_cycle",
-      "gepa_draft_invalid", "unknown_field", "invalid_json", "gepa_component_not_authorized",
-      "gepa_components_changed", "gepa_candidate_not_authorized", "gepa_experience_not_authorized",
-      "gepa_experience_limit", "gepa_trigger_only_update_invalid",
-      "gepa_experience_trigger_unmatchable", "gepa_control_no_differential_trigger"};
-  return errors.count(code);
-}
-
 Json reflection_scored_facts(const Json &score) {
   Json result = Json::Object{};
   for (const auto *field : {"quality", "strict_pass_rate", "invalid_loops", "tokens", "duration_ms"})
@@ -671,25 +623,6 @@ Json compact_unassociated_source_bodies(Json input, std::set<std::string> associ
       source.fields().erase("observed_problem");
     }
   return input;
-}
-
-// Reconstruct the native counter before a replan resets it. Failure counts are
-// independent evidence unless the frozen policy enables aggressive controls.
-Json effective_loop_no_progress(const Json &query, const Json &progress, bool aggressive) {
-  const auto fingerprint = query.str("state_fingerprint");
-  if (query.flag("pending_actions", false) || fingerprint.empty() ||
-      progress.str("fingerprint") != fingerprint ||
-      progress["iteration"].dump() != query["iteration"].dump())
-    return Json();
-  const auto &previous = query["previous"];
-  if (previous["iteration"].dump() == query["iteration"].dump() ||
-      previous.str("decision") == "stop")
-    return Json(progress.num("no_progress", 0));
-  return Json(std::max({query.num("repeated_action_steps", 0),
-                       aggressive ? query.num("repeated_failure_steps", 0) : std::size_t(0),
-                       proto<v1::RuntimeQuery>(query).previous().iteration() > 0 &&
-                               previous.str("fingerprint") == fingerprint
-                           ? previous.num("no_progress", 0) + 1 : std::size_t(0)}));
 }
 
 // 整理单题的真实执行反馈，保留可归因的失败和策略应用证据。
@@ -864,14 +797,22 @@ Json feedback_trial(const dataset::v1::EvaluationTrial &trial, const Json &contr
       }
       if (query.str("boundary") == "loop" && !event.str("step_id").empty()) {
         const auto &progress = decision["progress"];
-        const bool aggressive = controls.flag("aggressive_controls", false);
-        const auto effective = effective_loop_no_progress(query, progress, aggressive);
-        // Reviewed waste and action failures cannot substitute for runtime counters.
+        const auto &previous = query["previous"];
+        const auto fingerprint = query.str("state_fingerprint");
+        const bool counted = !query.flag("pending_actions", false) && !fingerprint.empty() &&
+                             progress.str("fingerprint") == fingerprint &&
+                             progress["iteration"].dump() == query["iteration"].dump();
+        // 在重规划重置计数器前暴露运行时计数。模型评审的浪费是另一类信号；
+        // 缺失或关闭的计数器必须保持未知，不能补成零。
         Json control{{"query_event_id", event["event_id"]},
                      {"target_scope", query["advice_query"]["target_scope"]},
-                     {"observed_no_progress", effective},
-                     {"effective_no_progress", effective},
-                     {"aggressive_controls", aggressive},
+                     {"observed_no_progress",
+                      counted ? Json(std::max({query.num("repeated_action_steps", 0),
+                                               query.num("repeated_failure_steps", 0),
+                                               previous.str("fingerprint") == fingerprint
+                                                   ? previous.num("no_progress", 0) + 1
+                                                   : std::size_t(0)}))
+                              : Json()},
                      {"pending_actions", query.flag("pending_actions", false)},
                      {"proposed_decision", progress["decision"]}};
         control["failed_actions"] = query.num("failed_actions", 0);
@@ -1045,12 +986,6 @@ Json selected_experience_applications(const dataset::v1::EvaluationTrial &trial,
       if (source.memory_id() == approved.memory_id() &&
           source.content_revision() == approved.content_revision())
         revisions[source.memory_id()] = source.content_revision();
-  // No selected L1 component can contribute a selected experience receipt.
-  if (std::none_of(selected.items().begin(), selected.items().end(),
-                   [](const auto &component) {
-                     return component.text().rfind("experience:", 0) == 0;
-                   }))
-    return result;
   const auto evidence = json(trial.evidence());
   const auto traces =
       evidence["traces"].array() ? evidence["traces"] : Json(Json::Array{evidence["trace"]});
@@ -1132,71 +1067,6 @@ Json selected_experience_applications(const dataset::v1::EvaluationTrial &trial,
     result["status"] = "observed";
   if (count > result["points"].items().size())
     result["truncated"] = true;
-  return result;
-}
-
-// Non-applied cases retain formal outcomes and bounded machine facts. Raw
-// inputs, outputs and error messages are not added to this diagnostic view.
-Json unapplied_failure_context(const Json &full, std::size_t max_actions = 8) {
-  Json result{{"verdict", full["verdict"]}, {"execution_status", full["execution_status"]},
-              {"metrics", full["metrics"]}, {"checks", compact_excerpt(full["checks"])},
-              {"evidence_truncated", true}};
-  // A completed tool can still miss the requested delivery. Preserve the
-  // already bounded failed-goal diagnostics from feedback_trial; machine
-  // status alone cannot explain that failure. No new raw payload is added.
-  if (full["goal_completion"].object())
-    result["goal_completion"] = full["goal_completion"];
-  std::size_t observed = 0, kept = 0;
-  std::vector<std::pair<std::size_t, std::size_t>> failures, endings, ordered;
-  std::map<std::size_t, std::map<std::size_t, Json>> retained;
-  result["evidence"]["runs"] = Json::Array{};
-  if (!full["evidence"]["runs"].array()) {
-    result["machine_action_count"] = 0; result["machine_actions_shown"] = 0;
-    return result;
-  }
-  const auto &runs = full["evidence"]["runs"].items();
-  for (std::size_t r = 0; r < runs.size(); ++r) {
-    bool first_failure = true;
-    for (std::size_t a = 0; a < runs[r]["actions"].items().size(); ++a) {
-      const auto &action = runs[r]["actions"].items()[a];
-      if (action.str("semantic") == "model" || action.str("operation").empty() ||
-          !action.flag("executed", false)) continue;
-      ++observed;
-      endings.emplace_back(r, a);
-      if (action.str("status") == "failed" || action.flag("observed_failure", false)) {
-        if (first_failure) failures.emplace(failures.begin(), r, a);
-        else failures.emplace_back(r, a);
-        first_failure = false;
-      }
-    }
-  }
-  ordered = failures;
-  for (const auto &point : failures)
-    for (const int offset : {-1, 1}) {
-      const auto a = static_cast<int>(point.second) + offset;
-      if (a >= 0 && static_cast<std::size_t>(a) < runs[point.first]["actions"].items().size())
-        ordered.emplace_back(point.first, a);
-    }
-  ordered.insert(ordered.end(), endings.rbegin(), endings.rend());
-  for (const auto &point : ordered) {
-    if (kept == max_actions) break;
-    const auto &action = runs[point.first]["actions"].items()[point.second];
-    if (retained[point.first].count(point.second) || action.str("semantic") == "model" ||
-        !action.flag("executed", false) || action.str("operation").empty()) continue;
-    Json fact = Json::Object{};
-    for (const auto *field : {"event_id", "kind", "actor_id", "execution_id", "operation",
-                              "status", "executed", "observed_failure", "semantic",
-                              "terminal_error_code_candidate"})
-      if (action.has(field)) fact[field] = action[field];
-    retained[point.first][point.second] = std::move(fact); ++kept;
-  }
-  for (const auto &run : retained) {
-    Json view{{"run_id", runs[run.first]["run_id"]}, {"actions", Json::Array{}}};
-    for (const auto &action : run.second) view["actions"].push(action.second);
-    result["evidence"]["runs"].push(std::move(view));
-  }
-  result["machine_action_count"] = observed;
-  result["machine_actions_shown"] = kept;
   return result;
 }
 
@@ -2496,15 +2366,10 @@ Json loop_scope_repair_context(const Json &before, const Json &snapshot) {
     rules.push(std::move(entry));
   }
   return Json{{"component", "loop_rules"}, {"existing_rules", rules},
-              {"uniqueness", "Same approved scope and exact actor may have multiple source-backed "
-                             "predicate rules only with nonempty pairwise disjoint error_codes, "
-                             "identical iteration/no-progress budgets and recovery/finalization "
-                             "guards, replan_on_failure=true and max_replans=1; the execution "
-                             "shares one replan across the group."},
-              {"resolution", "Use explicit set at the justified parent indices, preserving each "
-                             "exact approved source and its recovery conditions. Change shared "
-                             "budgets consistently across legal siblings or abstain. Overlapping "
-                             "codes remain invalid; add never replaces an existing rule."}};
+              {"uniqueness", "approved source target_scope and exact actor_id"},
+              {"resolution", "Use explicit set at the existing parent index only when justified, "
+                             "preserving necessary recovery conditions; otherwise abstain. "
+                             "Add does not replace an existing rule."}};
 }
 
 Json action_rule_repair_context(const Json &before, const Json &snapshot) {
@@ -3202,41 +3067,8 @@ Json observed_operation_bindings(const Json &input, std::size_t byte_limit) {
 // 组包时按最终请求计费，而不是只量尚未添加绑定的正文。绑定、兼容视图和一次纠错
 // 的诊断都占同一个输入预算；预先量出开销，避免最后静默删掉真正可修改的控制位置。
 // 此处只计算字节数，不裁剪原轨迹，也不增加宿主授权或远程模型调用。
-Json validate_map_control_replay(Json replay, const Json &changes) {
-  if (!changes.has("loop_rules") && !changes.has("action_rules")) {
-    replay["status"] = "not_applicable";
-    return replay;
-  }
-  const auto &observed = replay["observed_counters"];
-  const bool available =
-      (!changes.has("loop_rules") || observed.num("loop_queries", 0) > 0) &&
-      (!changes.has("action_rules") || observed.num("action_queries", 0) > 0);
-  replay["status"] = available ? "complete" : "unavailable";
-  if (available)
-    require(replay.flag("passed", false), "gepa_control_no_differential_trigger");
-  return replay;
-}
-
-Json control_counterexample(const Json &preflight) {
-  Json result{{"passed", preflight.flag("passed", false)},
-              {"missing_rule_count", preflight["missing"].array()
-                                         ? preflight["missing"].items().size() : 0}};
-  const auto &observed = preflight["observed_counters"];
-  for (const auto *field : {"loop_queries", "action_queries", "max_effective_no_progress",
-                            "max_repeated_failure_steps", "max_prior_failures",
-                            "aggressive_controls"})
-    if (observed.has(field)) result["observed_counters"][field] = observed[field];
-  return result;
-}
-
-Json selection_packet(Json packet);
-
 std::size_t reflection_input_bytes(const Json &input) {
-  // Size the exact selector wire before greedy grouping reserves a model call.
-  const bool selector = input["intermediate_proposals"].array() &&
-                        input.str("phase").rfind("pool_", 0) == 0;
-  auto prepared = observed_operation_bindings(selector ? selection_packet(input) : input,
-                                              std::numeric_limits<std::size_t>::max());
+  auto prepared = observed_operation_bindings(input, std::numeric_limits<std::size_t>::max());
   auto maximum = prepared.dump().size();
   if (!prepared["controls"].object())
     return maximum;
@@ -3254,22 +3086,6 @@ std::size_t reflection_input_bytes(const Json &input) {
                                      {"update_index", 5}, {"budget", binding["budget"]}};
       maximum = std::max(maximum, repair.dump().size());
     }
-  }
-  if (prepared["selected_components"].array() &&
-      std::any_of(prepared["selected_components"].items().begin(),
-                  prepared["selected_components"].items().end(), [](const auto &item) {
-                    return item.text() == "loop_rules" || item.text() == "action_rules";
-                  })) {
-    auto counterexample = prepared;
-    counterexample["phase"] = "pool_map_repair";
-    counterexample["error"] = "gepa_control_no_differential_trigger";
-    counterexample["control_preflight"] = Json{{"passed", false}, {"missing_rule_count", 10000},
-        {"observed_counters", Json{{"loop_queries", std::size_t(4294967295ULL)},
-            {"action_queries", std::size_t(4294967295ULL)},
-            {"max_effective_no_progress", std::size_t(4294967295ULL)},
-            {"max_repeated_failure_steps", std::size_t(4294967295ULL)},
-            {"max_prior_failures", std::size_t(4294967295ULL)}, {"aggressive_controls", false}}}};
-    maximum = std::max(maximum, counterexample.dump().size());
   }
   return maximum;
 }
@@ -3336,9 +3152,7 @@ Json select_full_pool_review_cases(const Json &feedback, const Json &support) {
 bool full_pool_records_abstain(const Json &records) {
   return records.array() && !records.items().empty() &&
       std::any_of(records.items().begin(), records.items().end(), [](const Json &record) {
-        return (record.flag("valid", true) ||
-                record.str("error") == "gepa_control_no_differential_trigger") &&
-               record["candidate_values"].object();
+        return record.flag("valid", true) && record["candidate_values"].object();
       }) &&
       std::all_of(records.items().begin(), records.items().end(), [](const Json &record) {
         return !record.flag("valid", true) || (record["candidate_values"].object() &&
@@ -3360,45 +3174,6 @@ bool coupling_budget_before_maps(const std::string &code, std::size_t calls_befo
                                 std::size_t calls_after, const Json &stages) {
   return code == "gepa_feedback_budget_too_small" && calls_before == calls_after &&
          (stages.null() || (stages.array() && stages.items().empty()));
-}
-
-// Selection sees only actual component values. Abstention and rejected maps
-// remain diagnostic evidence, never interchangeable proposal IDs.
-Json selection_packet(Json packet) {
-  Json choices = Json::Object{}, selectable = Json::Array{};
-  Json diagnostics = packet["diagnostic_proposals"].array()
-                         ? packet["diagnostic_proposals"] : Json(Json::Array{});
-  if (!packet["selected_components"].array() || !packet["intermediate_proposals"].array())
-    return packet;
-  for (const auto &component : packet["selected_components"].items())
-    choices[component.text()] = Json::Array{};
-  for (const auto &record : packet["intermediate_proposals"].items()) {
-    bool eligible = false;
-    if (record.flag("valid", true) && !record.str("id").empty() &&
-        record["candidate_values"].object())
-      for (const auto &component : packet["selected_components"].items()) {
-        const auto key = component.text();
-        // Null experience values and empty control arrays are intentional removal
-        // candidates; absence of the component key is the abstention case.
-        if (record["candidate_values"].has(key)) {
-          choices[key].push(record["id"]);
-          eligible = true;
-        }
-      }
-    if (eligible)
-      selectable.push(record);
-    else {
-      auto diagnostic = record;
-      if (diagnostic["candidate_values"].object() &&
-          diagnostic["candidate_values"].fields().empty())
-        diagnostic.fields().erase("candidate_values");
-      diagnostics.push(std::move(diagnostic));
-    }
-  }
-  packet["legal_selection_choices"] = std::move(choices);
-  packet["intermediate_proposals"] = std::move(selectable);
-  packet["diagnostic_proposals"] = std::move(diagnostics);
-  return packet;
 }
 
 Json compact_full_pool_reduction(Json packet) {
@@ -3428,35 +3203,12 @@ Json compact_full_pool_reduction(Json packet) {
       record["task_facts"] = std::move(facts);
     }
   }
-  // Preserve the complete authorized source catalogue. Only unrelated bodies are
-  // redundant here; reduce is not allowed to invent a new source from prose.
-  collect_source_memory_ids(packet["controls"], needed);
-  packet = compact_unassociated_source_bodies(std::move(packet), needed);
-  // Reduce selects already validated component values. Keep every exact source
-  // identity and scope, while unrelated match prose adds no selection authority.
-  for (auto &source : packet["experiences"].items())
-    if (!needed.count(source.str("memory_id"))) {
-      source.fields().erase("condition");
-      source.fields().erase("trigger_pattern");
-    }
-  // The immutable formal ledger already carries each task's Q/strict/loop facts.
-  // Keep distinct goal/control diagnoses, without repeating the same score in every
-  // overlapping trajectory segment and at every reduce level.
-  std::map<std::string, Json> formal;
-  if (packet["training_batch_summary"].array())
-    for (const auto &row : packet["training_batch_summary"].items())
-      formal[row.str("task_id")] = row;
-  for (auto &record : packet["intermediate_proposals"].items())
-    if (record["task_facts"].array())
-      for (auto &fact : record["task_facts"].items()) {
-        const auto found = formal.find(fact.str("task_id"));
-        if (found == formal.end()) continue;
-        for (const auto *field : {"quality", "strict_pass_rate", "strict_passed",
-                                  "invalid_loops", "invalid_loop_count", "metric_coverage"})
-          if (fact.has(field) && found->second.has(field) &&
-              fact[field].dump() == found->second[field].dump())
-            fact.fields().erase(field);
-      }
+  if (packet["experiences"].array() && !needed.empty()) {
+    Json retained = Json::Array{};
+    for (const auto &source : packet["experiences"].items())
+      if (needed.count(source.str("memory_id"))) retained.push(source);
+    packet["experiences"] = std::move(retained);
+  }
   return packet;
 }
 
@@ -3502,66 +3254,6 @@ Json compact_full_pool_review_case(Json row, const Json &selected, const Json &s
   row["trial"]["reflection_actions_selected"] =
       row["trial"].num("reflection_actions_selected", 0) + 1;
   return row;
-}
-
-// Adapt diagnostic overhead to the real byte envelope. Source identities,
-// authorization, task IDs, formal outcomes, original work bounds and predicates
-// remain exact; only duplicate source bodies and diagnostic prose are shortened.
-Json compact_reflection_metadata(Json packet, std::size_t limit) {
-  if (reflection_input_bytes(packet) <= limit) return packet;
-  std::set<std::string> needed;
-  collect_source_memory_ids(packet["components"], needed);
-  collect_source_memory_ids(packet["controls"], needed);
-  // Derive before pruning: a newly executable binding's approved body must not
-  // disappear just because editable_bindings is materialized only at send time.
-  const auto bound = observed_operation_bindings(packet, std::numeric_limits<std::size_t>::max());
-  collect_source_memory_ids(bound["controls"]["editable_bindings"], needed);
-  collect_source_memory_ids(packet["feedback"], needed);
-  collect_source_memory_ids(packet["proposed_strategy"], needed);
-  if (packet["intermediate_proposals"].array())
-    for (const auto &record : packet["intermediate_proposals"].items())
-      collect_source_memory_ids(record["candidate_values"], needed);
-  if (packet["experiences"].array()) {
-    packet = compact_unassociated_source_bodies(std::move(packet), needed);
-    for (auto &source : packet["experiences"].items()) {
-      const auto key = "experience:" + source.str("memory_id");
-      if (source.has("content") && packet["components"].has(key) &&
-          source.str("content") == experience_content(packet["components"][key]))
-        source.fields().erase("content");
-    }
-  }
-  for (const auto width : {384u, 128u, 64u, 32u}) {
-    if (reflection_input_bytes(packet) <= limit) break;
-    auto shorten_issues = [&](Json &goal) {
-      if (!goal.object()) return;
-      if (goal["issues"].array())
-        for (auto &issue : goal["issues"].items())
-          if (issue["reason"].string())
-            issue["reason"] = diagnostic_excerpt(issue.str("reason"), width);
-    };
-    if (packet["intermediate_proposals"].array())
-      for (auto &record : packet["intermediate_proposals"].items()) {
-        if (record["reason"].string())
-          record["reason"] = diagnostic_excerpt(record.str("reason"), width);
-        if (record["task_facts"].array())
-          for (auto &fact : record["task_facts"].items()) shorten_issues(fact["goal"]);
-      }
-    if (packet["case_outcomes"].array())
-      for (auto &outcome : packet["case_outcomes"].items())
-        shorten_issues(outcome["goal_completion"]);
-    if (packet["feedback"].array())
-      for (auto &row : packet["feedback"].items()) {
-        shorten_issues(row["trial"]["goal_completion"]);
-        auto &points = row["selected_experience_applications"]["points"];
-        if (points.array())
-          for (auto &point : points.items())
-            for (const auto *field : {"task_excerpt", "state_excerpt"})
-              if (point[field].string())
-                point[field] = diagnostic_excerpt(point[field].text(), width);
-      }
-  }
-  if (reflection_input_bytes(packet) > limit) packet.fields().erase("prior_search_rejections");
-  return packet;
 }
 
 Json compact_full_pool_review(Json review, const Json &selection,
@@ -3669,7 +3361,6 @@ Json compact_full_pool_review(Json review, const Json &selection,
                     }), proposals.end());
     review.fields().erase("alternative_proposal_id");
   }
-  review = compact_reflection_metadata(std::move(review), input_limit);
   require(reflection_input_bytes(review) <= input_limit,
           "gepa_feedback_budget_too_small");
   return review;
@@ -3731,7 +3422,7 @@ Json reflection_task_facts(const Json &feedback_rows, const Json &selected) {
   for (const auto &row : feedback_rows.items()) {
     const auto &trial = row["trial"];
     const auto &metrics = trial["metrics"];
-    Json fact{{"task_id", row.str("task_id")},
+    Json fact{{"task_id", clip(row.str("task_id"), 120)},
               {"verdict", trial["verdict"]},
               {"execution_status", trial["execution_status"]}};
     if (!trial.str("error_code").empty())
@@ -3871,15 +3562,11 @@ Json reflection_task_facts(const Json &feedback_rows, const Json &selected) {
       for (auto &issue : fact["goal"]["issues"].items())
         if (issue.has("reason"))
           issue["reason"] = diagnostic_excerpt(issue.str("reason"), 12);
-    if (fact.dump().size() > 512 && fact["goal"].object()) {
-      // Goal status and critical-failure counts are real facts too. Only prose
-      // diagnoses can be omitted when an unusually long identity needs space.
-      fact["goal"].fields().erase("issues");
-    }
-    // Long task IDs and mandatory formal facts are not diagnostic prose. The
-    // whole request is grouped dynamically below; never truncate an identity or
-    // kill a completed map because one mandatory fact exceeds an arbitrary 512B.
-
+    if (fact.dump().size() > 512)
+      fact.fields().erase("goal");
+    if (fact.dump().size() > 512)
+      fact["task_id"] = clip(fact.str("task_id"), 64);
+    require(fact.dump().size() <= 512, "gepa_task_diagnostic_budget_too_small");
     facts.push(std::move(fact));
   }
   return facts;
@@ -3916,7 +3603,6 @@ Json resolve_control_binding_updates(const Json &draft, const Json &prepared,
   result.fields().erase("control_binding_updates");
   result["control_updates"] = Json::Array{};
   std::set<std::string> used;
-  std::set<std::pair<std::string, std::string>> updated_loop_groups;
   const auto scope = [&](const std::string &memory_id) {
     std::string value;
     std::size_t matches = 0;
@@ -4084,45 +3770,6 @@ Json resolve_control_binding_updates(const Json &draft, const Json &prepared,
           }
         }
       check(exact == 1 || (!exact && generic == 1), "base_loop_missing_or_ambiguous");
-      if (matched > 1) {
-        // A typed cap addresses the actor's execution. Legal disjoint siblings
-        // share its budget; never choose one by array order or lose another source.
-        std::vector<std::pair<std::size_t, v1::LoopRule>> siblings;
-        std::size_t selected_source = 0;
-        const auto &rules = prepared["components"][component].items();
-        for (std::size_t index = 0; index < rules.size(); ++index) {
-          const auto &rule = rules[index];
-          if (rule.str("actor_id") != binding->str("actor_id") ||
-              scope(rule.str("memory_id")) != binding->str("target_scope"))
-            continue;
-          selected_source += rule.str("memory_id") == update.str("memory_id");
-          check(iterations <= rule.num("max_iterations", 0), "budget_out_of_range");
-          auto native = rule;
-          native.fields().erase("memory_id");
-          native["target_scope"] = binding->str("target_scope");
-          native["source_experience"] = Json{{"memory_id", rule["memory_id"]}};
-          siblings.emplace_back(index, proto<v1::LoopRule>(native));
-        }
-        check(selected_source == 1, "existing_rules_ambiguous");
-        for (std::size_t index = 0; index < siblings.size(); ++index)
-          for (std::size_t other = 0; other < index; ++other)
-            check(disjoint_failure_recovery_rules(siblings[index].second, siblings[other].second),
-                  "existing_rules_ambiguous");
-        check(updated_loop_groups.emplace(binding->str("target_scope"),
-                                           binding->str("actor_id")).second,
-              "duplicate_loop_group_update");
-        for (const auto &sibling : siblings) {
-          auto replacement = rules[sibling.first];
-          replacement["max_iterations"] = iterations;
-          replacement["reason"] = update.str("reason");
-          if (binding->flag("require_finalization", false))
-            replacement["require_finalization"] = true;
-          result["control_updates"].push(Json{{"component", component}, {"op", "set"},
-              {"index", sibling.first}, {"value", std::move(replacement)}});
-        }
-        ++update_index;
-        continue;
-      }
       check(matched != 1 ||
                 iterations <= prepared["components"][component].items()[matched_index].num(
                                   "max_iterations", 0),
@@ -4495,139 +4142,11 @@ Json reflection_call_diagnostic(const legacy::RawModelResponse &response, std::s
               {"decoded_body_bytes", response.body.size()}};
 }
 
-
-// The complete trial remains the cache identity. Canonical map ordering avoids
-// cache misses caused only by protobuf Struct copying; no fields are discarded.
-std::string exact_trial_cache_key(const Trial &trial) {
-  std::string bytes;
-  bytes.reserve(trial.ByteSizeLong());
-  google::protobuf::io::StringOutputStream output(&bytes);
-  {
-    google::protobuf::io::CodedOutputStream stream(&output);
-    stream.SetSerializationDeterministic(true);
-    require(trial.SerializeToCodedStream(&stream), "gepa_trial_cache_serialization_failed");
-  }
-  return bytes;
-}
-
-// Proposal-local facts use the current parent's formal pool only; historical
-// component attempts remain a soft exploration penalty, never scoring evidence.
-Json current_pool_selection_components(Json available, const Json &formal,
-                                       const Json &applications, const Json &opportunities,
-                                       const Json &attempts) {
-  Json evidence{{"components", Json::Object{}}, {"parent_invalid_loops", Json()}};
-  bool complete = !formal.fields().empty();
-  double loops = 0;
-  for (const auto &item : formal.fields()) {
-    complete &= reflection_metrics_complete(item.second);
-    loops += number(item.second["invalid_loops"]);
-  }
-  if (complete) evidence["parent_invalid_loops"] = loops / formal.fields().size();
-  for (const auto &component : available.fields()) {
-    if (component.first == "__gepa_selection_evidence") continue;
-    evidence["components"][component.first] = Json{
-        {"failed_task_ids", Json::Array{}}, {"applied_task_ids", Json::Array{}},
-        {"opportunity_task_ids", Json::Array{}}, {"failure_families", Json::Array{}},
-        {"attempts", attempts.num(component.first, 0)}};
-  }
-  const auto remember = [&](const std::string &component, const char *field, const std::string &id) {
-    if (!available.has(component)) return;
-    auto &values = evidence["components"][component][field];
-    if (std::none_of(values.items().begin(), values.items().end(),
-                     [&](const Json &value) { return value.text() == id; })) values.push(id);
-  };
-  const auto unfinished = [&](const std::string &task) {
-    return formal.has(task) && reflection_metrics_complete(formal[task]) &&
-        (number(formal[task]["quality"], 1) < 1 - 1e-12 ||
-         number(formal[task]["strict_pass_rate"], 1) < 1 - 1e-12 ||
-         number(formal[task]["invalid_loops"]) > 0 ||
-         number(formal[task]["critical_failures"]) > 0);
-  };
-  for (const auto &task : applications.fields()) {
-    if (!formal.has(task.first)) continue;
-    for (const auto &component : task.second.items()) {
-      remember(component.text(), "applied_task_ids", task.first);
-      remember(component.text(), "opportunity_task_ids", task.first);
-      if (unfinished(task.first)) remember(component.text(), "failed_task_ids", task.first);
-    }
-  }
-  for (const auto &component : opportunities.fields())
-    for (const auto &task : component.second.fields()) {
-      if (!formal.has(task.first)) continue;
-      remember(component.first, "opportunity_task_ids", task.first);
-      if (unfinished(task.first)) remember(component.first, "failed_task_ids", task.first);
-      for (const auto &family : task.second.items())
-        remember(component.first, "failure_families", family.text());
-    }
-  available["__gepa_selection_evidence"] = std::move(evidence);
-  return available;
-}
-
-Json refine_current_pool_selection(const Json &selected, const Json &available,
-                                   std::size_t cursor, bool preserve_exploration,
-                                   const std::string &status) {
-  if (status != "pending" || preserve_exploration || selected.items().size() != 1 ||
-      available[selected.items().front().text()].null()) return selected;
-  const auto preferred = gepa::select_components(available, "round_robin", cursor);
-  if (preferred.items().size() != 1) return selected;
-  const auto &support = available["__gepa_selection_evidence"]["components"]
-                                 [preferred.items().front().text()];
-  // No current failure/loop gap is a valid exploration case, not an abstention.
-  return support["failed_task_ids"].array() && !support["failed_task_ids"].items().empty()
-             ? preferred : selected;
-}
-
-// A small L1 bundle follows the current parent's real failure chain. An
-// unrelated task, historical application or shared prose never authorizes it.
-Json related_experience_bundle(const Json &selected, const Json &available,
-                               const Json &formal, const Json &observations,
-                               const Json &attempts) {
-  std::set<std::string> anchors;
-  for (const auto &component : selected.items())
-    if (component.text().rfind("experience:", 0) == 0 &&
-        available.has(component.text()) && !available[component.text()].null())
-      anchors.insert(component.text());
-  if (anchors.empty() || anchors.size() >= 3) return selected;
-  std::map<std::string, std::set<std::string>> applied, related;
-  for (const auto &row : observations.items()) {
-    const auto id = row.str("task_id");
-    if (!formal.has(id) || !reflection_metrics_complete(formal[id])) continue;
-    const auto &score = formal[id];
-    const bool unfinished = number(score["quality"]) < 1 || number(score["strict_pass_rate"]) < 1 ||
-                            number(score["invalid_loops"]) > 0 || number(score["critical_failures"]) > 0;
-    bool shared = false;
-    for (const auto &source : row["sources"].items()) shared |= anchors.count(source.text()) != 0;
-    for (const auto &source : row["sources"].items()) {
-      const auto key = source.text();
-      if (key.rfind("experience:", 0) != 0 || !available.has(key) || available[key].null()) continue;
-      applied[key].insert(id);
-      if (unfinished && shared && !row.str("run_id").empty() &&
-          row["executed_operations"].array() && !row["executed_operations"].items().empty())
-        related[key].insert(id);
-    }
-  }
-  std::vector<std::string> candidates;
-  for (const auto &entry : related)
-    if (!anchors.count(entry.first) && applied[entry.first].size() >= 2 && !entry.second.empty())
-      candidates.push_back(entry.first);
-  std::stable_sort(candidates.begin(), candidates.end(), [&](const auto &a, const auto &b) {
-    if (related[a].size() != related[b].size()) return related[a].size() > related[b].size();
-    return attempts.num(a, 0) < attempts.num(b, 0);
-  });
-  auto result = selected;
-  for (const auto &key : candidates) {
-    if (anchors.size() == 3) break;
-    result.push(key); anchors.insert(key);
-  }
-  return result;
-}
-
 struct Search {
   fs::path dataset_path, evaluation_path, root;
   Json seed, baseline, evaluation, config, gate, controls, tree;
   Json reflection_history;
   mutable std::map<std::string, Json> reviewed_feedback_cache;
-  mutable std::map<std::tuple<std::string, std::string, std::string>, Json> control_feedback_cache;
   std::string context, evaluation_context, candidate_evaluation_context;
   std::function<bool()> cancelled;
   std::shared_ptr<legacy::ModelAdapter> model;
@@ -4639,71 +4158,15 @@ struct Search {
   std::string final_holdout_execution_context;
   std::size_t final_holdout_reserve = 0;
 
-  bool reflection_components_checkpoint(std::size_t index) const {
-    if (!tree["nodes"].array() || index >= tree["nodes"].items().size()) return false;
-    const auto &node = tree["nodes"].items()[index];
-    if (!node.flag("component_reserved", false) || !node["components"].array() ||
-        node["components"].items().empty()) return false;
-    const auto prefix = std::to_string(index);
-    std::vector<std::string> stems{prefix, prefix + ".pool-map-0", prefix + ".combee-0-map-0"};
-    if (node["reflection_stages"].array())
-      for (const auto &stage : node["reflection_stages"].items()) {
-        const auto stem = stage.str("file");
-        if (stem.size() <= 256 && stem.rfind(prefix + ".", 0) == 0 &&
-            stem.find('/') == std::string::npos && stem.find('\\') == std::string::npos)
-          stems.push_back(stem);
-      }
-    for (const auto &stem : stems) {
-      const auto path = root / "reflections" / (stem + ".request.json");
-      if (!fs::is_regular_file(path)) continue;
-      try {
-        const auto request = Json::parse(read(path, 262144));
-        const auto &recorded = request["input"]["selected_components"];
-        if (!recorded.array() || recorded.items().empty()) continue;
-        const bool bound = std::all_of(recorded.items().begin(), recorded.items().end(),
-            [&](const Json &component) {
-              return component.string() && std::any_of(node["components"].items().begin(),
-                  node["components"].items().end(), [&](const Json &selected) {
-                    return selected.string() && selected.text() == component.text();
-                  });
-            });
-        if (bound) return true;
-      } catch (const Error &) {
-        // A partial request cannot establish an earlier authorized reflection binding.
-      }
-    }
-    return false;
-  }
-
-  Json pending_reflection_components(std::size_t index, const Json &available,
-                                     bool preserve_exploration) const {
-    const auto &node = tree["nodes"].items()[index];
-    const auto selected = node["components"].array() ? node["components"]
-                                                   : gepa::select_components(available, "all", 0);
-    if (reflection_components_checkpoint(index)) return selected;
-    return refine_current_pool_selection(selected, available, node.num("component_slot", 0),
-                                         preserve_exploration, node.str("status"));
-  }
-
-  const Json &reviewed_feedback_trial(const dataset::v1::EvaluationTrial &trial) const {
-    const auto key = exact_trial_cache_key(trial);
+  Json reviewed_feedback_trial(const dataset::v1::EvaluationTrial &trial) const {
+    const auto key = trial.SerializeAsString();
     const auto found = reviewed_feedback_cache.find(key);
     if (found != reviewed_feedback_cache.end())
       return found->second;
     auto view = feedback_trial(trial, controls);
     bind_iteration_assessments(view, json(trial.evidence()));
-    return reviewed_feedback_cache.emplace(key, std::move(view)).first->second;
-  }
-
-
-  const Json &cached_control_feedback_trial(const Trial &trial, const Json &selected,
-                                           const Json &feedback_controls) const {
-    const auto key = std::make_tuple(exact_trial_cache_key(trial), selected.dump(),
-                                     feedback_controls.dump());
-    const auto found = control_feedback_cache.find(key);
-    if (found != control_feedback_cache.end()) return found->second;
-    return control_feedback_cache.emplace(
-        key, control_feedback_trial(trial, selected, feedback_controls)).first->second;
+    reviewed_feedback_cache.emplace(key, view);
+    return view;
   }
 
   Json trigger_only_failure_evidence(const Json &parent, const Report &report,
@@ -4746,7 +4209,7 @@ struct Search {
       std::map<std::string, std::string> agents;
       for (const auto &trace : traces.items())
         agents[trace["identity"].str("run_id")] = trace["identity"].str("agent_id");
-      const auto &view = reviewed_feedback_trial(trial);
+      const auto view = reviewed_feedback_trial(trial);
       for (const auto &run : view["evidence"]["runs"].items()) {
         const auto agent = agents[run.str("run_id")];
         if (agent.empty())
@@ -4866,28 +4329,6 @@ struct Search {
     require(now() + estimate < deadline() - holdout_time(), "gepa_search_time_reserved");
   }
 
-  // A paid 429 at a spent boundary must finish the existing search normally.
-  // This applies only to the saved rate-limit checkpoint after normal source
-  // validation; no elapsed time, model calls or completed stages are reset.
-  bool close_rate_limited_search_budget(bool recovering_rate_limit) {
-    if (!recovering_rate_limit || final_holdout_replay || tree.flag("holdout_started", false))
-      return false;
-    const bool time_spent = now() >= deadline() - holdout_time();
-    const bool calls_spent = tree.num("model_calls", 0) >= config.num("max_model_calls", 8);
-    if (!time_spent && !calls_spent) return false;
-    // Never freeze an already-qualified finalist's holdout after its deadline.
-    // That checkpoint needs a normal time-budget extension before final replay.
-    if (time_spent && !final_holdout_candidates().empty()) return false;
-    require(!cancelled || !cancelled(), "gepa_cancelled");
-    tree["stop_reason"] = time_spent ? "gepa_search_time_reserved" : "model_budget";
-    if (!tree["active"].null())
-      tree["nodes"].items()[tree["active"].integer()]["status"] = "skipped_budget";
-    tree["active"] = nullptr;
-    if (!tree["batch"].null()) finish_batch();
-    save();
-    return true;
-  }
-
   // 解析当前搜索节点的评测产物，并验证其属于预期运行。
   Json artifact(std::size_t index) const {
     const auto value = Json::parse(read(root / "versions" / (std::to_string(index) + ".json")));
@@ -4977,34 +4418,6 @@ struct Search {
                 {"comparison_timing", "historical_baseline"}};
   }
 
-  // Native reports already retain a protobuf copy. Authenticate both original
-  // files using the existing manifest, then avoid materializing their JSON
-  // tree merely to rebuild the same trajectory a second time.
-  void verify_external_report_files(const fs::path &path, const Json &manifest) const {
-    require(manifest["files"].object() && !manifest["files"].str("report.json").empty(),
-            "gepa_external_baseline_manifest_invalid");
-    for (const auto &file : manifest["files"].fields()) {
-      require(!file.first.empty() && fs::path(file.first).filename() == file.first &&
-                  file.first != "." && file.first != "..", "gepa_external_baseline_manifest_invalid");
-      require(hash(read(path.parent_path() / file.first, kMaxEvaluationReportBytes)) == file.second.text(),
-              "gepa_external_baseline_source_changed");
-    }
-  }
-
-  Report external_native_report(const fs::path &path, const Json &manifest) const {
-    verify_external_report_files(path, manifest);
-    Report report;
-    if (manifest["files"].has("report.pb")) {
-      const auto bytes = read(path.parent_path() / "report.pb", kMaxEvaluationReportBytes);
-      require(report.ParseFromString(bytes), "gepa_external_baseline_report_invalid");
-    } else {
-      const auto bytes = read(path, kMaxEvaluationReportBytes);
-      require(google::protobuf::util::JsonStringToMessage(bytes, &report).ok(),
-              "gepa_external_baseline_report_invalid");
-    }
-    return report;
-  }
-
   Report load_external_holdout(const Json &source, const Json &identity) const {
     const auto current = external_holdout_source(identity);
     require(current.object() && source.dump() == current.dump(),
@@ -5067,23 +4480,21 @@ struct Search {
                 read(source_config_path, 16777216)) == expected_judge,
             "gepa_external_baseline_judge_mismatch");
     const fs::path path(source.str("report"));
+    auto bytes = read(path, kMaxEvaluationReportBytes);
     const auto manifest = Json::parse(read(path.parent_path() / "manifest.json", 16777216));
-    auto compact_cache = holdout_baselines();
-    const auto compact_directory = compact_cache.index_path().parent_path() /
-        (compact_cache.index_path().stem().string() + ".external");
-    const auto compact_index = compact_directory / "source.json";
-    if (fs::is_regular_file(compact_index)) {
-      const auto cached = Json::parse(read(compact_index, 16777216));
-      require(cached["verified_source"].dump() == source.dump() &&
-                  cached["verified_result"].dump() == result.dump() &&
-                  cached["verified_manifest"].dump() == manifest.dump(),
-              "gepa_external_baseline_source_changed");
-      // Retain the original manifest checks. Only the protobuf allocation and
-      // trajectory equality work are skipped after their verified projection.
-      verify_external_report_files(path, manifest);
-      return compact_cache.load(cached);
+    require(hash(bytes) == manifest["files"].str("report.json"),
+            "gepa_external_baseline_source_changed");
+    Report report;
+    require(google::protobuf::util::JsonStringToMessage(bytes, &report).ok(),
+            "gepa_external_baseline_report_invalid");
+    bytes.clear(); bytes.shrink_to_fit();
+    for (const auto &file : manifest["files"].fields()) {
+      require(!file.first.empty() && fs::path(file.first).filename() == file.first &&
+                  file.first != "." && file.first != "..", "gepa_external_baseline_manifest_invalid");
+      if (file.first != "report.json")
+        require(hash(read(path.parent_path() / file.first, kMaxEvaluationReportBytes)) == file.second.text(),
+                "gepa_external_baseline_source_changed");
     }
-    Report report = external_native_report(path, manifest);
     const auto settings = json(report.configuration());
     if (grading_parallelism_changed) {
       // A model-only regrade changes judge worker capacity, not the saved Agent
@@ -5126,12 +4537,16 @@ struct Search {
           saved_parent = folder / "report.json";
         }
         require(!saved_parent.empty(), "gepa_external_baseline_execution_mismatch");
-        const auto parent_manifest = Json::parse(read(saved_parent.parent_path() / "manifest.json", 16777216));
-        Report previous = external_native_report(saved_parent, parent_manifest);
-        require(previous.complete() && previous.run_id() == parent.str("run_id") &&
+        auto parent_bytes = read(saved_parent, kMaxEvaluationReportBytes);
+        require(hash(parent_bytes) == parent.str("report_sha256"),
+                "gepa_external_baseline_source_changed");
+        Report previous;
+        require(google::protobuf::util::JsonStringToMessage(parent_bytes, &previous).ok() &&
+                    previous.complete() && previous.run_id() == parent.str("run_id") &&
                     previous.dataset_version() == report.dataset_version() &&
                     previous.trials_size() == report.trials_size(),
                 "gepa_external_baseline_execution_mismatch");
+        parent_bytes.clear(); parent_bytes.shrink_to_fit();
         std::map<std::string, const Trial *> saved;
         for (const auto &trial : previous.trials())
           require(saved.emplace(trial.trial_id(), &trial).second,
@@ -5211,7 +4626,7 @@ struct Search {
                   (trial.execution_status() == "completed" || trial.execution_status() == "failed") &&
                   (trial.verdict() == "passed" || trial.verdict() == "failed") &&
                   (trial.error_code().empty() || trial.execution_status() == "failed") &&
-                  (!identity.flag("loop_review", false) || HoldoutBaselineCache::complete_loop_review(evidence)),
+                  (!identity.flag("loop_review", false) || evidence["loop_review"].str("status") == "complete"),
               "gepa_external_baseline_trial_mismatch");
       if (evidence["assessment"].object()) assessment_quality(evidence, trial.verdict() == "passed");
       const Json reference{{"report", source["report"]}, {"trial_id", trial.trial_id()},
@@ -5242,31 +4657,6 @@ struct Search {
     (*summary_fields)["baseline_source"].mutable_struct_value()->CopyFrom(proto<google::protobuf::Struct>(source));
     (*summary_fields)["resource_costs_complete"].set_bool_value(source.flag("resource_costs_complete", false));
     report.set_dataset_version(dataset.dataset_version());
-    // Persist this already verified score projection through the existing
-    // baseline-cache report/manifest protocol. Original traces remain solely
-    // in their source report; the original identity and grade doubles survive.
-    auto compact_configuration = settings;
-    compact_configuration["variants"].items()[0]["id"] = "baseline";
-    *report.mutable_configuration() = proto<google::protobuf::Struct>(compact_configuration);
-    std::string compact_bytes;
-    google::protobuf::util::JsonPrintOptions print_options;
-    print_options.preserve_proto_field_names = true;
-    require(google::protobuf::util::MessageToJsonString(report, &compact_bytes, print_options).ok(),
-            "serialization_failed");
-    const auto compact_pb = report.SerializeAsString();
-    const auto compact_path = compact_directory / "report.json";
-    compact_cache.artifacts(report, path.parent_path(), compact_directory);
-    write(compact_path, compact_bytes);
-    write(compact_directory / "report.pb", compact_pb);
-    write(compact_directory / "manifest.json", Json{{"complete", report.complete()},
-        {"run_id", report.run_id()}, {"dataset_version", report.dataset_version()},
-        {"files", Json{{"report.json", hash(compact_bytes)}, {"report.pb", hash(compact_pb)}}}}.dump());
-    auto cached = compact_cache.source(compact_path, hash(compact_bytes));
-    cached["verified_source"] = source;
-    cached["verified_result"] = result;
-    cached["verified_manifest"] = manifest;
-    compact_cache.load(cached);
-    write(compact_index, cached.dump());
     return report;
   }
 
@@ -5343,7 +4733,7 @@ struct Search {
                            : evidence["trajectory"]["summary"]["invalid_loop_lower_bound"];
     const auto &objective = config["objective"];
     const bool need_loops = number(objective["invalid_loop_weight"], 0.2) ||
-                            gate.has("min_invalid_loop_reduction") || trial.split() == "train";
+                            gate.has("min_invalid_loop_reduction");
     return (need_loops && loops.null()) || required_token_metric_missing(trial);
   }
 
@@ -6103,8 +5493,7 @@ struct Search {
           }
           return report;
         }
-        if (required_objective_metrics_missing(trial) ||
-            (trial.split() == "train" && trial.error_code().empty() && !scored_trial(trial))) {
+        if (required_objective_metrics_missing(trial)) {
           regrade = true;
           rerun_incomplete_metrics |= required_token_metric_missing(trial);
           continue;
@@ -6175,7 +5564,7 @@ struct Search {
           continue;
         const bool missing_metrics = trial.execution_status() == "completed" &&
             (trial.error_code().empty() || trial.error_code() == "evaluation_judge_failed") &&
-            (!scored_trial(trial) || required_objective_metrics_missing(trial));
+            required_objective_metrics_missing(trial);
         recoverable |= missing_metrics || runner.count(trial.error_code());
         permanent |= !missing_metrics && !runner.count(trial.error_code());
       }
@@ -6252,7 +5641,7 @@ struct Search {
       const auto lw = number(objective["invalid_loop_weight"], 0.2);
       const auto tw = number(objective["token_weight"], 0.05);
       const auto dw = number(objective["latency_weight"], 0);
-      const bool need_loops = lw || gate.has("min_invalid_loop_reduction") || trial.split() == "train";
+      const bool need_loops = lw || gate.has("min_invalid_loop_reduction");
       const bool unknown_tokens = metrics["tokens"].null();
       auto penalty = [](double x, double scale) { return x / (scale + x); };
       // 此有界代价的上确界为 1。显式保守策略据此排序，绝不伪造未测得的 token 数。
@@ -6685,26 +6074,6 @@ struct Search {
     return result;
   }
 
-  // Ephemeral selection evidence is never composed into an artifact or emitted
-  // as an executable component. All sets come from observed TRAIN receipts.
-  Json selection_components(const Json &parent) const {
-    auto result = components(parent);
-    Json evidence{{"components", Json::Object{}}, {"parent_invalid_loops", Json()}};
-    const auto policy_id = parent["policy"].str("policy_id");
-    if (tree.str("selection_parent_policy") == policy_id && tree.has("selection_parent_invalid_loops"))
-      evidence["parent_invalid_loops"] = tree["selection_parent_invalid_loops"];
-    for (const auto &component : result.fields()) {
-      Json hint = tree["training_component_evidence"][component.first];
-      if (!hint.object()) hint = Json::Object{};
-      for (const auto *field : {"failed_task_ids", "applied_task_ids", "opportunity_task_ids", "failure_families"})
-        if (!hint[field].array()) hint[field] = Json::Array{};
-      hint["attempts"] = tree["component_selections"].num(component.first, 0);
-      evidence["components"][component.first] = std::move(hint);
-    }
-    result["__gepa_selection_evidence"] = std::move(evidence);
-    return result;
-  }
-
   // 在父策略上组合已选择的组件，未选择部分保持父版本内容，便于归因。
   Json compose(const Json &parent, const Json &values) const {
     const auto original = components(parent);
@@ -6788,40 +6157,6 @@ struct Search {
       options = apply_control_draft(policy.snapshot(), without_generated_controls(options),
                                     controls, draft);
     }
-    std::set<std::string> prevention;
-    const auto parent_options = json(policy.options());
-    if (parent_options["l1_prevention_sources"].array())
-      for (const auto &id : parent_options["l1_prevention_sources"].items())
-        prevention.insert(id.text());
-    for (const auto &item : original.fields())
-      if (item.first.rfind("experience:", 0) == 0 && !values[item.first].null() &&
-          item.second.dump() != values[item.first].dump())
-        prevention.insert(item.first.substr(11));
-    Json prevention_ids = Json::Array{};
-    for (const auto &id : prevention) {
-      bool overridden = false, disabled = false, approved = false;
-      for (const auto &rewrite : options.experience_overrides())
-        if (rewrite.source_experience().memory_id() == id)
-          for (const auto &source : policy.snapshot().experiences())
-            if (source.memory_id() == id) {
-              // ShadowExperience has no operation override list; any nonempty
-              // authorized rewrite list is an explicit change from that source.
-              const bool operations_changed = rewrite.observed_operations_size() != 0;
-              overridden |= rewrite.content() != source.content() || operations_changed ||
-                  (!rewrite.trigger_pattern().empty() && rewrite.trigger_pattern() != source.trigger_pattern());
-            }
-      for (const auto &ref : options.disabled_injections()) disabled |= ref.memory_id() == id;
-      for (const auto &ref : options.approved_experiences())
-        if (ref.memory_id() == id)
-          for (const auto &source : policy.snapshot().experiences())
-            approved |= source.memory_id() == id && source.content_revision() == ref.content_revision();
-      if (overridden && approved && !disabled && prevention_ids.items().size() < 16)
-        prevention_ids.push(id);
-    }
-    auto derived_options = json(options);
-    if (!prevention_ids.items().empty() || parent_options.has("l1_prevention_sources"))
-      derived_options["l1_prevention_sources"] = prevention_ids;
-    options = proto<v1::RuntimeOptions>(derived_options);
     result["policy"] = json(compile_runtime_policy(policy.snapshot(), options));
     require(published_policy_compatible(proto<v1::RuntimePolicy>(result["policy"]),
                                         proto<v1::RuntimePolicy>(seed["policy"]), controls.dump()),
@@ -6913,62 +6248,9 @@ struct Search {
   }
 
   // 反思只读取本轮训练反馈和允许修改的组件；不把验证或留出答案带入提示词。
-  Json experience_bundle_observations(const Json &parent, const Report &report) const {
-    const auto available = components(parent);
-    const auto policy = proto<v1::RuntimePolicy>(seed["policy"]);
-    const auto aliases = canonical_experience_aliases(policy);
-    std::map<std::string, std::string> approved;
-    for (const auto &source : policy.snapshot().experiences())
-      for (const auto &ref : policy.options().approved_experiences())
-        if (source.memory_id() == ref.memory_id() && source.content_revision() == ref.content_revision())
-          approved[source.memory_id()] = source.content_revision();
-    Json result = Json::Array{};
-    for (const auto &trial : report.trials()) {
-      if (trial.variant_id() != "candidate" || trial.split() != "train" || !scored_trial(trial)) continue;
-      std::map<std::string, std::set<std::string>> operations;
-      const auto &runs = reviewed_feedback_trial(trial)["evidence"]["runs"];
-      if (runs.array()) for (const auto &run : runs.items())
-        for (const auto &action : run["actions"].items())
-          if (action.flag("executed", false) && action.str("semantic") != "model" &&
-              !action.str("operation").empty())
-            operations[run.str("run_id")].insert(action.str("operation"));
-      const auto evidence = json(trial.evidence());
-      const auto traces = evidence["traces"].array() ? evidence["traces"]
-                        : evidence["trace"].object() ? Json(Json::Array{evidence["trace"]})
-                                                    : Json(Json::Array{});
-      for (const auto &trace : traces.items()) {
-        const auto run = trace["identity"].str("run_id");
-        if (run.empty() || !trace["events"].array()) continue;
-        for (const auto &event : trace["events"].items()) {
-          const auto &receipt = event["attributes"]["receipt"];
-          if (event.str("kind") != "advice.applied" || event["application"].str("status") != "applied" ||
-              event.str("event_id").empty() || receipt.str("boundary") != "llm") continue;
-          std::set<std::string> sources;
-          for (const auto &ref : receipt["experiences"].items()) {
-            const auto actual = ref.str("memory_id"), revision = ref.str("content_revision");
-            if (!approved.count(actual) || approved.at(actual) != revision) continue;
-            const auto alias = aliases.find({actual, revision});
-            const auto id = alias == aliases.end() ? actual : alias->second;
-            const auto key = "experience:" + id;
-            if (available.has(key) && !available[key].null()) sources.insert(key);
-          }
-          if (sources.empty()) continue;
-          Json row{{"task_id", trial.task_id()}, {"run_id", run},
-                   {"receipt_event_id", event["event_id"]}, {"sources", Json::Array{}},
-                   {"executed_operations", Json::Array{}}};
-          for (const auto &key : sources) row["sources"].push(key);
-          for (const auto &operation : operations[run]) row["executed_operations"].push(operation);
-          result.push(std::move(row));
-        }
-      }
-    }
-    return result;
-  }
-
   Json packet(const Json &parent, const Report &feedback, const Json &selected,
               bool trigger_only = false, const Json *known_scores = nullptr,
-              const Json *pool_source_context = nullptr,
-              const Json *pool_summary = nullptr) const {
+              const Json *pool_source_context = nullptr) const {
     // 授权范围仍由冻结种子约束，但反思正文/条件必须来自当前父版本，不能读回旧值。
     const auto available = components(parent), sources = source_experiences(parent);
     Json selected_values = Json::Object{};
@@ -7071,19 +6353,11 @@ struct Search {
                    {"execution_status", trial->execution_status()}};
       if (!trial->error_code().empty())
         summary["error_code"] = trial->error_code();
-      // Partial packets remain diagnostic views, but a complete report cannot
-      // silently send missing official outcomes to a paid reflection stage.
-      if (feedback.complete())
-        require(reflection_metrics_complete(feedback_scores[trial->task_id()]),
-                "gepa_reflection_metrics_incomplete");
       const auto facts = reflection_scored_facts(feedback_scores[trial->task_id()]);
       for (const auto &field : facts.fields())
         summary[field.first] = field.second;
       result["training_batch_summary"].push(std::move(summary));
     }
-    // Every full-pool map sees the same immutable formal ledger, including
-    // tasks whose detailed actions are carried by another bounded map.
-    if (pool_summary && pool_summary->array()) result["training_batch_summary"] = *pool_summary;
     std::map<std::string, bool> relevant;
     std::map<std::string, Json> applications;
     std::set<std::string> associated_sources;
@@ -7094,19 +6368,19 @@ struct Search {
         if (source.has("content") || source.has("original_content"))
           associated_sources.insert(source.str("memory_id"));
     bool has_applied_experience = false;
-    std::map<const dataset::v1::EvaluationTrial *, const Json *> reviewed_views;
+    std::map<const dataset::v1::EvaluationTrial *, Json> reviewed_views;
     for (const auto *trial : trials) {
-      const auto &view = reviewed_feedback_trial(*trial);
+      auto view = reviewed_feedback_trial(*trial);
       if (selected_values.has("loop_rules"))
         merge_loop_requirements(result["controls"]["loop_requirements"],
                                 view["evidence"]["loop_requirements"]);
       if (selected_values.has("action_rules"))
         merge_action_requirements(result["controls"]["action_requirements"],
                                   view["evidence"]["action_requirements"]);
-      reviewed_views[trial] = &view;
+      reviewed_views[trial] = std::move(view);
     }
     for (const auto *trial : trials) {
-      const auto &view = *reviewed_views.at(trial);
+      const auto &view = reviewed_views.at(trial);
       Json row{{"trial", view}};
       if (selected_values.has("schedule_rules"))
         bind_schedule_contracts(row, trial->task_id());
@@ -7154,7 +6428,7 @@ struct Search {
                     {"experiences", result["experiences"]}, {"feedback", Json::Array{}}};
       for (const auto *trial : trials)
         prepared["feedback"].push(Json{{"task_id", trial->task_id()},
-                                      {"trial", *reviewed_views.at(trial)}});
+                                      {"trial", reviewed_views.at(trial)}});
       const auto bindings = observed_operation_bindings(
           prepared, std::numeric_limits<std::size_t>::max());
       collect_source_memory_ids(bindings["controls"]["editable_bindings"], associated_sources);
@@ -7203,7 +6477,7 @@ struct Search {
       std::vector<const dataset::v1::EvaluationTrial *> diverse, repeated;
       for (const auto *trial : trials) {
         std::set<std::string> operations;
-        const auto &runs = (*reviewed_views.at(trial))["evidence"]["runs"];
+        const auto &runs = reviewed_views.at(trial)["evidence"]["runs"];
         if (runs.array())
           for (const auto &run : runs.items())
             if (run["actions"].array())
@@ -7297,7 +6571,7 @@ struct Search {
       feedback_controls["aggressive_controls"] = policy.options().aggressive_controls();
       auto trial_view = control_selected
                             ? compact_control_reflection_trial(
-                                  cached_control_feedback_trial(*trial, selected, feedback_controls), selected)
+                                  control_feedback_trial(*trial, selected, feedback_controls), selected)
                             : feedback_trial(*trial, controls);
       bind_reflection_scored_facts(
           trial_view, reflection_scored_facts(feedback_scores[trial->task_id()]));
@@ -7310,11 +6584,13 @@ struct Search {
                                                        detail_width);
       const bool counterexample =
           experience_only && has_applied_experience && !relevant[trial->trial_id()];
-      const Json complete_unapplied_view = counterexample ? trial_view : Json(Json::Object{});
-      // Non-applied failures remain diagnostic; preserve their actual executed
-      // operation facts without turning an adjacent failure into source attribution.
+      // 未使用获选经验的失败只作对照；全未命中或停用待恢复时仍保留原执行反馈。
       if (counterexample)
-        trial_view = unapplied_failure_context(trial_view);
+        trial_view = Json{{"verdict", trial_view["verdict"]},
+                          {"execution_status", trial_view["execution_status"]},
+                          {"metrics", trial_view["metrics"]},
+                          {"checks", compact_excerpt(trial_view["checks"])},
+                          {"evidence_truncated", true}};
       Json row{{"task_id", task->task_id()},
                {"task_input", clip(task->task_input(), 4096)},
                {"followup_inputs", turns},
@@ -7386,13 +6662,7 @@ struct Search {
               trial_packet = result;
               trial_packet["feedback"].push(row);
             }
-          } else if (counterexample) {
-            for (const auto width : {4u, 2u, 1u}) {
-              row["trial"] = unapplied_failure_context(complete_unapplied_view, width);
-              trial_packet = result; trial_packet["feedback"].push(row);
-              if (reflection_input_bytes(trial_packet) <= input_limit) break;
-            }
-          } else {
+          } else if (!counterexample) {
             row["trial"] = Json::Object{};
             auto overhead = result;
             overhead["feedback"].push(row);
@@ -8097,9 +7367,8 @@ struct Search {
       // token 和时延的安全边界由 screening_quality_safe 统一约束，不能再用
       // “所有指标都不得下降”的门槛把可用的单指标改进全部挡掉。
       return gepa::local_gain(selected, previous, number(config["min_improvement"], 0.000001));
-    return gepa::local_gain(selected, previous, number(config["min_improvement"], 0.000001)) &&
-           (acceptance == "improvement_or_equal" ? gepa::no_worse(selected, previous)
-                                                 : improves(selected, previous));
+    return acceptance == "improvement_or_equal" ? gepa::no_worse(selected, previous)
+                                                : improves(selected, previous);
   }
 
   // 当本次规则确已执行、但受影响题数很少时，允许批次级显著收益进入独立 Val
@@ -8139,10 +7408,9 @@ struct Search {
 
   bool screening_gain_for_validation(const Json &candidate, const Json &parent,
                                      const Json &changes) const {
-    // Only the actual paired change cohort can earn an expensive Val trial.
-    // Batch gains stay visible for diagnosis, but cannot bypass the >=2-pair
-    // net-gain rule used by proposal selection and exploration parents.
-    return observed_training_gain(candidate, parent, changes);
+    return observed_training_gain(candidate, parent, changes) ||
+           (config.str("acceptance", "strict_improvement") == "pareto" &&
+            screening_batch_gain(candidate, parent));
   }
 
   // 未观察到策略差分只有在整批父子原始轨迹均完整时才是可用证据。
@@ -8531,42 +7799,12 @@ struct Search {
   }
 
   // 记录真实出现的控制机会，帮助后续候选覆盖未被利用的能力。
-  Json remember_opportunities(const Json &parent, const Report &report) {
+  void remember_opportunities(const Json &parent, const Report &report) {
     // A new parent report starts a proposal-local cache; controls are fixed in Search.
     reviewed_feedback_cache.clear();
-    control_feedback_cache.clear();
     const auto policy = proto<v1::RuntimePolicy>(parent["policy"]);
-    tree["selection_parent_policy"] = parent["policy"]["policy_id"];
-    const auto formal = scores(report);
-    Json current_applications = Json::Object{}, current_opportunities = Json::Object{};
-    bool complete_loops = !formal.fields().empty();
-    for (const auto &item : formal.fields()) complete_loops &= reflection_metrics_complete(item.second);
-    tree["selection_parent_invalid_loops"] = complete_loops ? Json(mean(formal, "invalid_loops")) : Json();
-    const auto remember = [&](const std::string &component, const std::string &field, const std::string &value) {
-      auto &values = tree["training_component_evidence"][component][field];
-      if (!values.array()) values = Json::Array{};
-      if (std::none_of(values.items().begin(), values.items().end(), [&](const auto &item) { return item.text() == value; }))
-        values.push(value);
-    };
-    for (const auto &trial : report.trials()) {
-      if (trial.variant_id() != "candidate" || trial.split() != "train") continue;
-      Report one;
-      *one.add_trials() = trial;
-      if (!current_applications[trial.task_id()].array())
-        current_applications[trial.task_id()] = Json::Array{};
-      for (const auto &component : applied_experiences(one)) {
-        current_applications[trial.task_id()].push(component);
-        remember(component, "applied_task_ids", trial.task_id());
-        remember(component, "opportunity_task_ids", trial.task_id());
-        if (trial.verdict() == "failed") remember(component, "failed_task_ids", trial.task_id());
-      }
-    }
-    const auto current = [&] {
-      return current_pool_selection_components(components(parent), formal, current_applications,
-                                               current_opportunities, tree["component_selections"]);
-    };
     if (!controls.flag("enabled", false) || policy.options().requested_level() < v1::L2)
-      return current();
+      return;
     auto packet_controls = control_generation_input(
         policy.snapshot(), without_generated_controls(policy.options()), controls);
     packet_controls.fields().erase("memories");
@@ -8574,32 +7812,19 @@ struct Search {
       if (trial.variant_id() != "candidate" ||
           std::find(train.begin(), train.end(), trial.task_id()) == train.end())
         continue;
-      const auto &view = reviewed_feedback_trial(trial);
+      auto view = reviewed_feedback_trial(trial);
       Json row{{"trial", view}};
       bind_schedule_contracts(row, trial.task_id());
       Json input{{"controls", packet_controls}, {"feedback", Json::Array{row}}};
       for (const auto *component : {"schedule_rules", "action_rules", "loop_rules"}) {
         input["selected_components"] = Json::Array{component};
         if (control_evidence(input, component)) {
-          auto &families = current_opportunities[component][trial.task_id()];
-          if (!families.array()) families = Json::Array{};
           auto &opportunity = tree["training_opportunities"][component][trial.task_id()];
           const auto previous = number(opportunity, opportunity.null() ? 0 : 1);
           opportunity = std::max(previous, trial.verdict() == "failed" ? 2.0 : 1.0);
-          remember(component, "opportunity_task_ids", trial.task_id());
-          if (trial.verdict() == "failed") remember(component, "failed_task_ids", trial.task_id());
-          if (view["evidence"]["runs"].array())
-            for (const auto &run : view["evidence"]["runs"].items())
-              if (run["actions"].array())
-                for (const auto &action : run["actions"].items())
-                  if (!action.str("terminal_error_code_candidate").empty()) {
-                    remember(component, "failure_families", action.str("terminal_error_code_candidate"));
-                    families.push(action["terminal_error_code_candidate"]);
-                  }
         }
       }
     }
-    return current();
   }
 
   // 为指定组件构造训练批次，保证相关能力有实际触发机会。
@@ -8752,14 +7977,8 @@ struct Search {
         if (trial.variant_id() != "candidate")
           continue;
         const auto evidence = json(trial.evidence());
-        Json reviewed;
-        const auto reviewed_evidence = [&]() -> const Json & {
-          if (reviewed.null()) {
-            reviewed = feedback_trial(trial, controls);
-            bind_iteration_assessments(reviewed, evidence);
-          }
-          return reviewed;
-        };
+        auto reviewed = feedback_trial(trial, controls);
+        bind_iteration_assessments(reviewed, evidence);
         const auto traces =
             evidence["traces"].array() ? evidence["traces"] : Json(Json::Array{evidence["trace"]});
         for (const auto &trace : traces.items()) {
@@ -8910,7 +8129,7 @@ struct Search {
                   result["rules"][action.rule_id()] = result["rules"].num(action.rule_id(), 0) + 1;
                   // 差分命中只证明会拦截，不证明拦截正确；完整训练评审中的必要动作是反例。
                   if (changed_action_budgets.count(action.rule_id()))
-                    for (const auto &run : reviewed_evidence()["evidence"]["runs"].items()) {
+                    for (const auto &run : reviewed["evidence"]["runs"].items()) {
                       if (run.str("run_id") != trace["identity"].str("run_id"))
                         continue;
                       for (const auto &reviewed_action : run["actions"].items()) {
@@ -8940,38 +8159,16 @@ struct Search {
                     }
                 }
               }
-            if (query.boundary() == "loop") {
-              auto &facts = result["observed_counters"];
-              facts["loop_queries"] = facts.num("loop_queries", 0) + 1;
-              facts["actor_ids"][query.actor_id()] = true;
-              facts["target_scopes"][query.advice_query().target_scope()] = true;
-              facts["aggressive_controls"] = bound.options().aggressive_controls();
-              const auto counter = effective_loop_no_progress(json(query), before["progress"],
-                                                               bound.options().aggressive_controls());
-              if (!counter.null())
-                facts["max_effective_no_progress"] = std::max(
-                    facts.num("max_effective_no_progress", 0), static_cast<std::size_t>(counter.integer()));
-              facts["max_repeated_failure_steps"] = std::max(
-                  facts.num("max_repeated_failure_steps", 0),
-                  static_cast<std::size_t>(query.repeated_failure_steps()));
-            }
-            if (query.boundary() == "actions") {
-              auto &facts = result["observed_counters"];
-              facts["action_queries"] = facts.num("action_queries", 0) + 1;
-              for (const auto &action : query.actions())
-                facts["max_prior_failures"] = std::max(facts.num("max_prior_failures", 0),
-                    static_cast<std::size_t>(action.prior_failures()));
-            }
             const auto &progress = after.progress();
             if (query.boundary() == "loop" && progress.decision() == "stop" &&
                 before["progress"].str("decision") != "stop" &&
                 changed_caps.count(progress.rule_id()) &&
                 query.iteration() > changed_caps.at(progress.rule_id())->max_iterations() &&
-                reviewed_evidence()["evidence"]["runs"].array()) {
+                reviewed["evidence"]["runs"].array()) {
               const bool finish = changed_caps.at(progress.rule_id())->require_finalization() &&
                                   query.can_finalize();
               bool cuts_work = false;
-              for (const auto &run : reviewed_evidence()["evidence"]["runs"].items()) {
+              for (const auto &run : reviewed["evidence"]["runs"].items()) {
                 if (run.str("run_id") != trace["identity"].str("run_id"))
                   continue;
                 for (const auto &action : run["actions"].items())
@@ -9032,300 +8229,6 @@ struct Search {
     }
     support["different_tasks"] = support["task_ids"].items().size();
     return support;
-  }
-
-  struct ExperienceQueryTrace {
-    struct Position { std::uint64_t timestamp = 0; std::size_t index = 0; };
-    struct Write { Position position; std::set<std::string> operations; };
-    v1::Identity identity;
-    std::string task_id;
-    std::vector<v1::RuntimeQuery> queries;
-    std::vector<Position> query_positions;
-    std::vector<Write> writes;
-  };
-
-  static ExperienceQueryTrace::Position experience_position(const Json &event, std::size_t index) {
-    ExperienceQueryTrace::Position result; result.index = index;
-    const auto &stamp = event["timestamp_us"];
-    try {
-      const auto text = stamp.string() ? stamp.text() : std::string();
-      if (!text.empty() &&
-          std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c); }))
-        result.timestamp = std::stoull(text);
-      else if (std::holds_alternative<double>(stamp.value) && number(stamp) > 0 &&
-               number(stamp) < 9007199254740992.0 && number(stamp) == std::floor(number(stamp)))
-        result.timestamp = static_cast<std::uint64_t>(number(stamp));
-    } catch (const std::exception &) { /* Missing/ambiguous timing stays unknown. */ }
-    return result;
-  }
-
-  static bool prevention_write_method(const std::string &method) {
-    for (const auto *verb : {"add_", "clear_", "create_", "delete_", "remove_", "update_", "set_",
-                             "place_", "move_", "send_", "mark_", "transfer_", "download_", "like_",
-                             "unlike_", "play_", "pause_", "reserve_", "release_", "submit_"})
-      if (method.rfind(verb, 0) == 0) return true;
-    return false;
-  }
-
-  // Only machine API names in the immutable approved source define the write.
-  // Neither a rewritten trigger nor unrelated writes may manufacture a cutoff.
-  static std::set<std::string> prevention_source_methods(const v1::ShadowExperience &source) {
-    std::set<std::string> result;
-    const auto text = source.trigger_pattern() + "\n" + source.content();
-    for (std::size_t i = 0; i < text.size();) {
-      if (!(std::isalpha(static_cast<unsigned char>(text[i])) && static_cast<unsigned char>(text[i]) < 128)) { ++i; continue; }
-      const auto start = i++;
-      while (i < text.size() && static_cast<unsigned char>(text[i]) < 128 &&
-             (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_')) ++i;
-      const auto name = text.substr(start, i - start);
-      if (!prevention_write_method(name)) continue;
-      auto qualified = start;
-      while (qualified && (std::isalnum(static_cast<unsigned char>(text[qualified - 1])) ||
-                           text[qualified - 1] == '_' || text[qualified - 1] == '.')) --qualified;
-      const auto full = text.substr(qualified, i - qualified);
-      result.insert(full.rfind("apis.", 0) == 0 ? full.substr(5) : name);
-    }
-    for (const auto &name : std::vector<std::string>(result.begin(), result.end())) {
-      const auto dot = name.rfind('.');
-      if (dot != std::string::npos) result.erase(name.substr(dot + 1));
-    }
-    return result;
-  }
-
-  static std::set<std::string> prevention_actual_operations(const Json &start) {
-    // A paired executed API action proves its operation was invoked. Executing
-    // an appworld.execute code block does not prove any API inside that block:
-    // branches, exceptions and function definitions may leave it unexecuted.
-    // Never infer actual operations from request code or observation prose.
-    const auto operation = start.str("operation");
-    const auto dot = operation.rfind('.');
-    if (start["attributes"].str("semantic") != "action" || dot == std::string::npos ||
-        !prevention_write_method(operation.substr(dot + 1)) ||
-        !std::all_of(operation.begin(), operation.end(), [](unsigned char c) {
-          return c < 128 && (std::isalnum(c) || c == '_' || c == '.');
-        })) return {};
-    return {operation};
-  }
-
-  // Extract once per reflection. Repeated map/reduce/review checks only replay
-  // these typed queries and never reread the full parent trajectory.
-  std::vector<ExperienceQueryTrace> experience_query_evidence(
-      const Report &report, const Json &selected) const {
-    if (std::none_of(selected.items().begin(), selected.items().end(), [](const auto &axis) {
-          return axis.text().rfind("experience:", 0) == 0;
-        })) return {};
-    std::vector<ExperienceQueryTrace> result;
-    for (const auto &trial : report.trials()) {
-      if (trial.variant_id() != "candidate" || (trial.split() != "train" && !trial.split().empty())) continue;
-      const auto evidence = evidence_fields(trial.evidence(), {"trace", "traces"});
-      const auto traces = evidence["traces"].array() ? evidence["traces"]
-                            : Json(Json::Array{evidence["trace"]});
-      for (const auto &trace : traces.items()) {
-        if (!trace["identity"].object() || !trace["events"].array()) continue;
-        ExperienceQueryTrace record;
-        try { record.identity = proto<v1::Identity>(trace["identity"]); }
-        catch (const Error &) { continue; }
-        record.task_id = trial.task_id();
-        std::map<std::string, std::pair<Json, ExperienceQueryTrace::Position>> starts;
-        std::size_t event_index = 0;
-        for (const auto &event : trace["events"].items()) {
-          const auto position = experience_position(event, event_index++);
-          const auto action = event.str("action_id");
-          if (event.str("kind") == "action.start" && !action.empty())
-            starts[action] = {Json{{"actor_id", event.str("actor_id")},
-                {"execution_id", event.str("execution_id")}, {"step_id", event.str("step_id")},
-                {"operation", event.str("operation")},
-                {"attributes", Json{{"semantic", event["attributes"].str("semantic")}}}}, position};
-          if (event.str("kind") == "action.end" && !action.empty() && event["attributes"].flag("executed", false)) {
-            const auto begin = starts.find(action);
-            if (begin != starts.end() && event["attributes"].str("semantic") == "action" &&
-                begin->second.first.str("actor_id") == event.str("actor_id") &&
-                begin->second.first.str("execution_id") == event.str("execution_id") &&
-                begin->second.first.str("step_id") == event.str("step_id") &&
-                (event.str("status") == "completed" || event.str("status") == "failed")) {
-              const auto operations = prevention_actual_operations(begin->second.first);
-              if (!operations.empty()) record.writes.push_back({begin->second.second, operations});
-            }
-          }
-          if (event["attributes"].str("type") != "policy.query") continue;
-          const auto &wire = event["attributes"]["decision"]["query"];
-          if (wire.str("boundary") != "llm" || !wire["advice_query"].object()) continue;
-          try {
-            auto query = proto<v1::RuntimeQuery>(wire);
-            if (query.actor_id().empty()) query.set_actor_id(event.str("actor_id"));
-            record.queries.push_back(std::move(query));
-            record.query_positions.push_back(position);
-          } catch (const Error &) { /* Incomplete historic queries are unavailable. */ }
-        }
-        if (!record.queries.empty()) result.push_back(std::move(record));
-      }
-    }
-    return result;
-  }
-
-  // A possibility check on recorded TRAIN queries, never an application receipt
-  // or score. Preserve the host allowlist and observed operations. A planned call
-  // or words in an experience cannot grant a new runtime window.
-  Json experience_applicability_preflight(const Json &parent, const Json &candidate,
-      const Report &report, const Json &selected,
-      const std::vector<ExperienceQueryTrace> *recorded = nullptr) const {
-    Json result{{"basis", "parent_recorded_llm_query_replay"},
-                {"coverage", "recorded_queries_only"}, {"sources", Json::Object{}},
-                {"missing", Json::Array{}}, {"passed", true}, {"status", "unavailable"}};
-    const auto before = components(parent), after = components(candidate);
-    const auto policy = proto<v1::RuntimePolicy>(candidate["policy"]);
-    std::map<std::string, v1::ExperienceApproval> refs;
-    std::map<std::string, std::string> scopes;
-    std::map<std::string, std::set<std::string>> prevention_methods;
-    for (const auto &component : selected.items()) {
-      const auto key = component.text();
-      if (key.rfind("experience:", 0) != 0 || after[key].null() ||
-          before[key].dump() == after[key].dump()) continue;
-      const auto id = key.substr(11);
-      for (const auto &ref : policy.options().approved_experiences())
-        if (ref.memory_id() == id)
-          for (const auto &source : policy.snapshot().experiences())
-            if (source.memory_id() == id && source.content_revision() == ref.content_revision()) {
-              refs[id] = ref;
-              scopes[id] = source.target_scope();
-              result["sources"][id] = Json{{"queries", 0}, {"query_errors", 0},
-                  {"matched_task_ids", Json::Array{}}, {"machine_anchors", Json::Array{}}};
-              if (std::find(policy.options().l1_prevention_sources().begin(), policy.options().l1_prevention_sources().end(), id) !=
-                  policy.options().l1_prevention_sources().end()) {
-                prevention_methods[id] = prevention_source_methods(source);
-                result["sources"][id]["prevention_status"] = "unknown";
-              }
-            }
-    }
-    if (refs.empty()) return result;
-    const auto extracted = recorded ? std::vector<ExperienceQueryTrace>{}
-                                    : experience_query_evidence(report, selected);
-    const auto &traces = recorded ? *recorded : extracted;
-    std::map<std::string, std::set<std::string>> anchors;
-    std::set<std::string> unknown_prevention;
-    const auto remember_anchor = [&](const std::string &id, const std::string &token) {
-      static const std::set<std::string> metadata{"content_revision", "memory_id", "policy_id",
-          "query_id", "decision_id", "execution_id", "retrieval_state", "credential_field",
-          "runtime_experience_allowlist"};
-      if (token.size() <= 96 && token.find('_') != std::string::npos &&
-          !metadata.count(token) && identifier(token)) anchors[id].insert(token);
-    };
-    const auto supported = [&](const std::string &id) {
-      const auto &source = result["sources"][id];
-      return prevention_methods.count(id) && !prevention_methods.at(id).empty()
-          ? source.str("prevention_status") == "pre_action" || source.str("prevention_status") == "reactive"
-          : !source["matched_task_ids"].items().empty();
-    };
-    for (const auto &trace : traces) {
-      bool needed = false;
-      for (const auto &entry : refs) needed |= !supported(entry.first);
-      if (!needed) break;
-      std::unique_ptr<PolicyRuntime> runtime;
-      std::size_t query_index = 0;
-      for (const auto &query : trace.queries) {
-        const auto position = query_index < trace.query_positions.size()
-            ? trace.query_positions[query_index] : ExperienceQueryTrace::Position{};
-        ++query_index;
-        Json envelope;
-        try { envelope = Json::parse(query.advice_query().state()); }
-        catch (const Error &) { /* Plain retrieval states are valid too. */ }
-        const auto &allowlist = static_cast<const Json &>(envelope)["runtime_experience_allowlist"];
-        std::vector<std::string> eligible;
-        for (const auto &entry : refs) {
-          const auto &id = entry.first;
-          if (supported(id) || query.advice_query().target_scope() != scopes[id]) continue;
-          bool allowed = !envelope.has("runtime_experience_allowlist");
-          if (allowlist.array())
-            for (const auto &ref : allowlist.items())
-              allowed |= ref.str("memory_id") == id &&
-                         ref.str("content_revision") == entry.second.content_revision();
-          if (allowed) eligible.push_back(id);
-        }
-        if (eligible.empty()) continue;
-        v1::RuntimeDecision decision;
-        try {
-          if (!runtime) runtime = std::make_unique<PolicyRuntime>(bind_runtime_policy(policy, trace.identity));
-          decision = runtime->decide(query);
-        } catch (const Error &) {
-          for (const auto &id : eligible)
-            result["sources"][id]["query_errors"] = result["sources"][id].num("query_errors", 0) + 1;
-          continue;
-        }
-        if (decision.status() == "error") continue;
-        result["status"] = "complete";
-        auto text = current_task_retrieval_text(Json(query.advice_query().task())) + "\n" +
-                    retrieval_text(Json(query.advice_query().state()));
-        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
-          return static_cast<char>(c < 128 ? std::tolower(c) : c);
-        });
-        for (const auto &id : eligible) {
-          auto &source = result["sources"][id];
-          source["queries"] = source.num("queries", 0) + 1;
-          for (const auto &ref : decision.experiences())
-            if (ref.memory_id() == id && ref.content_revision() == refs[id].content_revision()) {
-              if (source["matched_task_ids"].items().empty()) source["matched_task_ids"].push(trace.task_id);
-              if (prevention_methods.count(id)) {
-                const v1::ShadowExperience *approved = nullptr;
-                for (const auto &item : policy.snapshot().experiences())
-                  if (item.memory_id() == id && item.content_revision() == refs[id].content_revision()) approved = &item;
-                bool reactive = false;
-                if (approved) {
-                  const auto condition = approved->trigger_pattern() + "\n" + approved->observed_problem();
-                  for (const auto &code : query.error_codes())
-                    reactive |= condition.find(code) != std::string::npos ||
-                        (code == "appworld_auth_401" && condition.find("401") != std::string::npos) ||
-                        (code == "appworld_validation_422" && condition.find("422") != std::string::npos) ||
-                        (code == "appworld_type_error_positional" && condition.find("TypeError") != std::string::npos);
-                }
-                if (reactive) source["prevention_status"] = "reactive";
-                else {
-                  ExperienceQueryTrace::Position first; bool has_write = false;
-                  for (const auto &write : trace.writes)
-                    for (const auto &operation : write.operations) {
-                      const auto qualified = operation.rfind("apis.", 0) == 0 ? operation.substr(5) : operation;
-                      // An unqualified source method cannot grant an arbitrary
-                      // application's qualified API the same write identity.
-                      if (!prevention_methods[id].count(qualified) || !write.position.timestamp) continue;
-                      if (!has_write || std::tie(write.position.timestamp, write.position.index) < std::tie(first.timestamp, first.index)) {
-                        first = write.position; has_write = true;
-                      }
-                    }
-                  if (has_write && position.timestamp) {
-                    if (std::tie(position.timestamp, position.index) < std::tie(first.timestamp, first.index))
-                      source["prevention_status"] = "pre_action";
-                    else if (source.str("prevention_status") != "pre_action") source["prevention_status"] = "late";
-                  } else unknown_prevention.insert(id);
-                }
-              }
-            }
-          // Emit API attribute/keyword names, never arbitrary text tokens or raw
-          // state. In particular, a credential value containing '_' is not an anchor.
-          for (std::size_t i = 0; i < text.size();) {
-            if (!std::isalpha(static_cast<unsigned char>(text[i])) ||
-                static_cast<unsigned char>(text[i]) >= 128) { ++i; continue; }
-            const auto start = i++;
-            while (i < text.size() && (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_') &&
-                   static_cast<unsigned char>(text[i]) < 128) ++i;
-            auto next = i;
-            while (next < text.size() && std::isspace(static_cast<unsigned char>(text[next]))) ++next;
-            if ((start && text[start - 1] == '.') || (next < text.size() && text[next] == '='))
-              remember_anchor(id, text.substr(start, i - start));
-          }
-          for (const auto &code : query.error_codes()) remember_anchor(id, code);
-        }
-      }
-    }
-    for (const auto &entry : refs) {
-      auto &source = result["sources"][entry.first];
-      for (const auto &anchor : anchors[entry.first])
-        if (source["machine_anchors"].items().size() < 16) source["machine_anchors"].push(anchor);
-      if (source.str("prevention_status") == "late" && unknown_prevention.count(entry.first))
-        source["prevention_status"] = "unknown";
-      if (source.num("queries", 0) && (source["matched_task_ids"].items().empty() ||
-          source.str("prevention_status") == "late")) result["missing"].push(entry.first);
-    }
-    result["passed"] = result["missing"].items().empty();
-    return result;
   }
 
   // 同一提案的独立 actor 可以有不同证据；无差分的新规则不应连带淘汰有效分支。
@@ -9675,13 +8578,10 @@ struct Search {
   Json reflect(const Json &input, std::size_t node, const std::string &suffix = {},
                bool aggregate = false) {
     // 发送端不再以丢弃绑定来压进预算；大小不符时在调用模型前明确失败。
-    const auto budgeted = compact_reflection_metadata(input, config.num("max_input_bytes", 65536));
     const auto prepared =
-        observed_operation_bindings(budgeted, std::numeric_limits<std::size_t>::max());
+        observed_operation_bindings(input, std::numeric_limits<std::size_t>::max());
     require(prepared.dump().size() <= config.num("max_input_bytes", 65536),
             "gepa_feedback_budget_too_small");
-    if (prepared.str("phase").rfind("pool_", 0) == 0)
-      require(reflection_packet_metrics_complete(prepared), "gepa_reflection_metrics_incomplete");
     auto &reflection_node = tree["nodes"].items()[node];
     search_check();
     require(tree.num("model_calls", 0) < config.num("max_model_calls", 8),
@@ -9727,80 +8627,30 @@ struct Search {
         read(config.str(aggregate ? "aggregation_prompt_file" : "prompt_file"), 65536),
         prepared["selected_components"]);
     request.system_prompt +=
-        "\nAn approved effective experience rewrite may enable the host's pre-action window. "
-        "Use actual task/API machine anchors from feedback in its English trigger_pattern; "
-        "general prose is not automatically translated into a machine predicate. Claim "
-        "prevention gain only when feedback contains an actual pre-action application; "
-        "otherwise treat prevention as a hypothesis and use observed recovery evidence. "
-        "A late prevention_status is a source-write timing counterexample: use an observed "
-        "task/object or read window before that source's write, never a correction that "
-        "must already have executed. Unknown timing is not proof of prevention.\n";
-    if (std::count_if(prepared["selected_components"].items().begin(),
-                      prepared["selected_components"].items().end(), [](const Json &item) {
-                        return item.text().rfind("experience:", 0) == 0;
-                      }) > 1)
-      request.system_prompt +=
-          "The selected L1 sources form a small bundle observed on the same unfinished TRAIN "
-          "execution. Coordinate their individual steps using actual failure actions and "
-          "application queries; preserve each source's approval, scope and machine trigger. "
-          "A diagnostic unapplied case is not evidence that a source was applied. Retain useful "
-          "sources and abstain from unrelated changes; full-pool support and host applicability "
-          "remain required. This map may show only part of the complete pool.\n";
+        "\nChanging a retrieval trigger does not change the host's policy activation boundary. "
+        "Claim prevention before an action only when feedback contains an actual pre-action "
+        "application; otherwise optimize recovery in the observed eligible failure window.\n";
     if (prepared.flag("trigger_only_exploration", false))
       request.system_prompt +=
           "This approved experience was not sufficiently applied. Explore only its English "
           "trigger_pattern using the complete TRAIN failure facts. Copy its current content "
           "exactly; keep source, scope, observed_operations, controls and budgets unchanged. "
           "Do not claim an application that was not observed. Abstention is valid.\n";
-    if (prepared.has("experience_preflight"))
-      request.system_prompt +=
-          "The proposed experience did not match any eligible recorded parent query; "
-          "this checks recorded windows only and does not prove a new host window cannot exist. "
-          "Repair its trigger using the same source's machine_anchors and actual feedback; "
-          "do not invent operations, widen source/scope, or treat this replay as an application "
-          "or gain. Keep ordinary experience content editable. Abstention is valid.\n";
-    if (prepared["controls"].object())
-      request.system_prompt +=
-          "Control counters describe the same actor and execution at a typed boundary. "
-          "effective_no_progress follows the native aggressive_controls flag; action failure "
-          "count and repeated_failure_steps cannot be summed across events or substituted "
-          "for it. A replay with no differential boundary change is a machine counterexample. "
-          "Repair only within the approved source, exact observed scope, actor and predicates; "
-          "do not lower a threshold without actual supporting counters. Abstention is valid.\n";
-    if (prepared["legal_selection_choices"].object())
-      request.system_prompt +=
-          "Select only IDs listed for that component in legal_selection_choices. "
-          "diagnostic_proposals are not selectable. Omit a component or use an empty ID "
-          "to retain its parent; abstention is valid. A sole listed option is not a default.\n";
     request.user_prompt = prepared.dump();
     validate_local_data(Json(request.system_prompt));
     write(root / "reflections" / (name + ".request.json"),
           Json{{"system", request.system_prompt}, {"input", prepared}}.dump());
     record_reflection_coverage(reflection_node, suffix, prepared);
     save();
-    legacy::RawModelResponse response;
-    for (unsigned attempt = 0; attempt < 2; ++attempt) {
-      const auto call_started = std::chrono::steady_clock::now();
-      response = adapter->evaluate(request);
-      const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now() - call_started).count();
-      tree["reflection_calls"][std::to_string(tree.num("model_calls", 0))] =
-          reflection_call_diagnostic(response, static_cast<std::size_t>(duration_ms));
-      save();
-      search_check();
-      const bool transient = response.error_code == "http_500" ||
-                             response.error_code == "http_502" ||
-                             response.error_code == "http_503" ||
-                             response.error_code == "http_504" ||
-                             response.error_code == "transport_28";
-      if (attempt || !transient ||
-          tree.num("model_calls", 0) >= config.num("max_model_calls", 8))
-        break;
-      // 补传同一有界阶段，保留已完成 maps 和健康评测；每次真实传输仍扣预算。
-      // 429 由宿主同 job 延迟恢复；取消、格式/权限和永久配置错误不在这里重试。
-      tree["model_calls"] = tree.num("model_calls", 0) + 1;
-      save();
-    }
+    const auto call_started = std::chrono::steady_clock::now();
+    const auto response = adapter->evaluate(request);
+    const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - call_started)
+                                 .count();
+    tree["reflection_calls"][std::to_string(tree.num("model_calls", 0))] =
+        reflection_call_diagnostic(response, static_cast<std::size_t>(duration_ms));
+    save();
+    search_check();
     if (response.error_code == "http_429") {
       // 供应商拒绝本次调用时，保留已预留预算和完成的执行检查点，重试同一代生成。
       tree["nodes"].items()[node]["status"] = "pending";
@@ -9840,19 +8690,13 @@ struct Search {
       else
         tree["nodes"].items()[node].fields().erase("control_binding_provenance");
       return resolved;
-    } catch (const Error &error) {
+    } catch (const Error &) {
       // 固定码与可信范围足以纠正绑定；不落盘模型原文、来源 ID 或自由文本。
       if (binding_error.object()) {
         tree["reflection_calls"][std::to_string(tree.num("model_calls", 0))]
             ["control_binding_error"] = binding_error;
         save();
       }
-      const auto code = std::string(error.what());
-      if ((prepared.str("phase") == "pool_diagnostic_map" ||
-           prepared.str("phase") == "pool_trajectory_segment") &&
-          reflection_candidate_error(code))
-        return Json{{"reason", diagnostic_excerpt(body.str("reason"), 768)},
-                    {"diagnostic_only", true}, {"candidate_error", code}};
       throw;
     }
   }
@@ -9990,10 +8834,6 @@ struct Search {
     // Repeated trials are reduced to their first row below, so retain their original
     // per-fragment scoring instead of substituting the full report's repetition mean.
     const auto pool_scores = scores(parent_report);
-    require(parent_report.complete(), "gepa_reflection_metrics_incomplete");
-    for (const auto &entry : remaining)
-      require(reflection_metrics_complete(pool_scores[entry.first]),
-              "gepa_reflection_metrics_incomplete");
     const Json *shared_scores = parent_report.complete() && unique_candidate_tasks &&
                                        pool_scores.fields().size() == remaining.size()
                                    ? &pool_scores
@@ -10022,7 +8862,7 @@ struct Search {
       for (const auto &entry : remaining)
         *rest.add_trials() = entry.second;
       auto group = packet(parent, rest, selected, input.flag("trigger_only_exploration", false),
-                          shared_scores, &input["experiences"], &input["training_batch_summary"]);
+                          shared_scores, &input["experiences"]);
       // A later group cannot forget necessary work observed in an earlier successful
       // parent run. Bindings still come only from this group's real trajectories.
       const auto merge_global_requirements = [&](Json &target) {
@@ -10031,7 +8871,6 @@ struct Search {
             target["controls"][field] = input["controls"][field];
       };
       merge_global_requirements(group);
-      group = compact_reflection_metadata(std::move(group), input_limit);
       while (reflection_input_bytes(group) > input_limit &&
              group["feedback"].items().size() > 1) {
         Report smaller;
@@ -10040,9 +8879,8 @@ struct Search {
         for (std::size_t i = 0; i + 1 < rows.size(); ++i)
           *smaller.add_trials() = remaining.at(rows[i].str("task_id"));
         group = packet(parent, smaller, selected, input.flag("trigger_only_exploration", false),
-                       shared_scores, &input["experiences"], &input["training_batch_summary"]);
+                       shared_scores, &input["experiences"]);
         merge_global_requirements(group);
-        group = compact_reflection_metadata(std::move(group), input_limit);
       }
       if (reflection_input_bytes(group) > input_limit)
         group.fields().erase("prior_search_rejections");
@@ -10079,7 +8917,7 @@ struct Search {
           const auto policy = proto<v1::RuntimePolicy>(parent["policy"]);
           feedback_controls["aggressive_controls"] = policy.options().aggressive_controls();
           const auto complete = compact_control_reflection_trial(
-              cached_control_feedback_trial(found->second, selected, feedback_controls), selected);
+              control_feedback_trial(found->second, selected, feedback_controls), selected);
           std::map<std::string, std::size_t> displayed;
           for (const auto &run : row["trial"]["evidence"]["runs"].items())
             for (const auto &action : run["actions"].items())
@@ -10196,54 +9034,23 @@ struct Search {
       support_cache.emplace(key, support);
       return support;
     };
-    const auto experience_queries = experience_query_evidence(parent_report, selected);
-    Json experience_preflight, map_control_preflight;
-    std::map<std::string, Json> map_control_preflight_cache;
-    const auto check_experience = [&](const Json &candidate) {
-      experience_preflight = experience_applicability_preflight(
-          parent, candidate, parent_report, selected, &experience_queries);
-      reflection_node["experience_preflight"] = experience_preflight;
-      require(experience_preflight.flag("passed", false), "gepa_experience_trigger_unmatchable");
-    };
     auto proposal_record = [&](const Json &draft, const Json &ids,
                                const std::string &id, const Json &task_facts) {
       Json candidate;
-      if (draft.flag("diagnostic_only", false)) {
-        const auto code = draft.str("candidate_error");
-        require(reflection_candidate_error(code), "gepa_draft_invalid");
-        throw Error(code.c_str());
-      }
       try {
         candidate = mutate(parent, draft, selected,
                            input.flag("trigger_only_exploration", false));
-      } catch (const std::exception &error) {
-        const auto code = std::string(error.what());
-        if (reflection_candidate_error(code)) throw Error(code.c_str());
+      } catch (const legacy::EvaluationError &error) {
+        if (std::string(error.what()) == "runtime_action_rule_invalid")
+          throw Error("runtime_action_rule_invalid");
         throw;
       }
-      check_experience(candidate);
       const auto after = components(candidate);
       Json changes = Json::Object{};
       for (const auto &component : selected.items()) {
         const auto key = component.text();
         if (after[key].dump() != before[key].dump())
           changes[key] = after[key];
-      }
-      map_control_preflight = Json();
-      if (changes.has("action_rules") || changes.has("loop_rules")) {
-        // Use the complete parent TRAIN pool, preserving the final gate's
-        // cross-group opportunities. A missing typed boundary remains unknown.
-        const auto replay_key = candidate["policy"].str("policy_id") + '\n' +
-                                reflection_node["control_binding_provenance"].dump();
-        const auto prior = map_control_preflight_cache.find(replay_key);
-        if (prior != map_control_preflight_cache.end())
-          map_control_preflight = prior->second;
-        else {
-          map_control_preflight = control_preflight(parent, candidate, parent_report,
-                                                    reflection_node["control_binding_provenance"]);
-          map_control_preflight_cache.emplace(replay_key, map_control_preflight);
-        }
-        map_control_preflight = validate_map_control_replay(map_control_preflight, changes);
       }
       Json record{{"id", id}, {"reason", diagnostic_excerpt(draft.str("reason"), 768)},
                   {"task_ids", ids}, {"task_facts", task_facts},
@@ -10308,7 +9115,7 @@ struct Search {
           changes.push_back(revision);
         }
       }
-      check_experience(mutate(parent, draft, selected));
+      (void)mutate(parent, draft, selected);
       return draft;
     };
     // A completed stage is reusable after interruption in this same job. Match its
@@ -10325,9 +9132,8 @@ struct Search {
           const auto earlier = Json::parse(read(request_path, 262144))["input"];
           // Check the same final input shape that reflect() persisted. Comparing
           // bound controls with the pre-binding request needlessly repeats stages.
-          const auto budgeted = compact_reflection_metadata(request, input_limit);
           const auto prepared = observed_operation_bindings(
-              budgeted, std::numeric_limits<std::size_t>::max());
+              request, std::numeric_limits<std::size_t>::max());
           const auto same = [&](const char *field) {
             return earlier[field].dump() == prepared[field].dump();
           };
@@ -10341,8 +9147,7 @@ struct Search {
           if (same("selected_components") && same("phase") &&
               earlier_ids.dump() == current_ids.dump() &&
               same("feedback") && same("case_outcomes") && same("controls") &&
-              same("intermediate_proposals") && same("legal_selection_choices") &&
-              same("diagnostic_proposals") && same("proposed_strategy")) {
+              same("intermediate_proposals") && same("proposed_strategy")) {
             auto draft = Json::parse(read(draft_path, 262144));
             reused = true;
             return draft;
@@ -10356,29 +9161,23 @@ struct Search {
     };
     auto choose_stage = [&](const Json &request, const std::string &suffix,
                             const Json &records, Json &selection, bool &reused) {
-      auto selection_request = selection_packet(request);
-      selection_request = compact_reflection_metadata(std::move(selection_request), input_limit);
-      require(reflection_input_bytes(selection_request) <= input_limit,
-              "gepa_feedback_budget_too_small");
-      selection = call_stage(selection_request, suffix, true, reused);
+      selection = call_stage(request, suffix, true, reused);
       try {
         return selected_draft(selection, records);
       } catch (const Error &error) {
         const auto code = std::string(error.what());
-        if (code != "gepa_reflection_selection_invalid" && code != "gepa_draft_invalid" &&
-            code != "gepa_experience_trigger_unmatchable")
+        if (code != "gepa_reflection_selection_invalid" && code != "gepa_draft_invalid")
           throw;
-        auto repair = selection_request;
+        auto repair = request;
         repair["phase"] = "pool_selection_repair";
         repair["selection_error"] = code;
-        if (code == "gepa_experience_trigger_unmatchable")
-          repair["experience_preflight"] = experience_preflight;
         repair["rejected_selection"] = selection;
         if (reflection_input_bytes(repair) > input_limit)
           repair.fields().erase("rejected_selection");
         if (reflection_input_bytes(repair) > input_limit)
           repair.fields().erase("prior_search_rejections");
-        repair = compact_reflection_metadata(std::move(repair), input_limit);
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("training_batch_summary");
         require(reflection_input_bytes(repair) <= input_limit,
                 "gepa_feedback_budget_too_small");
         bool repair_reused = false;
@@ -10392,7 +9191,14 @@ struct Search {
         return corrected;
       }
     };
-    const auto repairable_map_error = reflection_candidate_error;
+    const auto repairable_map_error = [](const std::string &code) {
+      return code == "control_binding_invalid" || code == "control_argument_not_authorized" ||
+             code == "gepa_draft_invalid" ||
+             code == "unknown_field" || code == "gepa_component_not_authorized" ||
+             code == "gepa_candidate_not_authorized" || code == "control_duplicate_loop_scope" ||
+             code == "gepa_trigger_only_update_invalid" ||
+             code == "runtime_action_rule_invalid";
+    };
     for (std::size_t i = 0; i < groups.size(); ++i) {
       auto &group = groups[i];
       const auto suffix = ".pool-map-" + std::to_string(i);
@@ -10412,10 +9218,6 @@ struct Search {
         auto repair = group;
         repair["phase"] = "pool_map_repair";
         repair["error"] = code;
-        if (code == "gepa_experience_trigger_unmatchable")
-          repair["experience_preflight"] = experience_preflight;
-        if (code == "gepa_control_no_differential_trigger")
-          repair["control_preflight"] = control_counterexample(map_control_preflight);
         if (code == "control_duplicate_loop_scope")
           repair["loop_scope_conflict"] =
               loop_scope_repair_context(before, parent["policy"]["snapshot"]);
@@ -10435,13 +9237,14 @@ struct Search {
           repair.fields().erase("failed_draft");
         if (reflection_input_bytes(repair) > input_limit)
           repair.fields().erase("prior_search_rejections");
-        repair = compact_reflection_metadata(std::move(repair), input_limit);
+        if (reflection_input_bytes(repair) > input_limit)
+          repair.fields().erase("training_batch_summary");
         require(reflection_input_bytes(repair) <= input_limit,
                 "gepa_feedback_budget_too_small");
         bool repair_reused = false;
+        draft = call_stage(repair, suffix + "-repair", false, repair_reused);
         std::string rejected_error;
         try {
-          draft = call_stage(repair, suffix + "-repair", false, repair_reused);
           record = proposal_record(draft, ids, "map-" + std::to_string(i),
                                    reflection_task_facts(group["feedback"], selected));
         } catch (const Error &rejected) {
@@ -10516,7 +9319,6 @@ struct Search {
           "not child efficacy. Prefer broader real support when necessary work is preserved; "
           "task_ids alone describe map coverage, not trigger coverage. This is soft evidence, "
           "not a minimum-task gate; sparse candidates remain eligible.";
-      reduction = compact_reflection_metadata(std::move(reduction), input_limit);
       std::stable_sort(reduction["intermediate_proposals"].items().begin(),
                        reduction["intermediate_proposals"].items().end(),
                        [](const auto &a, const auto &b) {
@@ -10542,14 +9344,13 @@ struct Search {
         break;
       }
       Json next = Json::Array{};
-      const auto &compact_records = reduction["intermediate_proposals"];
       std::size_t cursor = 0, part = 0;
-      while (cursor < compact_records.items().size()) {
+      while (cursor < intermediates.items().size()) {
         auto chunk = reduction;
         chunk["intermediate_proposals"] = Json::Array{};
-        while (cursor < compact_records.items().size()) {
+        while (cursor < intermediates.items().size()) {
           auto attempt = chunk;
-          attempt["intermediate_proposals"].push(compact_records.items()[cursor]);
+          attempt["intermediate_proposals"].push(intermediates.items()[cursor]);
           if (reflection_input_bytes(attempt) > input_limit)
             break;
           chunk = std::move(attempt);
@@ -10729,13 +9530,28 @@ struct Search {
     std::size_t best = 0;
     const auto &nodes = tree["nodes"].items();
     limit = std::min(limit, nodes.size());
+    auto preferable = [&](const Json &candidate, const Json &current) {
+      const auto &a = candidate["optimization"];
+      const auto &b = current["optimization"];
+      if (a.flag("feasible", false) != b.flag("feasible", false))
+        return a.flag("feasible", false);
+      if (a.flag("passed", false) != b.flag("passed", false))
+        return a.flag("passed", false);
+      const auto goal = number(a["score"]) - number(b["score"]);
+      if (std::abs(goal) > 1e-12)
+        return goal > 0;
+      const auto robustness = number(a["robustness"]) - number(b["robustness"]);
+      if (std::abs(robustness) > 1e-12)
+        return robustness > 0;
+      return improves(candidate["validation"], current["validation"]);
+    };
     // 默认按验证效果选优；覆盖记录用于诊断，只有显式严格验收才要求全规则、全能力命中。
     const bool strict_coverage = gate.flag("require_level_coverage", false);
     for (std::size_t i = 1; i < limit; ++i)
       if (nodes[i].str("status") == "accepted" && attributed_validation_gain(i) &&
           (!strict_coverage || (nodes[i]["control_coverage"].flag("complete", false) &&
                                 nodes[i]["control_coverage"].flag("level_complete", false))) &&
-          gepa::global_better(nodes[i]["validation"], nodes[best]["validation"]))
+          preferable(nodes[i], nodes[best]))
         best = i;
     return best;
   }
@@ -10762,58 +9578,41 @@ struct Search {
   // 从已验证节点中选最终候选，留出成绩不反流到生成或日常搜索选择。
   std::vector<std::size_t> final_holdout_candidates() const {
     const auto &nodes = tree["nodes"].items();
-    // Search anchors remain eligible parents. A caller may require automatic
-    // final campaigns to contain only new, globally safe executable versions.
-    // An explicit replay retains the historical plan and its source checks.
-    const bool include_seed = final_holdout_replay || config.flag("final_holdout_include_seed", true);
-    const auto seed_version = nodes.front().str("version", tree.str("seed_version"));
-    const auto same_validation_tasks = [&](std::size_t index) {
-      const auto &reference = nodes.front()["validation"], &values = nodes[index]["validation"];
-      if (!include_seed && (index == 0 || nodes[index].str("version") == seed_version ||
-                            !gepa::global_core_no_worse(values, reference)))
-        return false;
-      if (!reference.object() || reference.fields().empty() || !values.object() ||
-          values.fields().size() != reference.fields().size())
-        return false;
-      for (const auto &task : reference.fields())
-        if (!values.has(task.first))
-          return false;
-      for (const auto *field : {"quality", "strict_pass_rate", "invalid_loops"})
-        if (gepa::mean(reference, field) > -1e9 && gepa::mean(values, field) <= -1e9)
-          return false;
-      return gepa::mean(values, "quality") > -1e9;
+    auto preferable = [&](const Json &candidate, const Json &current) {
+      const auto &a = candidate["optimization"];
+      const auto &b = current["optimization"];
+      if (a.flag("feasible", false) != b.flag("feasible", false))
+        return a.flag("feasible", false);
+      if (a.flag("passed", false) != b.flag("passed", false))
+        return a.flag("passed", false);
+      const auto goal = number(a["score"]) - number(b["score"]);
+      if (std::abs(goal) > 1e-12)
+        return goal > 0;
+      const auto robustness = number(a["robustness"]) - number(b["robustness"]);
+      if (std::abs(robustness) > 1e-12)
+        return robustness > 0;
+      return improves(candidate["validation"], current["validation"]);
     };
     std::vector<std::size_t> candidates;
-    std::vector<std::size_t> selected;
     std::set<std::string> versions;
-    const auto requested = final_holdout_top_k_override ? final_holdout_top_k_override
-                                                        : config.num("holdout_top_k", 1);
-    if (!requested)
-      return selected;
-    // 保留完整验证的通用 elite 首位；局部收益分支仍可占后续探索名额。
-    // global_better 是偏序，只做确定性扫描，不能直接传给 std::sort。
-    const auto elite = winner();
-    if (final_holdout_eligible(elite) && same_validation_tasks(elite) &&
-        !nodes[elite].str("version").empty()) {
-      selected.push_back(elite);
-      versions.insert(nodes[elite].str("version"));
-    }
     for (std::size_t index = 0; index < nodes.size(); ++index) {
-      if (!final_holdout_eligible(index) || !same_validation_tasks(index) ||
-          nodes[index].str("version").empty())
+      if (!final_holdout_eligible(index) || nodes[index].str("version").empty())
         continue;
       if (versions.insert(nodes[index].str("version")).second)
         candidates.push_back(index);
     }
-    while (selected.size() < requested && !candidates.empty()) {
-      auto best = candidates.begin();
-      for (auto candidate = std::next(candidates.begin()); candidate != candidates.end(); ++candidate)
-        if (gepa::global_better(nodes[*candidate]["validation"], nodes[*best]["validation"]))
-          best = candidate;
-      selected.push_back(*best);
-      candidates.erase(best);
-    }
-    return selected;
+    std::sort(candidates.begin(), candidates.end(), [&](const auto left, const auto right) {
+      if (preferable(nodes[left], nodes[right]))
+        return true;
+      if (preferable(nodes[right], nodes[left]))
+        return false;
+      return left < right;
+    });
+    const auto requested = final_holdout_top_k_override ? final_holdout_top_k_override
+                                                        : config.num("holdout_top_k", 1);
+    if (candidates.size() > requested)
+      candidates.resize(requested);
+    return candidates;
   }
 
   // 创建并登记候选提案的身份、父节点和待测状态。
@@ -10871,7 +9670,6 @@ struct Search {
                                       "gepa_search_time_reserved",
                                       "gepa_parent_evaluation_inconclusive",
                                       "gepa_feedback_budget_too_small",
-                                      "gepa_reflection_metrics_incomplete",
                                       "gepa_reflection_transport_failed",
                                       "gepa_reflection_incomplete",
                                       "gepa_reflection_reduce_no_progress",
@@ -10879,7 +9677,6 @@ struct Search {
                                       "gepa_reflection_component_binding_changed",
                                       "gepa_experience_not_authorized",
                                       "gepa_experience_limit",
-                                      "gepa_experience_trigger_unmatchable",
                                       "gepa_draft_invalid",
                                       "gepa_candidate_not_authorized",
                                       "gepa_model_not_configured",
@@ -11420,12 +10217,6 @@ struct Search {
                   {"started_ms", now()},
                   {"rounds", 0},
                   {"model_calls", 0},
-                  {"budget_extensions", Json::Array{Json{
-                      {"reason", "initial_budget"}, {"rounds_used", 0}, {"model_calls_used", 0},
-                      {"max_rounds", config.num("max_rounds", 8)},
-                      {"max_model_calls", config.num("max_model_calls", 8)},
-                      {"timeout_ms", config.num("timeout_ms", 1800000)},
-                      {"patience", config.num("patience", 0)}}}},
                   {"trials_used", 0},
                   {"component_cursor", 0},
                   {"active", nullptr},
@@ -11586,8 +10377,6 @@ struct Search {
       tree["merge_due"] = true;
     recover_rejected_screenings();
     recover_inconclusive_screenings();
-    const bool recovering_rate_limit = tree.str("status") == "error" &&
-                                      tree.str("error") == "gepa_model_rate_limited";
     tree["status"] = "searching";
     tree.fields().erase("error");
     tree.fields().erase("finished_ms");
@@ -11598,7 +10387,6 @@ struct Search {
            (!tree["active"].null() || !tree["batch"].null() ||
             tree.num("rounds", 0) < config.num("max_rounds", 8))) {
       refresh_change_evidence();
-      if (close_rate_limited_search_budget(recovering_rate_limit)) break;
       check();
       if (now() >= deadline() - holdout_time() ||
           tree.str("stop_reason") == "gepa_search_time_reserved") {
@@ -11703,7 +10491,7 @@ struct Search {
             Json plan{{"parent", p},
                       {"tasks", Json::Array{}},
                       {"components", gepa::select_components(
-                                         selection_components(artifact(p)),
+                                         components(artifact(p)),
                                          config.str("component_selector", "round_robin"), cursor)},
                       {"component_slot", cursor},
                       {"component_cursor", cursor + 1}};
@@ -11768,10 +10556,9 @@ struct Search {
           const auto parent_report = evaluate_parent(node, parent_artifact, batch);
           const auto parent_scores = scores(parent_report);
           require(!parent_scores.fields().empty(), "gepa_parent_evaluation_inconclusive");
-          const auto current_components = remember_opportunities(parent_artifact, parent_report);
+          remember_opportunities(parent_artifact, parent_report);
           if (node.str("status") == "pending") {
-            const bool frozen_components = reflection_components_checkpoint(index);
-            bool perfect = !frozen_components && config.flag("skip_perfect_score", false);
+            bool perfect = config.flag("skip_perfect_score", false);
             for (const auto &item : parent_scores.fields())
               perfect &= number(item.second["quality"]) >= 1 &&
                          number(item.second["fitness"]) >= number(config["perfect_score"], 1);
@@ -11784,29 +10571,15 @@ struct Search {
                                   : gepa::select_components(components(parent_artifact), "all", 0);
               const auto available = components(parent_artifact);
               const auto observed = applied_experiences(parent_report);
-              const auto initially_related = !frozen_components && selected.items().size() == 1 &&
+              const auto initially_related = selected.items().size() == 1 &&
                                                      !observed.count(selected.items().front().text())
                                                  ? trigger_only_failure_evidence(parent_artifact,
                                                                                  parent_report, selected)
                                                  : Json(Json::Array{});
-              const bool retain_trigger_exploration = frozen_components
-                  ? node.flag("trigger_only_exploration", false) : !initially_related.items().empty();
-              // Plans precede this pool's parent evaluation. Refine their soft
-              // priority once using current formal gaps and exact execution facts;
-              // task IDs stay fixed and reflecting/resumed nodes never reselect.
-              if (config.str("component_selector", "round_robin") == "round_robin" &&
-                  selected.items().size() == 1 && !retain_trigger_exploration) {
-                const auto refined = pending_reflection_components(index, current_components, false);
-                if (refined.dump() != selected.dump()) {
-                  node["component_fallback"] = Json{{"from", selected.items().front()},
-                      {"to", refined.items().front()}, {"reason", "current_parent_failure_opportunity"}};
-                  selected = refined;
-                  node["components"] = selected;
-                }
-              }
+              const bool retain_trigger_exploration = !initially_related.items().empty();
               // 保留 L1 自己的搜索机会：当前经验没被用到时，先换成同批确实应用过的
               // 经验。只在没有这类证据时才让位给 L2/L3；停用经验的恢复探索不受影响。
-              if (!frozen_components && config.str("component_selector", "round_robin") == "round_robin" &&
+              if (config.str("component_selector", "round_robin") == "round_robin" &&
                   selected.items().size() == 1) {
                 const auto current = selected.items().front().text();
                 if (current.rfind("experience:", 0) == 0 && !available[current].null() &&
@@ -11823,11 +10596,11 @@ struct Search {
               }
               auto input = packet(parent_artifact, parent_report, selected,
                                   retain_trigger_exploration);
-              if (retain_trigger_exploration && !frozen_components) {
+              if (retain_trigger_exploration) {
                 node["trigger_only_exploration"] = true;
                 node["trigger_only_evidence"] = initially_related;
               }
-              if (!frozen_components && config.str("component_selector", "round_robin") == "round_robin" &&
+              if (config.str("component_selector", "round_robin") == "round_robin" &&
                   selected.items().size() == 1) {
                 // 已应用经验与停用经验的恢复探索保留轮次；其他未应用经验再让位。
                 const auto current = selected.items().front().text();
@@ -11862,7 +10635,7 @@ struct Search {
                   }
                 }
               }
-              if (!frozen_components && config.str("component_selector", "round_robin") == "round_robin" &&
+              if (config.str("component_selector", "round_robin") == "round_robin" &&
                   selected.items().size() == 1 &&
                   (selected.items().front().text() == "action_rules" ||
                    selected.items().front().text() == "loop_rules" ||
@@ -11905,7 +10678,7 @@ struct Search {
                   }
                 }
               }
-              if (!frozen_components && config.str("component_selector", "round_robin") == "round_robin" &&
+              if (config.str("component_selector", "round_robin") == "round_robin" &&
                   selected.items().size() == 1 &&
                   selected.items().front().text().rfind("experience:", 0) == 0 &&
                   !available[selected.items().front().text()].null() &&
@@ -11938,7 +10711,7 @@ struct Search {
               // 应用生成新的全局经验改写。
               bool skip_proposal = false;
               Json uncoupled_selection, uncoupled_input;
-              if (!frozen_components && selected.items().size() == 1 &&
+              if (selected.items().size() == 1 &&
                   selected.items().front().text().rfind("experience:", 0) == 0 &&
                   !input.flag("experience_evidence_sufficient", false)) {
                 const auto related = trigger_only_failure_evidence(parent_artifact, parent_report, selected);
@@ -11948,7 +10721,7 @@ struct Search {
                   input = packet(parent_artifact, parent_report, selected, true);
                 }
               }
-              if (!frozen_components && selected.items().size() == 1 &&
+              if (selected.items().size() == 1 &&
                   selected.items().front().text().rfind("experience:", 0) == 0 &&
                   !input.flag("experience_evidence_sufficient", false) &&
                   !input.flag("trigger_only_exploration", false)) {
@@ -11973,7 +10746,7 @@ struct Search {
               }
               if (!skip_proposal) {
                 // 使用同一训练批次已有的证据，不额外调用模型、不扩展可执行权限。
-                if (!frozen_components && selected.items().size() == 1 && available.has("action_rules") &&
+                if (selected.items().size() == 1 && available.has("action_rules") &&
                     available.has("loop_rules") &&
                     (selected.items().front().text() == "action_rules" ||
                      selected.items().front().text() == "loop_rules")) {
@@ -11995,8 +10768,8 @@ struct Search {
                 }
                 // COMBEE 可以同时改一条确实注入的经验和同一 run 的动作/循环控制。
                 // 先以原始回执定位同一因果链，再用最终反思包验证 typed 控制证据；
-                // 先定位一条 L1 与控制的真实链；相关 L1 bundle 另以当前回执授权。
-                if (!frozen_components && !input.flag("trigger_only_exploration", false) &&
+                // 每次最多一条 L1、两种控制，绝不因经验在库中存在就批量授权。
+                if (!input.flag("trigger_only_exploration", false) &&
                     config.str("reflection_strategy", "single") == "combee" &&
                     selected.items().size() <= 2 &&
                     std::none_of(selected.items().begin(), selected.items().end(),
@@ -12128,25 +10901,6 @@ struct Search {
                     break;
                   }
                 }
-                if (!frozen_components && !input.flag("trigger_only_exploration", false) &&
-                    config.str("reflection_strategy", "single") == "combee") {
-                  const auto observations = experience_bundle_observations(parent_artifact, parent_report);
-                  auto bundle = related_experience_bundle(selected, available, parent_scores,
-                                                          observations, tree["component_selections"]);
-                  while (bundle.items().size() > selected.items().size()) {
-                    try {
-                      auto joint = packet(parent_artifact, parent_report, bundle);
-                      node["experience_bundle"] = Json{{"reason", "current_failed_run_coapplication"},
-                          {"anchor_components", selected}, {"selected_components", bundle}};
-                      selected = std::move(bundle); input = std::move(joint);
-                      node["components"] = selected;
-                      break;
-                    } catch (const Error &error) {
-                      if (std::string(error.what()) != "gepa_feedback_budget_too_small") throw;
-                      bundle.items().pop_back();
-                    }
-                  }
-                }
                 if (!node.flag("component_reserved", false)) {
                   for (const auto &component : selected.items())
                     tree["component_selections"][component.text()] =
@@ -12161,13 +10915,6 @@ struct Search {
                         "gepa_reflection_component_binding_changed");
                 save();
                 Json draft, candidate, accepted;
-                const auto experience_queries = experience_query_evidence(parent_report, selected);
-                const auto check_experience = [&] {
-                  node["experience_preflight"] = experience_applicability_preflight(
-                      parent_artifact, candidate, parent_report, selected, &experience_queries);
-                  require(node["experience_preflight"].flag("passed", false),
-                          "gepa_experience_trigger_unmatchable");
-                };
                 Json contract_repairs;
                 node.fields().erase("control_binding_provenance");
                 try {
@@ -12224,7 +10971,6 @@ struct Search {
                     node["schedule_contract_repair"] = contract_repairs;
                   candidate = mutate(parent_artifact, accepted, selected,
                                      input.flag("trigger_only_exploration", false));
-                  check_experience();
                 } catch (const FullPoolProposalIncomplete &) {
                   // Never replace unfinished maps/reduce/review with a single feedback row.
                   // The saved full-pool stages remain available for explicit recovery.
@@ -12235,8 +10981,7 @@ struct Search {
                        code != "gepa_component_not_authorized" &&
                        code != "gepa_experience_not_authorized" &&
                        code != "control_failure_replan_not_authorized" && code != "unknown_field" &&
-                       code != "gepa_draft_invalid" && code != "gepa_experience_trigger_unmatchable" &&
-                       code != "control_duplicate_loop_scope" &&
+                       code != "gepa_draft_invalid" && code != "control_duplicate_loop_scope" &&
                        code != "control_binding_invalid" &&
                        code != "control_repeat_operation_required" &&
                        code != "control_loop_semantic_scope_required" &&
@@ -12304,13 +11049,6 @@ struct Search {
                     if (evidence)
                       repair["feedback"].push(*evidence);
                   }
-                  if (code == "gepa_experience_trigger_unmatchable") {
-                    repair = input;
-                    repair["phase"] = "repair_experience_trigger";
-                    repair["error"] = code;
-                    repair["experience_preflight"] = node["experience_preflight"];
-                    repair = compact_reflection_metadata(std::move(repair), config.num("max_input_bytes", 65536));
-                  }
                   node["repair_error"] = code;
                   save();
                   accepted = reflect(repair, index, "-repair");
@@ -12322,7 +11060,6 @@ struct Search {
                     node["schedule_contract_repair"] = contract_repairs;
                   candidate = mutate(parent_artifact, accepted, selected,
                                      input.flag("trigger_only_exploration", false));
-                  check_experience();
                 }
                 if (!node.has("repair_error") && controls.num("max_attempts", 2) >= 2 &&
                     tree.num("model_calls", 0) < config.num("max_model_calls", 8) &&
@@ -12367,7 +11104,6 @@ struct Search {
                     node["control_probe"]["status"] = "invalid";
                   }
                 }
-                check_experience();
                 node["reason"] = accepted.str("reason");
                 node["control_preflight"] = control_preflight(
                     parent_artifact, candidate, parent_report,
@@ -12710,7 +11446,6 @@ Json load_gepa_config(const fs::path &path) {
                 "holdout_reserve_ms",
                 "holdout_max_report_bytes",
                 "holdout_top_k",
-                "final_holdout_include_seed",
                 "minibatch_size",
                 "max_feedback_trials",
                 "max_input_bytes",
@@ -12778,8 +11513,7 @@ Json load_gepa_config(const fs::path &path) {
               config.num("proposals_per_round", 1) * config.num("parents_per_round", 2) <= 8,
           "gepa_batch_limit");
   for (const auto *key :
-       {"use_merge", "prune_dominated", "skip_perfect_score", "cache_evaluations",
-        "final_holdout_include_seed"})
+       {"use_merge", "prune_dominated", "skip_perfect_score", "cache_evaluations"})
     if (config.has(key))
       config[key].boolean();
   auto choice = [&](const char *key, const char *fallback,

@@ -33,14 +33,6 @@ public:
   std::function<Report(const Json &)> external_loader;
   bool external_requested = false;
 
-  static bool complete_loop_review(const Json &evidence) {
-    const auto &review = evidence["loop_review"];
-    if (review.str("status") != "complete" || !review.has("count") || review["count"].null())
-      return false;
-    try { (void)review["count"].integer(); return true; }
-    catch (const std::exception &) { return false; }
-  }
-
   // 按缓存身份生成索引路径，同一数据与评测口径才能定位同一份缓存。
   Path index_path() const {
     return root / "holdout-baseline-cache" / (hash(identity.dump()) + ".json");
@@ -189,7 +181,8 @@ public:
                 (trial.verdict() == "passed" || trial.verdict() == "failed" ||
                  (trial.verdict() == "uncertain" && evidence["assessment"].object())) &&
                 evidence.str("loaded_version") == identity.str("baseline_version") &&
-                (!identity.flag("loop_review", false) || complete_loop_review(evidence)),
+                (!identity.flag("loop_review", false) ||
+                 evidence["loop_review"].str("status") == "complete"),
             "gepa_holdout_cache_trial_mismatch");
         *baseline.add_trials() = trial;
       }

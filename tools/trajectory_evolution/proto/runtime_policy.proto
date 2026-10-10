@@ -141,9 +141,6 @@ message RuntimeOptions {
   bool aggressive_controls = 15;
   // 只禁用 L1 文本注入；来源批准仍能授权既有控制。
   repeated ExperienceApproval disabled_injections = 16;
-  // GEPA may request a pre-execution L1 window only for approved, active
-  // experience overrides. This does not authorize actions or loop controls.
-  repeated string l1_prevention_sources = 17;
 }
 message RuntimePolicy {
   uint32 schema_version = 1;

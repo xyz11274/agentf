@@ -1,0 +1,214 @@
+{
+  "validation": "read-only compact artifact checks; no raw provenance confirmation or experiment rerun",
+  "passed": 20,
+  "checks": [
+    {
+      "name": "01 Current checkout identity",
+      "status": "pass",
+      "detail": "f44bbaf4a9531731bfbd3eb6c115fe4210df95b1"
+    },
+    {
+      "name": "02 AppWorld input counts",
+      "status": "pass",
+      "detail": {
+        "train": 134,
+        "val": 12,
+        "holdout": 500,
+        "comparison-500": 500
+      }
+    },
+    {
+      "name": "03 Development500 source views",
+      "status": "pass",
+      "detail": {
+        "test_normal": 131,
+        "test_challenge": 327,
+        "dev": 42
+      }
+    },
+    {
+      "name": "04 Same500 exact task order",
+      "status": "pass",
+      "detail": {
+        "baseline": 500,
+        "candidate": 500
+      }
+    },
+    {
+      "name": "05 Unique500 task identities",
+      "status": "pass",
+      "detail": "500 unique per side"
+    },
+    {
+      "name": "06 Complete score summary rows",
+      "status": "pass",
+      "detail": "1000 summary rows complete; original raw evidence unavailable"
+    },
+    {
+      "name": "07 Formal strict totals",
+      "status": "pass",
+      "detail": [
+        322,
+        338
+      ]
+    },
+    {
+      "name": "08 Formal single-goal quality",
+      "status": "pass",
+      "detail": [
+        0.644,
+        0.676
+      ]
+    },
+    {
+      "name": "09 Complete invalid-loop totals",
+      "status": "pass",
+      "detail": [
+        190.0,
+        102.0
+      ]
+    },
+    {
+      "name": "10 Paired strict wins-losses-ties",
+      "status": "pass",
+      "detail": {
+        "tie": 360,
+        "win": 78,
+        "loss": 62
+      }
+    },
+    {
+      "name": "11 Exact goal math",
+      "status": "pass",
+      "detail": {
+        "relative_quality_gain": 0.049689440993788817,
+        "loop_reduction": 0.4631578947368421,
+        "strict_needed": 339
+      }
+    },
+    {
+      "name": "12 Actual level application totals",
+      "status": "pass",
+      "detail": {
+        "L0": {
+          "l1_applied": 0,
+          "l2_action_applied": 0,
+          "l2_schedule_applied": 0,
+          "l3_applied": 0
+        },
+        "candidate": {
+          "l1_applied": 595,
+          "l2_action_applied": 0,
+          "l2_schedule_applied": 0,
+          "l3_applied": 4
+        }
+      }
+    },
+    {
+      "name": "13 Resource coverage and partial means",
+      "status": "pass",
+      "detail": {
+        "coverage": {
+          "L0": {
+            "latency_ms": 0,
+            "tokens": 0,
+            "model_calls": 0
+          },
+          "candidate": {
+            "latency_ms": 500,
+            "tokens": 497,
+            "model_calls": 497
+          }
+        },
+        "candidate_means": {
+          "latency_ms": 172433.68371563,
+          "tokens": 172923.97987927566,
+          "model_calls": 25.722334004024145
+        },
+        "all_attempt_costs_unknown": true
+      }
+    },
+    {
+      "name": "14 Official versus formal strict",
+      "status": "pass",
+      "detail": {
+        "L0": [
+          "appworld-9a16324_3"
+        ],
+        "candidate": [
+          "appworld-3b8fb7a_2"
+        ]
+      }
+    },
+    {
+      "name": "15 Delivery is not qualified publication",
+      "status": "pass",
+      "detail": {
+        "status": "delivered",
+        "release_status": "best_available_not_qualified",
+        "goal_passed": false,
+        "gepa_completion_claimed": false,
+        "independent_holdout": false
+      }
+    },
+    {
+      "name": "16 Delivered source equality and seed identity",
+      "status": "pass",
+      "detail": "Historical seed label71 equals current tree Node0; original run git commit not proven"
+    },
+    {
+      "name": "17 GEPA30 recorded terminal state",
+      "status": "pass",
+      "detail": {
+        "statuses": {
+          "error": 13,
+          "interrupted": 3,
+          "duplicate": 5,
+          "inconclusive": 2,
+          "untriggerable_controls": 4,
+          "unobserved_changes": 2,
+          "rejected_minibatch": 1
+        },
+        "optimizer_calls": 395,
+        "final_holdout_field": "running"
+      }
+    },
+    {
+      "name": "18 Missing native provenance files",
+      "status": "pass",
+      "detail": {
+        "missing": 7,
+        "source_prefix": "/root/lai-code/Agent/AgentFlow/",
+        "mapped_prefix": "/data/xyj/harness/AgentFlow"
+      }
+    },
+    {
+      "name": "19 Business selection bias and full400 regression",
+      "status": "pass",
+      "detail": {
+        "selected_300_method": "performance_informed_business_acceptance",
+        "full400_strict": [
+          177,
+          168
+        ],
+        "final500_independent_holdout": false
+      }
+    },
+    {
+      "name": "20 Local benchmark results and runtime missing",
+      "status": "pass",
+      "detail": [
+        "trace_output/bfcl-v3",
+        "trace_output/tau2-retail-verified",
+        "tools/trajectory_evolution/experiments/tau2-retail-verified/tau2_host.py",
+        "tools/trajectory_evolution/experiments/tau2-retail-verified/datasets/native",
+        "tools/trajectory_evolution/experiments/tau2-retail-verified/runtime/venv/bin/python",
+        "trace_output/business-simulator/published/seed004/runtime/trajectory_evolution",
+        "examples/agent/business-simulator/appworld/runtime/venv/bin/python",
+        "examples/agent/business-simulator/appworld/runtime/world",
+        "build/agentflowd",
+        "tools/trajectory_evolution/build-v4/trajectory_evolution"
+      ]
+    }
+  ]
+}

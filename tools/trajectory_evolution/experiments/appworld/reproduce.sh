@@ -29,46 +29,15 @@ case "$MODE" in
   --worker)
     # Load the current .env inside tmux too: its server may hold stale vars.
     case "${2:-}" in
-      --all|--gepa-run|--publish|--deliver-best-available|--restart-gepa) ;;
+      --all|--gepa-run|--publish|--deliver-best-available) "$PYTHON_BIN" -B -u "$SCRIPT" "$2" "${@:3}" ;;
       *) exit 2 ;;
     esac
-    APPWORLD_WORKER_ACTION="$2"
-    APPWORLD_WORKER_RETRIES=0
-    APPWORLD_WORKER_RESUME=()
-    while true; do
-      if "$PYTHON_BIN" -B -u "$SCRIPT" "$APPWORLD_WORKER_ACTION" "${@:3}" "${APPWORLD_WORKER_RESUME[@]}"; then
-        APPWORLD_WORKER_CODE=0
-      else
-        APPWORLD_WORKER_CODE=$?
-      fi
-      case "$APPWORLD_WORKER_CODE" in 130|143) exit "$APPWORLD_WORKER_CODE" ;; esac
-      # A new interpreter reads the installed classifier. The exited worker's
-      # saved source/job/grades remain the sole resume authority.
-      while true; do
-        if "$PYTHON_BIN" -B "$SCRIPT" --worker-resume-check; then
-          APPWORLD_WORKER_CHECK=0
-        else
-          APPWORLD_WORKER_CHECK=$?
-        fi
-        if [ "$APPWORLD_WORKER_CHECK" = 76 ]; then
-          sleep 5
-        else
-          break
-        fi
-      done
-      if [ "$APPWORLD_WORKER_CHECK" != 75 ]; then exit "$APPWORLD_WORKER_CODE"; fi
-      case "$APPWORLD_WORKER_RETRIES" in 0) APPWORLD_WORKER_DELAY=15 ;; 1) APPWORLD_WORKER_DELAY=30 ;; *) APPWORLD_WORKER_DELAY=60 ;; esac
-      sleep "$APPWORLD_WORKER_DELAY"
-      APPWORLD_WORKER_RETRIES=$((APPWORLD_WORKER_RETRIES + 1))
-      APPWORLD_WORKER_RESUME=(--worker-checkpoint-resume)
-      if [ "$APPWORLD_WORKER_ACTION" = --restart-gepa ]; then APPWORLD_WORKER_ACTION=--all; fi
-    done
     ;;
   --status|--plan)
     shift
     exec "$PYTHON_BIN" -B "$SCRIPT" "$MODE" "$@"
     ;;
-  --fresh|--resume|--gepa|--publish|--deliver-best-available|--restart-gepa)
+  --fresh|--resume|--gepa|--publish|--deliver-best-available)
     if [ "$#" -gt 0 ]; then shift; fi
     APPWORLD_TMUX_ACTION='new-session'
     if tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -91,7 +60,6 @@ case "$MODE" in
       --gepa) ACTION='--gepa-run' ;;
       --publish) ACTION='--publish' ;;
       --deliver-best-available) ACTION='--deliver-best-available' ;;
-      --restart-gepa) ACTION='--restart-gepa' ;;
     esac
     mkdir -p trace_output/appworld/{training,gepa,published}
     # Multiple command arguments let tmux exec Bash directly, bypassing its
@@ -109,7 +77,7 @@ case "$MODE" in
     echo "已创建 tmux 会话 $SESSION；流程配置16路，实际进度和退出码见 trace_output/appworld/training/run.log。"
     ;;
   *)
-    echo "用法: $0 [--fresh|--resume|--gepa|--publish|--deliver-best-available|--restart-gepa|--status|--plan]" >&2
+    echo "用法: $0 [--fresh|--resume|--gepa|--publish|--deliver-best-available|--status|--plan]" >&2
     exit 2
     ;;
 esac

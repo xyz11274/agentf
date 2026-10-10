@@ -260,11 +260,6 @@ bool published_policy_compatible(const v1::RuntimePolicy &published,
   b.clear_experience_overrides();
   a.clear_disabled_injections();
   b.clear_disabled_injections();
-  // compile_runtime_policy has checked that these L1 windows refer only to
-  // approved, active overrides. They are mutable retrieval hints, not wider
-  // identity permissions, model budgets or executable control capabilities.
-  a.clear_l1_prevention_sources();
-  b.clear_l1_prevention_sources();
   if (json(a).dump() != json(b).dump() ||
       json(old.snapshot().options()).dump() != json(bound_current.snapshot().options()).dump())
     return false;
@@ -383,95 +378,6 @@ bool closed_reflection_checkpoint(const Json &tree, const Json &job,
       return false;
   }
   return true;
-}
-
-bool initial_review_retry_context_matches(const Json &tree, const Json &job,
-                                          const std::string &grading,
-                                          const std::string &execution) {
-  return !grading.empty() && !execution.empty() &&
-      tree.str("evaluation_context") == grading && job.str("evaluation_context") == grading &&
-      tree.str("candidate_evaluation_context") == execution &&
-      job.str("candidate_evaluation_context") == execution;
-}
-
-bool gepa_final_holdout_review_pending(const Json &summary) {
-  const auto &plan = summary["final_holdout"];
-  return summary.str("status") == "inconclusive" && plan.str("status") == "inconclusive" &&
-      plan["candidates"].array() && !plan["candidates"].items().empty() &&
-      std::any_of(plan["candidates"].items().begin(), plan["candidates"].items().end(),
-          [](const Json &entry) { return entry.str("status") == "inconclusive"; });
-}
-
-bool gepa_final_holdout_review_retryable(const GepaResult &result) {
-  if (!gepa_final_holdout_review_pending(result.summary) || result.finalists.empty() ||
-      result.finalists.size() != result.summary["final_holdout"]["candidates"].items().size())
-    return false;
-  // Fixed transport reasons already supported by Search::evaluate, plus its
-  // bounded reason-conflict repair. A real uncertain verdict grants no retry.
-  const std::set<std::string> temporary{
-      "evaluation_judge_http_408", "evaluation_judge_http_429", "evaluation_judge_http_500",
-      "evaluation_judge_http_502", "evaluation_judge_http_503", "evaluation_judge_http_504",
-      "evaluation_judge_transport_6", "evaluation_judge_transport_7", "evaluation_judge_transport_18",
-      "evaluation_judge_transport_28", "evaluation_judge_transport_52", "evaluation_judge_transport_55",
-      "evaluation_judge_transport_56", "evaluation_judge_transport_exhausted", "evaluation_judge_reason_conflict"};
-  const auto closed = [](const google::protobuf::Struct &evidence) {
-    const auto field = [](const google::protobuf::Struct &object, const char *name)
-        -> const google::protobuf::Value * {
-      const auto found = object.fields().find(name);
-      return found == object.fields().end() ? nullptr : &found->second;
-    };
-    const auto *output = field(evidence, "output");
-    if (!output || output->kind_case() != google::protobuf::Value::kStructValue) return false;
-    const auto *capture = field(output->struct_value(), "framework_capture");
-    if (!capture || capture->kind_case() != google::protobuf::Value::kStructValue) return false;
-    const auto *status = field(capture->struct_value(), "status");
-    if (!status || status->kind_case() != google::protobuf::Value::kStringValue ||
-        status->string_value() != "complete") return false;
-    const auto trace_closed = [&](const google::protobuf::Value &trace) {
-      if (trace.kind_case() != google::protobuf::Value::kStructValue) return false;
-      const auto *events = field(trace.struct_value(), "events");
-      if (!events || events->kind_case() != google::protobuf::Value::kListValue) return false;
-      bool start = false, end = false;
-      for (const auto &event : events->list_value().values()) {
-        if (event.kind_case() != google::protobuf::Value::kStructValue) continue;
-        const auto *kind = field(event.struct_value(), "kind");
-        if (kind && kind->kind_case() == google::protobuf::Value::kStringValue) {
-          start |= kind->string_value() == "run.start";
-          end |= kind->string_value() == "run.end";
-        }
-      }
-      return start && end;
-    };
-    if (const auto *traces = field(evidence, "traces")) {
-      if (traces->kind_case() != google::protobuf::Value::kListValue ||
-          traces->list_value().values().empty()) return false;
-      for (const auto &trace : traces->list_value().values()) if (!trace_closed(trace)) return false;
-      return true;
-    }
-    const auto *trace = field(evidence, "trace");
-    return trace && trace_closed(*trace);
-  };
-  bool failed = false;
-  for (const auto &finalist : result.finalists) {
-    if (!finalist.holdout.complete() || !finalist.holdout.trials_size()) return false;
-    for (const auto &trial : finalist.holdout.trials()) {
-      if (trial.execution_status() != "completed") return false;
-      if (trial.error_code().empty()) {
-        if (trial.verdict() != "passed" && trial.verdict() != "failed") return false;
-        continue;
-      }
-      if (trial.error_code() != "evaluation_judge_failed" || !closed(trial.evidence())) return false;
-      unsigned errors = 0;
-      for (const auto &check : trial.checks())
-        if (check.check_id() == "model" && check.status() == "error") {
-          if (!temporary.count(check.reason())) return false;
-          ++errors;
-        }
-      if (errors != 1) return false;
-      failed = true;
-    }
-  }
-  return failed;
 }
 
 struct AgentEvaluationService::Impl {
@@ -1235,7 +1141,6 @@ struct AgentEvaluationService::Impl {
       Json verdict;
       std::string error;
       bool completed = false;
-      bool pending_final_holdout = false, retryable_final_holdout = false;
       dataset::v1::TaskEvaluationReport report;
       try {
         const bool holdout_replay = job["final_holdout_replay"].object();
@@ -1288,8 +1193,6 @@ struct AgentEvaluationService::Impl {
           artifact = result.artifact;
           report = result.holdout;
           job["search"] = result.summary;
-          pending_final_holdout = gepa_final_holdout_review_pending(result.summary);
-          retryable_final_holdout = pending_final_holdout && gepa_final_holdout_review_retryable(result);
           // 只交付搜索过程中积累的训练反馈；留出复测不产生第二份入库事件。
           if (!holdout_replay) {
             if (result.memory_feedback["records"].object() &&
@@ -1400,10 +1303,6 @@ struct AgentEvaluationService::Impl {
                                        ? (verdict.flag("passed", false) ? "passed" : "rejected")
                                        : "inconclusive")
                                 : "error";
-        if (completed && pending_final_holdout && !cancelled) {
-          current["status"] = retryable_final_holdout ? "inconclusive" : "error";
-          if (!retryable_final_holdout) error = "gepa_final_holdout_review_unavailable";
-        }
         if (!error.empty())
           current["error"] = error;
         if (completed && job.flag("training", false))
@@ -1436,7 +1335,7 @@ struct AgentEvaluationService::Impl {
           const auto previous = state["publications"][key].str("context") == context
                                     ? state["publications"][key].str("version")
                                     : "";
-          if (!pending_final_holdout && (!holdout_replay || publishable_replay) && verdict.flag("passed", false) &&
+          if ((!holdout_replay || publishable_replay) && verdict.flag("passed", false) &&
               state["latest"].str(key) == id &&
               previous == job.str("parent_version")) {
             state["publications"][key] = Json{{"user", job["user"]},
@@ -1453,7 +1352,7 @@ struct AgentEvaluationService::Impl {
             export_publication(id, current, artifact);
           }
           if (job.flag("gepa", false)) {
-            if (pending_final_holdout || (holdout_replay && !publishable_replay) || !verdict.flag("passed", false))
+            if ((holdout_replay && !publishable_replay) || !verdict.flag("passed", false))
               fs::remove(root / id / "search/selected-version.json");
             write(root / id / "search/decision.json",
                   Json{{"gate", verdict},
@@ -2034,7 +1933,9 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
         previous_timeout =
             extension_tree["budget_extensions"].items().back().num("timeout_ms", 0);
       const bool expanded =
-          gepa_model_budget_extended(extension_tree, impl_->gepa) ||
+          (stop == "model_budget" &&
+           extension_tree.num("model_calls", SIZE_MAX) <
+               impl_->gepa.num("max_model_calls", 0)) ||
           (stop == "max_rounds" &&
            extension_tree.num("rounds", SIZE_MAX) < impl_->gepa.num("max_rounds", 0)) ||
           (stop == "gepa_search_time_reserved" &&
@@ -2060,20 +1961,6 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
   bool rebind_holdout_execution_context = false;
   bool rebind_candidate_execution_context = false;
   std::string current_candidate_context;
-
-  // Closed initial or final judge-only recovery must retain both identities
-  // before any state mutation. Context migration would discard healthy work.
-  if (job.flag("gepa", false) &&
-      (job.str("error") == "gepa_baseline_evaluation_inconclusive" ||
-       job.str("error") == "gepa_seed_evaluation_inconclusive" ||
-       (status == "inconclusive" && gepa_final_holdout_review_pending(job["search"])))) {
-    if (!extension_tree.object())
-      extension_tree = Json::parse(read(tree_path, 16777216));
-    const auto grading = impl_->evaluation_fingerprint();
-    const auto execution = impl_->candidate_evaluation_fingerprint();
-    require(initial_review_retry_context_matches(extension_tree, job, grading, execution),
-            "evaluation_initial_review_context_changed", 409);
-  }
 
   // 一棵树的父子成绩必须来自同一评分口径和同一 Agent 执行身份。
   // 评测管理器重编译不改变 Agent 身份；恢复时只迁移管理器造成的候选上下文
@@ -2347,9 +2234,6 @@ void AgentEvaluationService::retry(const std::string &user, const std::string &i
     write(tree_path, extension_tree.dump());
   }
   if (rewrite_search_context) {
-    // Only a proved increase of this tree's actual old call limit reopens
-    // reflection; retain every paid counter and all completed node evidence.
-    clear_extended_gepa_reflection_exhaustion(extension_tree, impl_->gepa);
     // 搜索预算属于算法调度而非执行/裁判口径。只在上述强约束全部满足时迁移
     // context，并记录旧值；其他配置变化仍由普通过期保护拒绝。
     if (!extension_tree["budget_extensions"].array())

@@ -1,0 +1,80 @@
+{
+  "code_snapshot": "f44bbaf4a9531731bfbd3eb6c115fe4210df95b1",
+  "date": "2026-10-09",
+  "slides": 38,
+  "main_slides": 30,
+  "appendix_slides": 8,
+  "main_minutes": 30,
+  "experiment_summary_checks": 20,
+  "presentation_checks": 8,
+  "business_source_changed": false,
+  "experiments_rerun": false,
+  "historical_run_commit_verified": false,
+  "editable_charts": 3,
+  "outputs": [
+    {
+      "name": "AgentFlow_自进化系统_导师汇报_20261009.pdf",
+      "bytes": 913425
+    },
+    {
+      "name": "AgentFlow_自进化系统_导师汇报_20261009.pptx",
+      "bytes": 223689
+    },
+    {
+      "name": "README.md",
+      "bytes": 2592
+    },
+    {
+      "name": "build_content.py",
+      "bytes": 55716
+    },
+    {
+      "name": "build_report.py",
+      "bytes": 12381
+    },
+    {
+      "name": "deck_content.json",
+      "bytes": 78492
+    },
+    {
+      "name": "render_preview.py",
+      "bytes": 966
+    },
+    {
+      "name": "validate_experiment_summaries.py",
+      "bytes": 8431
+    },
+    {
+      "name": "validate_presentation.py",
+      "bytes": 2733
+    },
+    {
+      "name": "仓库梳理与证据索引.md",
+      "bytes": 63522
+    },
+    {
+      "name": "内容审查记录.md",
+      "bytes": 17725
+    },
+    {
+      "name": "实验复算指标.json",
+      "bytes": 9592
+    },
+    {
+      "name": "实验数据核查回执.json",
+      "bytes": 5513
+    },
+    {
+      "name": "文稿校验回执.json",
+      "bytes": 1169
+    },
+    {
+      "name": "源码与产物定位.md",
+      "bytes": 22097
+    },
+    {
+      "name": "逐页讲稿.md",
+      "bytes": 36746
+    }
+  ]
+}

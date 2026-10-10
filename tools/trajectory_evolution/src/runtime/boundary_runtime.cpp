@@ -411,7 +411,7 @@ public:
         !item.flag("delegates_schedule", false) && item["target_attempts"].object()) {
       auto attempts = item["target_attempts"];
       if (request.has("actual_input")) {
-        const auto actual = target_failure_snapshot(static_cast<const Json &>(run)["policy"]["options"],
+        const auto actual = target_failure_snapshot(run["policy"]["options"],
                                                     qualified_scope(config, item.str("scope_id")),
                                                     item.str("name"), request["actual_input"],
                                                     run["target_failures"], item.str("stream_id"));
@@ -487,23 +487,6 @@ public:
       auto &failure = loop["operation_failures"][operation];
       if (!failure.has("epoch"))
         failure["epoch"] = loop["observed_actions"];
-      auto code = structured_error_code(request.has("progress_output") ? request["progress_output"]
-                                                                       : request["output"]);
-      if (code.empty() && request.has("error"))
-        code = structured_error_code(request["error"]);
-      // L0 has no evolution policy. Failed actions still need normal
-      // counters, but must never parse its absent policy as RuntimeOptions.
-      const v1::RuntimeOptions neutral_options;
-      const auto &options = run.num("level", 0) == 0 ? neutral_options
-                            : cached_policy ? cached_policy->policy().options()
-                            : proto<v1::RuntimeOptions>(static_cast<const Json &>(run)["policy"]["options"]);
-      // Only multi-mechanism policies separate families. Old single-rule
-      // policies retain the original operation-level counters.
-      if (has_multi_failure_recovery(options, qualified_scope(config, item.str("scope_id")),
-                                     item.str("actor_id")) && failure.str("error_code") != code) {
-        failure["count"] = 0;
-        failure["epoch"] = loop["observed_actions"];
-      }
       const auto prior = item.num("prior_failures", failure.num("count", 0));
       const bool same_streak =
           item.num("failure_epoch", failure.num("epoch", 0)) == failure.num("epoch", 0);
@@ -512,6 +495,10 @@ public:
       failure["count"] = std::min<std::size_t>(
           10000, std::max(failure.num("count", 0), same_streak ? prior + 1 : std::size_t(1)));
       failure["last_action"] = loop["observed_actions"];
+      auto code = structured_error_code(request.has("progress_output") ? request["progress_output"]
+                                                                       : request["output"]);
+      if (code.empty() && request.has("error"))
+        code = structured_error_code(request["error"]);
       failure["error_code"] = code;
     }
   }
@@ -619,7 +606,7 @@ public:
     bool contract_failed = false;
     if (semantic == "action") {
       item["target_attempts"] = target_failure_snapshot(
-          static_cast<const Json &>(run)["policy"]["options"], qualified_scope(config, item.str("scope_id")), name, prepared,
+          run["policy"]["options"], qualified_scope(config, item.str("scope_id")), name, prepared,
           run["target_failures"], item.str("stream_id"));
       if (item.has("loop_id")) {
         const auto &failure = static_cast<const Json &>(
@@ -880,7 +867,7 @@ public:
       if (status == "running") {
         item["schedule_attempts"][action_id]["stream_id"] = event_action_id;
         item["schedule_attempts"][action_id]["target_attempts"] = target_failure_snapshot(
-            static_cast<const Json &>(run)["policy"]["options"], qualified_scope(config, item.str("scope_id")),
+            run["policy"]["options"], qualified_scope(config, item.str("scope_id")),
             fields.str("operation"), (*scheduled)["arguments"], run["target_failures"],
             event_action_id);
         if (item.has("loop_id")) {
@@ -1345,7 +1332,7 @@ public:
         progress.set_replans(query.previous().replans());
         progress.set_no_progress(
             std::max({query.repeated_action_steps(),
-                      static_cast<const Json &>(run)["policy"]["options"].flag("aggressive_controls", false)
+                      run["policy"]["options"].flag("aggressive_controls", false)
                           ? query.repeated_failure_steps()
                           : 0U,
                       !query.state_fingerprint().empty() && query.previous().iteration() > 0 &&

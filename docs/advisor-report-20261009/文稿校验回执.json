@@ -1,0 +1,46 @@
+{
+  "validation": "Presentation structure, native charts, sources, notes, page layout and rendered text; does not test repository software or reproduce experiments",
+  "passed": 8,
+  "checks": [
+    {
+      "name": "Slide and PDF page count",
+      "status": "pass",
+      "detail": "30 main slides and 8 appendix slides"
+    },
+    {
+      "name": "Main talk timing",
+      "status": "pass",
+      "detail": "1800 seconds"
+    },
+    {
+      "name": "Speaker notes and sources",
+      "status": "pass",
+      "detail": "38 pages contain notes and provenance"
+    },
+    {
+      "name": "Editable charts",
+      "status": "pass",
+      "detail": "Three native charts with editable workbook data"
+    },
+    {
+      "name": "Shapes within slide canvas",
+      "status": "pass",
+      "detail": []
+    },
+    {
+      "name": "Rendered substantive text",
+      "status": "pass",
+      "detail": []
+    },
+    {
+      "name": "PDF pages have expected aspect ratio",
+      "status": "pass",
+      "detail": "16:9"
+    },
+    {
+      "name": "Evidence qualification explicit",
+      "status": "pass",
+      "detail": "Delivery and development-set limits retained"
+    }
+  ]
+}

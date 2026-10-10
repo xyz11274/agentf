@@ -1,0 +1,86 @@
+{
+  "date": "2026-10-09",
+  "current_head": "f44bbaf4a9531731bfbd3eb6c115fe4210df95b1",
+  "report": "AgentFlow_项目详解_源码架构_输入输出_自进化与实验.md",
+  "utf8_bytes": 229257,
+  "characters": 130576,
+  "chinese_characters": 43825,
+  "lines": 1654,
+  "markdown_links": 354,
+  "local_links": 348,
+  "missing_links": [],
+  "invalid_navigation_anchors": [],
+  "fenced_blocks": {
+    "mermaid": 11,
+    "text": 3,
+    "cpp": 1,
+    "json": 22
+  },
+  "sha256": "afcb7966b975a4550d7d9ca99c9ea5ca0cc7c1fec8e9934db90316bd4eddb61f",
+  "checks": [
+    {
+      "check": "Exactly one document title",
+      "status": "pass"
+    },
+    {
+      "check": "Six main numbered chapters",
+      "status": "pass"
+    },
+    {
+      "check": "All local links resolve",
+      "status": "pass"
+    },
+    {
+      "check": "Navigation anchors resolve",
+      "status": "pass"
+    },
+    {
+      "check": "Fences closed and22 JSON examples parse",
+      "status": "pass"
+    },
+    {
+      "check": "Eleven Mermaid blocks present",
+      "status": "pass"
+    },
+    {
+      "check": "No invented operation names",
+      "status": "pass"
+    },
+    {
+      "check": "Applied status filter explicit",
+      "status": "pass"
+    },
+    {
+      "check": "Legacy and predicate source matching distinguished",
+      "status": "pass"
+    },
+    {
+      "check": "AppWorld strict loop and paired results described",
+      "status": "pass"
+    },
+    {
+      "check": "Unqualified delivery and nonindependent scopes explicit",
+      "status": "pass"
+    },
+    {
+      "check": "L0 aggregate loop completion not confused with missing row status",
+      "status": "pass"
+    },
+    {
+      "check": "Twenty compact-artifact assertions passed",
+      "status": "pass"
+    },
+    {
+      "check": "Current source head fixed",
+      "status": "pass"
+    },
+    {
+      "check": "Tracked source and original artifact files unchanged",
+      "status": "pass"
+    }
+  ],
+  "review": "Three independent source-grounded cross-reviews; reported corrections incorporated.",
+  "mermaid_validation": "Block presence and document structure checked; no graphical renderer run.",
+  "json_validation": "All examples parse. Selected boundary/dataset snippets received static schema-field review; incomplete examples are explanatory, not executable full fixtures.",
+  "verification_scope": "Documentation structure, local references, compact artifact consistency and targeted static source review. No business build/tests, real model calls, rescoring, service launch or raw provenance reconstruction."
+}

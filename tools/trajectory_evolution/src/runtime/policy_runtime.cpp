@@ -117,7 +117,6 @@ v1::Level validate_options(const v1::RuntimeOptions &options) {
               options.allowed_conversations_size() <= 256 &&
               options.approved_experiences_size() <= 512 &&
               options.experience_overrides_size() <= 64 &&
-              options.l1_prevention_sources_size() <= 16 &&
               options.disabled_injections_size() <= 512 && options.action_rules_size() <= 64 &&
               options.loop_rules_size() <= 64 && options.host_capabilities_size() <= 32,
           "runtime_limits_invalid");
@@ -160,20 +159,6 @@ v1::Level validate_options(const v1::RuntimeOptions &options) {
     for (const auto &operation : item.observed_operations())
       require(identifier(operation) && operations.insert(operation).second,
               "runtime_experience_override_invalid");
-  }
-  ids.clear();
-  for (const auto &memory : options.l1_prevention_sources()) {
-    const bool active_override = std::any_of(
-        options.experience_overrides().begin(), options.experience_overrides().end(),
-        [&](const auto &item) {
-          return item.source_experience().memory_id() == memory &&
-                 approved_source(item.source_experience());
-        });
-    const bool disabled = std::any_of(
-        options.disabled_injections().begin(), options.disabled_injections().end(),
-        [&](const auto &source) { return source.memory_id() == memory; });
-    require(identifier(memory) && ids.insert(memory).second && active_override && !disabled,
-            "runtime_prevention_source_invalid");
   }
   ids.clear();
   for (const auto &rule : options.action_rules()) {
@@ -221,7 +206,7 @@ v1::Level validate_options(const v1::RuntimeOptions &options) {
       require(identifier(code) && code.size() <= 128 && codes.insert(code).second,
               "runtime_argument_invalid");
   }
-  std::map<std::tuple<std::string, std::string, bool>, std::vector<const v1::LoopRule *>> loop_scopes;
+  std::set<std::tuple<std::string, std::string, bool>> loop_scopes;
   for (const auto &rule : options.loop_rules()) {
     require(rule.match_mode().empty() || rule.match_mode() == "predicate",
             "runtime_rule_match_mode_invalid");
@@ -231,6 +216,8 @@ v1::Level validate_options(const v1::RuntimeOptions &options) {
         identifier(rule.rule_id()) && ids.insert(rule.rule_id()).second &&
             identifier(rule.target_scope()) &&
             (rule.actor_id().empty() || identifier(rule.actor_id())) &&
+            loop_scopes.emplace(rule.target_scope(), rule.actor_id(), rule.has_source_experience())
+                .second &&
             (rule.max_iterations() > 0 || rule.max_no_progress() > 0) &&
             rule.max_iterations() <= 10000 && rule.max_no_progress() <= 10000 &&
             rule.max_replans() <= 16 && !rule.reason().empty() && rule.reason().size() <= 1024 &&
@@ -241,10 +228,6 @@ v1::Level validate_options(const v1::RuntimeOptions &options) {
              (rule.max_replans() > 0 && !rule.replan_context().empty() &&
               rule.replan_context().size() + 128 <= options.max_context_bytes())),
         "runtime_loop_rule_invalid");
-    auto &same_scope = loop_scopes[{rule.target_scope(), rule.actor_id(), rule.has_source_experience()}];
-    for (const auto *previous : same_scope)
-      require(disjoint_failure_recovery_rules(*previous, rule), "runtime_loop_rule_invalid");
-    same_scope.push_back(&rule);
     std::set<std::string> codes;
     for (const auto &code : rule.error_codes())
       require(identifier(code) && code.size() <= 128 && codes.insert(code).second,
@@ -319,35 +302,6 @@ bool request_contains(const google::protobuf::Struct &request, const std::string
   return count == 1;
 }
 } // 匿名命名空间
-
-bool disjoint_failure_recovery_rules(const v1::LoopRule &first, const v1::LoopRule &second) {
-  if (!first.has_source_experience() || !second.has_source_experience() ||
-      first.target_scope() != second.target_scope() || first.actor_id() != second.actor_id() ||
-      !first.error_codes_size() || !second.error_codes_size() ||
-      first.match_mode() != "predicate" || second.match_mode() != "predicate" ||
-      !first.replan_on_failure() || !second.replan_on_failure() ||
-      first.max_replans() != 1 || second.max_replans() != 1 ||
-      first.max_iterations() != second.max_iterations() ||
-      first.max_no_progress() != second.max_no_progress() ||
-      first.no_progress_decision() != second.no_progress_decision() ||
-      first.after_action_rejection() != second.after_action_rejection() ||
-      first.require_finalization() != second.require_finalization())
-    return false;
-  for (const auto &code : first.error_codes())
-    if (contains(second.error_codes(), code))
-      return false;
-  return true;
-}
-
-bool has_multi_failure_recovery(const v1::RuntimeOptions &options, const std::string &scope,
-                                const std::string &actor) {
-  std::map<std::string, unsigned> counts;
-  for (const auto &rule : options.loop_rules())
-    if (rule.has_source_experience() && rule.target_scope() == scope &&
-        (rule.actor_id().empty() || rule.actor_id() == actor) && ++counts[rule.actor_id()] > 1)
-      return true;
-  return false;
-}
 
 // 编译阶段把经验快照和经校验的选项固定为一个不可变策略版本；后续运行时只读取该版本。
 // 同一 policy_id 在不同打点处共享同一套 L1、L2、L3 规则，具体决定仍取决于当前查询。
@@ -694,15 +648,9 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery &query) const {
       return result;
     }
     const v1::LoopRule *rule = nullptr;
-    const bool multi = has_multi_failure_recovery(options, query.advice_query().target_scope(),
-                                                  query.actor_id());
     for (const auto &candidate : options.loop_rules())
       if (candidate.target_scope() == query.advice_query().target_scope() &&
           source_matches(candidate) &&
-          (!multi || !candidate.has_source_experience() ||
-           (query.error_codes_size() > 0 &&
-            std::all_of(query.error_codes().begin(), query.error_codes().end(),
-                        [&](const auto &code) { return contains(candidate.error_codes(), code); }))) &&
           (candidate.actor_id().empty() || candidate.actor_id() == query.actor_id()) &&
           (!candidate.require_finalization() || query.can_finalize()) &&
           (!candidate.after_action_rejection() || query.rejected_actions()) &&

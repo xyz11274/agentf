@@ -39,8 +39,7 @@ template <class F> void rejects(F fn) {
 
 // 测试辅助函数：policy。
 // 为当前回归场景构造输入或读取结果，调用参数及返回值由下方断言约束。
-v1::RuntimePolicy policy(const char *experience_content = nullptr, unsigned source_count = 1,
-                         const char *scope = "coordinator") {
+v1::RuntimePolicy policy(const char *experience_content = nullptr) {
   ep::EvolutionMemoryStore memory;
   memory.set_schema_version(1);
   memory.set_store_kind("trajectory_evolution_memory");
@@ -54,7 +53,7 @@ v1::RuntimePolicy policy(const char *experience_content = nullptr, unsigned sour
   candidate->set_candidate_id("candidate-a");
   candidate->set_generator_version(agentflow::trajectory::kScopedExperienceGeneratorVersion);
   candidate->set_target_type(ep::CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION);
-  candidate->set_target_scope(scope);
+  candidate->set_target_scope("coordinator");
   candidate->set_status(ep::EVOLUTION_CANDIDATE_STATUS_PROPOSED);
   candidate->set_trigger_pattern("视频生成缺少素材");
   candidate->set_observed_problem("缺少图片仍重试");
@@ -65,15 +64,6 @@ v1::RuntimePolicy policy(const char *experience_content = nullptr, unsigned sour
   evidence->set_evidence_id("evidence-a");
   evidence->mutable_source()->set_user_id("user-a");
   evidence->mutable_source()->set_dialogue_id("source-a");
-  for (unsigned i = 1; i < source_count; ++i) {
-    const auto original = memory.entries(0);
-    auto *extra = memory.add_entries(); *extra = original;
-    extra->set_memory_id("experience-b");
-    extra->mutable_candidate()->set_candidate_id("candidate-b");
-    extra->mutable_candidate()->set_proposed_change("检查请求参数，在原恢复预算内纠正结构化错误。");
-    extra->mutable_candidate()->mutable_support_evidence(0)->set_evidence_id("evidence-b");
-    extra->mutable_candidate()->mutable_support_evidence(0)->mutable_source()->set_dialogue_id("source-b");
-  }
   auto *control_entry = memory.add_entries();
   control_entry->set_memory_id("orchestration-z");
   control_entry->set_status(ep::EVOLUTION_MEMORY_STATUS_CANDIDATE);
@@ -82,7 +72,7 @@ v1::RuntimePolicy policy(const char *experience_content = nullptr, unsigned sour
   control->set_candidate_id("candidate-orchestration-z");
   control->set_generator_version("evolution-candidate-generator-v2");
   control->set_target_type(ep::CANDIDATE_TARGET_TYPE_SKILL_ORCHESTRATION);
-  control->set_target_scope(scope);
+  control->set_target_scope("coordinator");
   control->set_status(ep::EVOLUTION_CANDIDATE_STATUS_PROPOSED);
   control->set_trigger_pattern("同批图片生成依赖计划完成");
   control->set_observed_problem("图片技能在规划完成前被并行派发");
@@ -98,7 +88,7 @@ v1::RuntimePolicy policy(const char *experience_content = nullptr, unsigned sour
   identity.set_conversation_id("conv-a");
   identity.set_run_id("run-a");
   v1::ShadowOptions limits;
-  limits.add_target_scopes(scope);
+  limits.add_target_scopes("coordinator");
   limits.add_target_scopes("skill:worker");
   limits.set_max_policy_entries(64);
   limits.set_max_advice_items(3);
@@ -109,7 +99,7 @@ v1::RuntimePolicy policy(const char *experience_content = nullptr, unsigned sour
   limits.set_max_match_terms(128);
   limits.set_min_matched_terms(2);
   auto snapshot = te::compile_shadow_policy(memory, identity, limits);
-  check(snapshot.experiences_size() == static_cast<int>(source_count + 1));
+  check(snapshot.experiences_size() == 2);
   v1::RuntimeOptions options;
   options.set_requested_level(v1::L3);
   options.set_fallback("strict");
@@ -126,13 +116,13 @@ v1::RuntimePolicy policy(const char *experience_content = nullptr, unsigned sour
   }
   auto *action = options.add_action_rules();
   action->set_rule_id("image-required");
-  action->set_target_scope(scope);
+  action->set_target_scope("coordinator");
   action->set_operation("video");
   action->add_required_arguments("image");
   action->set_reason("缺少图片素材");
   auto *loop = options.add_loop_rules();
   loop->set_rule_id("bounded-loop");
-  loop->set_target_scope(scope);
+  loop->set_target_scope("coordinator");
   loop->set_max_iterations(6);
   loop->set_max_no_progress(1);
   loop->set_no_progress_decision("replan");
@@ -2050,197 +2040,12 @@ void portable_finalization_context() {
 
 // 回归用例：main。
 // 重点核验字段或诊断：scoped_control_roundtrip、injection_and_evidence、disabled_injection_keeps_control_approval；异常路径不能被当成成功。
-void prevention_sources_are_approved_active_overrides() {
-  const auto original = policy();
-  const auto original_bytes = original.SerializeAsString();
-  auto options = original.options();
-  const v1::ShadowExperience *source = nullptr;
-  for (const auto &entry : original.snapshot().experiences())
-    if (entry.memory_id() == "experience-a") source = &entry;
-  check(source != nullptr);
-  auto *rewrite = options.add_experience_overrides();
-  rewrite->mutable_source_experience()->set_memory_id(source->memory_id());
-  rewrite->mutable_source_experience()->set_content_revision(source->content_revision());
-  rewrite->set_trigger_pattern(source->trigger_pattern());
-  rewrite->set_content("视频生成前先确认图片素材已经存在，独立检索任务继续。");
-  options.add_l1_prevention_sources(source->memory_id());
-  const auto marked = te::compile_runtime_policy(original.snapshot(), options);
-  check(marked.options().l1_prevention_sources_size() == 1);
-  check(te::published_policy_compatible(marked, original, ""));
-  check(original.SerializeAsString() == original_bytes);
-
-  auto bad = options;
-  bad.add_l1_prevention_sources("unapproved-memory");
-  rejects([&] { te::compile_runtime_policy(original.snapshot(), bad); });
-  bad = options;
-  bad.add_l1_prevention_sources(source->memory_id());
-  rejects([&] { te::compile_runtime_policy(original.snapshot(), bad); });
-  bad = options;
-  bad.clear_experience_overrides();
-  rejects([&] { te::compile_runtime_policy(original.snapshot(), bad); });
-  bad = options;
-  *bad.add_disabled_injections() = rewrite->source_experience();
-  rejects([&] { te::compile_runtime_policy(original.snapshot(), bad); });
-  bad = options;
-  for (int i = 0; i < 16; ++i) bad.add_l1_prevention_sources(source->memory_id());
-  rejects([&] { te::compile_runtime_policy(original.snapshot(), bad); });
-}
-
-
-// Two approved failure mechanisms share one native loop and its one replan.
-void disjoint_failure_recovery() {
-  namespace in = te::integration;
-  using in::Json;
-  std::string phase = "compile";
-  auto checked = [&](bool ok) { if (!ok) throw std::runtime_error("disjoint recovery: " + phase); };
-  const auto original = policy(nullptr, 2, "agent:agent-a/actor:coordinator");
-  auto base = original.options();
-  base.mutable_loop_rules(0)->set_max_iterations(30);
-  base.mutable_loop_rules(0)->set_max_no_progress(3);
-  base.mutable_loop_rules(0)->set_replan_on_failure(false);
-  base.mutable_loop_rules(0)->add_error_codes("appworld_auth_401");
-  base.mutable_loop_rules(0)->add_error_codes("appworld_validation_422");
-  const auto settings = Json::parse(R"({"enabled":true,"prompt_file":"test.txt","max_rules":4})");
-  const auto draft = Json::parse(R"({"action_rules":[],"loop_rules":[
-    {"memory_id":"experience-a","actor_id":"worker","error_codes":["appworld_auth_401"],
-     "replan_on_failure":true,"reason":"连续认证失败后有界恢复"},
-    {"memory_id":"experience-b","actor_id":"worker","error_codes":["appworld_validation_422"],
-     "replan_on_failure":true,"reason":"连续参数失败后有界恢复"}]})");
-  const auto compiled = te::compile_runtime_policy(original.snapshot(),
-      in::apply_control_draft(original.snapshot(), base, settings, draft));
-  const auto baseline = te::compile_runtime_policy(original.snapshot(), base);
-  checked(compiled.options().loop_rules_size() == 3);
-  checked(in::generated_controls_authorized(compiled, baseline, settings));
-  std::cout << "disjoint native compilation/source authorization passed\n";
-  auto q = query(compiled, "loop");
-  q.mutable_advice_query()->set_target_scope("agent:agent-a/actor:coordinator");
-  q.set_actor_id("worker"); q.set_iteration(2); q.set_state_fingerprint("observed-progress");
-  q.set_failed_actions(1); q.set_repeated_failure_steps(1);
-  for (const auto *code : {"appworld_auth_401", "appworld_validation_422"}) {
-    q.clear_error_codes(); q.add_error_codes(code);
-    phase = std::string("direct ") + code;
-    const auto decision = te::PolicyRuntime(compiled).decide(q);
-    checked(decision.progress().decision() == "replan" && decision.progress().replans() == 1 &&
-          decision.experiences_size() == 1 &&
-          decision.experiences(0).memory_id() == (std::string(code) == "appworld_auth_401" ?
-                                                 "experience-a" : "experience-b"));
-    phase = "reordered policy";
-    auto reversed = compiled.options(); reversed.mutable_loop_rules()->SwapElements(1, 2);
-    const auto reordered = te::compile_runtime_policy(compiled.snapshot(), reversed);
-    auto same = q;
-    const auto reverse_decision = te::PolicyRuntime(reordered).decide(same);
-    checked(reverse_decision.progress().decision() == decision.progress().decision() &&
-          reverse_decision.progress().rule_id() == decision.progress().rule_id() &&
-          reverse_decision.experiences(0).memory_id() == decision.experiences(0).memory_id());
-    phase = "shared budget";
-    auto next = q; *next.mutable_previous() = decision.progress();
-    next.set_iteration(3); next.set_state_fingerprint("next-progress");
-    next.clear_error_codes(); next.add_error_codes(std::string(code) == "appworld_auth_401" ?
-                                                   "appworld_validation_422" : "appworld_auth_401");
-    checked(te::PolicyRuntime(compiled).decide(next).progress().decision() == "continue");
-  }
-  phase = "ambiguous query";
-  q.clear_previous(); q.clear_error_codes(); q.add_error_codes("appworld_auth_401");
-  q.add_error_codes("appworld_validation_422");
-  checked(te::PolicyRuntime(compiled).decide(q).progress().decision() == "continue");
-  phase = "actor guard";
-  q.clear_error_codes(); q.add_error_codes("appworld_auth_401"); q.set_actor_id("other");
-  checked(te::PolicyRuntime(compiled).decide(q).progress().decision() == "continue");
-  q.set_actor_id("worker"); q.mutable_advice_query()->set_target_scope("other");
-  rejects([&] { te::PolicyRuntime(compiled).decide(q); });
-  for (const auto *invalid : {"overlap", "missing_code", "budget", "source", "unbounded"}) {
-    auto bad = draft;
-    auto &second = bad["loop_rules"].items()[1];
-    if (std::string(invalid) == "overlap") second["error_codes"] = Json::Array{"appworld_auth_401"};
-    if (std::string(invalid) == "missing_code") second["error_codes"] = Json::Array{};
-    if (std::string(invalid) == "budget") second["max_no_progress"] = 2;
-    if (std::string(invalid) == "source") second["memory_id"] = "unapproved";
-    if (std::string(invalid) == "unbounded") second["max_replans"] = 2;
-    bool rejected = false;
-    try { in::apply_control_draft(original.snapshot(), base, settings, bad); }
-    catch (const in::Error &) { rejected = true; }
-    checked(rejected);
-  }
-  phase = "native compile guards";
-  auto unapproved = compiled.options(); unapproved.clear_approved_experiences();
-  rejects([&] { te::compile_runtime_policy(compiled.snapshot(), unapproved); });
-  auto wrong_revision = compiled.options();
-  wrong_revision.mutable_loop_rules(1)->mutable_source_experience()->set_content_revision("wrong");
-  rejects([&] { te::compile_runtime_policy(compiled.snapshot(), wrong_revision); });
-  auto overlapping = compiled.options(); overlapping.mutable_loop_rules(2)->clear_error_codes();
-  overlapping.mutable_loop_rules(2)->add_error_codes("appworld_auth_401");
-  rejects([&] { te::compile_runtime_policy(compiled.snapshot(), overlapping); });
-
-  // Exercise the real boundary ledger: 401 then first 422 is not two 422s.
-  const Json config{{"agent_id", "agent-a"}, {"actors", Json::Array{"coordinator"}}};
-  auto exercise = [&](bool single) {
-    auto options = compiled.options();
-    if (single) options.mutable_loop_rules()->DeleteSubrange(1, 1); // retain old single 422 semantics
-    const auto current = te::compile_runtime_policy(compiled.snapshot(), options);
-    te::PolicyRuntime runtime(current);
-    Json run{{"identity", in::json(current.snapshot().identity())}, {"level", 3},
-             {"input", "修正公开API调用"}, {"capabilities", Json::Array{"model","actions","loop"}},
-             {"events", Json::Array{Json{{"event_id", "begin"}}}}, {"policy", in::json(current)}};
-    in::initialize_boundary_run(run, Json::Object{});
-    unsigned count = 0;
-    auto check_loop = [&] {
-      const auto ready = in::dispatch_boundary(run,
-          Json{{"operation","loop.check"},{"request_id","check-" + std::to_string(++count)},
-               {"loop_id","loop"},{"scope_id","coordinator"},{"actor_id","worker"},
-               {"state",Json{{"progress",static_cast<std::size_t>(count)}}}},config,&runtime);
-      return ready;
-    };
-    auto commit = [&](const Json &ready) {
-      in::dispatch_boundary(run,Json{{"operation","loop.commit"},
-          {"request_id","commit-" + std::to_string(count)}, {"control_id",ready["control_id"]},
-          {"decision",ready["decision"]}},config,&runtime);
-    };
-    auto fail = [&](const Json &ready, const char *code) {
-      const auto action = in::dispatch_boundary(run,
-          Json{{"operation","activity.begin"},{"request_id","action-" + std::to_string(count)},
-               {"control_id",ready["control_id"]},{"scope_id","coordinator"},{"actor_id","worker"},
-               {"kind","action"},{"name","appworld.execute"},{"input",Json{{"code","changed-" + std::to_string(count)}}}},
-          config,&runtime);
-      in::dispatch_boundary(run,Json{{"operation","activity.end"},
-          {"request_id","end-" + std::to_string(count)},{"activity_id",action["activity_id"]},
-          {"status","failed"},{"executed",true},{"output",Json{{"error",Json{{"code",code}}}}}},config,&runtime);
-    };
-    auto ready = check_loop(); commit(ready); fail(ready,"appworld_auth_401");
-    ready = check_loop(); phase = "boundary first auth"; checked(ready.str("decision") == "continue"); commit(ready);
-    fail(ready,"appworld_validation_422");
-    ready = check_loop();
-    phase = single ? "old single crossing code" : "multi crossing code";
-    const auto &crossing = static_cast<const Json &>(run)["controls"][ready.str("control_id")]["query"];
-    std::cerr << phase << " decision=" << ready.str("decision")
-              << " repeat=" << crossing.num("repeated_failure_steps",0)
-              << " actor=" << crossing.str("actor_id")
-              << " scope=" << crossing["advice_query"].str("target_scope")
-              << " code=" << crossing["error_codes"].dump() << '\n';
-    checked(ready.str("decision") == (single ? "replan" : "continue"));
-    if (single) return;
-    checked(run["controls"][ready.str("control_id")]["query"].num("repeated_failure_steps",0) == 0);
-    commit(ready); fail(ready,"appworld_validation_422");
-    ready = check_loop(); phase = "boundary second 422"; checked(ready.str("decision") == "replan"); commit(ready);
-    checked(run["loops"]["loop"]["progress"].num("replans",0) == 1);
-    // A later different family cannot acquire a fresh replan budget.
-    fail(ready,"appworld_auth_401"); ready = check_loop(); commit(ready);
-    fail(ready,"appworld_auth_401"); ready = check_loop();
-    phase = "boundary shared final budget";
-    checked(ready.str("decision") == "continue" &&
-          run["controls"][ready.str("control_id")]["proposed_progress"].num("replans",0) == 1);
-  };
-  exercise(false); exercise(true);
-  std::cout << "family selection/reorder/shared budget/source guards/real boundary/single compatibility passed\n";
-}
-
-int main(int argc, char **argv) {
+int main() {
   const std::vector<std::pair<const char *, void (*)()>> cases = {
-      {"disjoint_failure_recovery", disjoint_failure_recovery},
       {"scoped_control_roundtrip", scoped_control_roundtrip},
       {"injection_and_evidence", injection_and_evidence},
       {"interleaved_injection_receipts", interleaved_injection_receipts},
       {"evolvable_applicability", evolvable_applicability},
-      {"prevention_sources_are_approved_active_overrides", prevention_sources_are_approved_active_overrides},
       {"explicit_experience_allowlist", explicit_experience_allowlist},
       {"explicit_allowlist_reaches_real_model_boundary", explicit_allowlist_reaches_real_model_boundary},
       {"disabled_injection_keeps_control_approval", disabled_injection_keeps_control_approval},
@@ -2263,14 +2068,6 @@ int main(int argc, char **argv) {
       {"actor_scoped_loops", actor_scoped_loops}};
   try {
     for (const auto &test : cases) {
-      if (argc == 2 && std::string(argv[1]) == "--disjoint-failure-recovery" &&
-          std::string(test.first) != "disjoint_failure_recovery" &&
-          std::string(test.first) != "actor_scoped_loops" &&
-          std::string(test.first) != "failure_replanning" &&
-          std::string(test.first) != "source_bound_auth_replanning" &&
-          std::string(test.first) != "bounded_recovery_budget" &&
-          std::string(test.first) != "conditional_recovery_budget")
-        continue;
       try {
         test.second();
       } catch (const std::exception &error) {

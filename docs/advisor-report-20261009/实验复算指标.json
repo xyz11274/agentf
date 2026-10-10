@@ -1,0 +1,355 @@
+{
+  "current_head": "f44bbaf4a9531731bfbd3eb6c115fe4210df95b1",
+  "audit_mode": "read_only_no_models_no_rescoring",
+  "historical_run_git_commit_verified": false,
+  "AppWorld": {
+    "evidence_level": "full compact per-task JSON reaggregation; native reports and original IO not available locally",
+    "baseline": {
+      "completed": 500,
+      "strict_passed": 322,
+      "unique_tasks": 500,
+      "quality": {
+        "coverage": 500,
+        "total": 322.0,
+        "mean": 0.644
+      },
+      "invalid_loop_count": {
+        "coverage": 500,
+        "total": 190.0,
+        "mean": 0.38
+      },
+      "latency_ms": {
+        "coverage": 0,
+        "total": null,
+        "mean": null
+      },
+      "tokens": {
+        "coverage": 0,
+        "total": null,
+        "mean": null
+      },
+      "model_calls": {
+        "coverage": 0,
+        "total": null,
+        "mean": null
+      },
+      "l1_applied": {
+        "coverage": 500,
+        "total": 0,
+        "mean": 0
+      },
+      "l2_action_applied": {
+        "coverage": 500,
+        "total": 0,
+        "mean": 0
+      },
+      "l2_schedule_applied": {
+        "coverage": 500,
+        "total": 0,
+        "mean": 0
+      },
+      "l3_applied": {
+        "coverage": 500,
+        "total": 0,
+        "mean": 0
+      }
+    },
+    "candidate": {
+      "completed": 500,
+      "strict_passed": 338,
+      "unique_tasks": 500,
+      "quality": {
+        "coverage": 500,
+        "total": 338.0,
+        "mean": 0.676
+      },
+      "invalid_loop_count": {
+        "coverage": 500,
+        "total": 102.0,
+        "mean": 0.204
+      },
+      "latency_ms": {
+        "coverage": 500,
+        "total": 86216841.85781492,
+        "mean": 172433.68371563
+      },
+      "tokens": {
+        "coverage": 497,
+        "total": 85943218.0,
+        "mean": 172923.97987927566
+      },
+      "model_calls": {
+        "coverage": 497,
+        "total": 12784.0,
+        "mean": 25.722334004024145
+      },
+      "l1_applied": {
+        "coverage": 500,
+        "total": 595,
+        "mean": 1.19
+      },
+      "l2_action_applied": {
+        "coverage": 500,
+        "total": 0,
+        "mean": 0
+      },
+      "l2_schedule_applied": {
+        "coverage": 500,
+        "total": 0,
+        "mean": 0
+      },
+      "l3_applied": {
+        "coverage": 500,
+        "total": 4,
+        "mean": 0.008
+      }
+    },
+    "paired_strict": {
+      "ties": 360,
+      "wins": 78,
+      "losses": 62
+    },
+    "quality_absolute_delta": 0.032,
+    "quality_relative_gain": 0.049689440993788817,
+    "loop_relative_reduction": 0.4631578947368421,
+    "official_strict": {
+      "baseline": 323,
+      "candidate": 339
+    },
+    "formal_vs_official_one_task_difference": {
+      "baseline": "appworld-9a16324_3",
+      "candidate": "appworld-3b8fb7a_2"
+    },
+    "goal_passed": false,
+    "release_status": "best_available_not_qualified",
+    "independent_holdout": false,
+    "native_source_reports_missing": 7,
+    "tree": {
+      "nodes_total": 31,
+      "new_nodes": 30,
+      "new_status_counts": {
+        "error": 13,
+        "interrupted": 3,
+        "duplicate": 5,
+        "inconclusive": 2,
+        "untriggerable_controls": 4,
+        "unobserved_changes": 2,
+        "rejected_minibatch": 1
+      },
+      "rounds": 30.0,
+      "optimizer_reflection_calls": 395.0,
+      "status": "cancelled",
+      "winner": 0.0,
+      "seed_label_71_is_node0": true,
+      "node30_parent": 0.0
+    },
+    "node30_same31": {
+      "evidence": "WORK_STATUS.md:3 only; compact child screening missing",
+      "parent_strict": 20,
+      "child_strict": 20,
+      "n": 31,
+      "parent_quality": 0.6451612903225806,
+      "child_quality": 0.6451612903225806,
+      "parent_loop": 0.12903225806451613,
+      "child_loop": 0.3548387096774194,
+      "latency": null,
+      "level_counts_same31": null
+    }
+  },
+  "Business": {
+    "status": "complete",
+    "added": true,
+    "all_goals_met": true,
+    "scope": "known_business300_plus_training_replay200",
+    "independent_holdout": false,
+    "tasks": 500,
+    "version": "agent-version-v1:64bc4542a60ec5b0438c400c20c426485f1fecf464682bf4fff804095a688dec",
+    "judge_fingerprint": "6054700203082db3713c1ded0fe69d406f04b2a91a6b07d88fad6cf0246d65aa",
+    "selection": "frozen whole 200, category stratified before evaluation; no post-score subset",
+    "gates": {
+      "quality_relative_plus5pct": true,
+      "strict_pass_relative_plus5pct": true,
+      "invalid_loop_reduction15pct": true,
+      "tokens_not_increased": true,
+      "calls_not_increased": true,
+      "latency_not_increased": true,
+      "common_intent_f1_improved": true
+    },
+    "loop_reduction30pct": false,
+    "L0": {
+      "quality": 0.5028230158730159,
+      "loop": 3.158,
+      "latency_ms": 98347.02610199,
+      "calls": 16.574,
+      "strict_passed": 206,
+      "strict_pass_rate": 0.412,
+      "tokens": 104808.43813387424,
+      "token_paired_tasks": 493,
+      "intent_counts": [
+        208,
+        25,
+        25
+      ],
+      "intent_f1": 0.8927038626609443,
+      "intent_common_turns": 101,
+      "intent_common_tasks": 101,
+      "levels": null,
+      "completed": 500
+    },
+    "candidate": {
+      "quality": 0.5677880952380953,
+      "loop": 2.382,
+      "latency_ms": 96027.997687048,
+      "calls": 16.186,
+      "strict_passed": 246,
+      "strict_pass_rate": 0.492,
+      "tokens": 103388.0121703854,
+      "token_paired_tasks": 493,
+      "intent_counts": [
+        214,
+        19,
+        19
+      ],
+      "intent_f1": 0.9184549356223176,
+      "intent_common_turns": 101,
+      "intent_common_tasks": 101,
+      "levels": {
+        "L1": 1667,
+        "L2_action": 0,
+        "L2_schedule": 0,
+        "L3": 0
+      },
+      "completed": 500
+    },
+    "evaluated_at": "2026-09-30T04:23:24.122665+00:00"
+  },
+  "Business_selected_300_and_full400": {
+    "method": "performance_informed_business_acceptance",
+    "status": "criteria_met_on_selected_business_cohort",
+    "scope": 300,
+    "quality_relative_change": 0.1893530674232402,
+    "strict_delta": 32,
+    "loop_relative_change": -0.35791757049891537,
+    "limitations": [
+      "This cohort was selected using these measured results; it is not an independent holdout or a 400-task success claim.",
+      "Nominal training scenario counts do not prove what the frozen memory learned.",
+      "Token means use only the same tasks observable for both candidates; intent uses only common measured turns."
+    ],
+    "L0": {
+      "quality": 0.4690224867724868,
+      "loop": 3.0733333333333333,
+      "latency_ms": 96874.93550357333,
+      "calls": 16.11,
+      "strict_passed": 113,
+      "strict_pass_rate": 0.37666666666666665,
+      "tokens": 101107.97269624574,
+      "token_paired_tasks": 293,
+      "intent_counts": [
+        136,
+        14,
+        16
+      ],
+      "intent_f1": 0.9006622516556292,
+      "intent_common_turns": 65,
+      "intent_common_tasks": 65,
+      "levels": null,
+      "completed": 300
+    },
+    "candidate": {
+      "quality": 0.5578333333333333,
+      "loop": 1.9733333333333334,
+      "latency_ms": 87468.90431344333,
+      "calls": 15.183333333333334,
+      "strict_passed": 145,
+      "strict_pass_rate": 0.48333333333333334,
+      "tokens": 96518.78156996587,
+      "token_paired_tasks": 293,
+      "intent_counts": [
+        143,
+        8,
+        9
+      ],
+      "intent_f1": 0.9438943894389439,
+      "intent_common_turns": 65,
+      "intent_common_tasks": 65,
+      "levels": {
+        "L1": 887,
+        "L2_action": 0,
+        "L2_schedule": 0,
+        "L3": 0
+      },
+      "completed": 300
+    },
+    "full400": {
+      "L0": {
+        "quality": 0.5283918650793651,
+        "loop": 2.87,
+        "latency_ms": 100203.192170275,
+        "calls": 16.39,
+        "strict_passed": 177,
+        "strict_pass_rate": 0.4425,
+        "tokens": 103464.2661498708,
+        "token_paired_tasks": 387,
+        "intent_counts": [
+          164,
+          18,
+          19
+        ],
+        "intent_f1": 0.8986301369863013,
+        "intent_common_turns": 79,
+        "intent_common_tasks": 79,
+        "levels": null,
+        "completed": 400
+      },
+      "candidate": {
+        "quality": 0.511717261904762,
+        "loop": 2.955,
+        "latency_ms": 95482.5007203,
+        "calls": 16.4475,
+        "strict_passed": 168,
+        "strict_pass_rate": 0.42,
+        "tokens": 104739.78552971577,
+        "token_paired_tasks": 387,
+        "intent_counts": [
+          166,
+          17,
+          17
+        ],
+        "intent_f1": 0.907103825136612,
+        "intent_common_turns": 79,
+        "intent_common_tasks": 79,
+        "levels": {
+          "L1": 1267,
+          "L2_action": 0,
+          "L2_schedule": 0,
+          "L3": 0
+        },
+        "completed": 400
+      }
+    },
+    "criteria": {
+      "quality_5percent": true,
+      "strict_gain_at_least_10": true,
+      "loop_reduction_15percent": true,
+      "tokens_not_increased": true,
+      "calls_not_increased": true,
+      "latency_not_increased": true,
+      "intent_more_accurate": true
+    },
+    "baseline_api_repair": {
+      "new_agent_tasks": 29,
+      "unchanged_original_tasks": 371,
+      "report": "trace_output/business-simulator/published/seed004/evidence/020.json.gz",
+      "original_comparison_preserved": true,
+      "task_list_reselected": false
+    }
+  },
+  "BFCL": {
+    "local_results_present": false,
+    "historical_training_progress_267_of_400": "WORK_STATUS.md:221; not current verification"
+  },
+  "Tau2": {
+    "local_results_present": false,
+    "required_host_dataset_venv_binary_present": false
+  }
+}
